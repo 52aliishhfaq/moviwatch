@@ -61,6 +61,21 @@ The workflow at `.github/workflows/deploy.yml` can deploy the Worker when manual
 
 The workflow installs dependencies, checks JavaScript syntax, uploads runtime secrets to Cloudflare, and deploys the Worker plus static assets. A successful GitHub commit is not proof of deployment: verify a green Actions run and visit `/api/health`.
 
+## Vercel frontend + Cloudflare API
+
+The production topology keeps the frontend on Vercel and the API/video proxy on Cloudflare Workers. The root `vercel.json` sends same-origin `/api/*` requests to the Worker and maps `/admin` to the static admin page. Do not run `wrangler deploy` from Vercel; Cloudflare remains a separate backend deployment.
+
+Vercel project settings:
+- Root Directory: repository root (`./`)
+- Framework Preset: Other
+- Build Command: blank / disabled
+- Output Directory: `public`
+- Install Command: default / automatic
+
+After the Vercel project is created, copy its production domain (for example, `https://<project>.vercel.app`). Add that exact origin to the Cloudflare Worker variable `APP_ORIGINS` (comma-separated for more than one origin), under **Workers & Pages → moviewatch → Settings → Variables and Secrets**. Include your production custom domain too, if one is added. The Worker uses this allowlist for admin login/logout and all admin mutations; do not use a wildcard origin. Redeploy the Worker after changing a Wrangler-managed variable, or save the variable in the Cloudflare dashboard.
+
+Keep API calls relative (such as `/api/movies`) so the browser always talks to the Vercel origin and Vercel proxies them to Cloudflare. This preserves a first-party cookie on the Vercel domain while the Worker validates the allowed Origin. Verify `/api/health`, the public catalogue, admin login, and a create/edit/delete test after deployment.
+
 ## API
 | Method | Route | Access |
 |---|---|---|
