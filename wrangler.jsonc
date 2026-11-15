@@ -15,6 +15,6 @@
     "enabled": true
   },
   "vars": {
-    "APP_ORIGINS": "https://moviwatch-aliishhfaq.vercel.app"
+    "APP_ORIGINS": "https://moviwatch.vercel.app,https://moviwatch-aliishhfaq.vercel.app"
   }
 }
