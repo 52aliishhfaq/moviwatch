@@ -242,7 +242,7 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
     'Accept-Encoding': 'identity'
   }));
   if (upstream.status === 416) {
-    const unsatisfied = new RegExp('^bytes //([0-9]+)$').exec(upstream.headers.get('content-range') || '');
+    const unsatisfied = new RegExp('^bytes [*]/([0-9]+)$').exec(upstream.headers.get('content-range') || '');
     if (unsatisfied) return { unsatisfiedTotal: Number(unsatisfied[1]), cacheStatus: 'MISS' };
   }
   const range = parseContentRange(upstream.headers.get('content-range'));
