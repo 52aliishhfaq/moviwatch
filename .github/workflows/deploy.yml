@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: moviwatch-cloudflare-production
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
