@@ -6,6 +6,10 @@
       "destination": "https://moviwatch.52aliishhfaq.workers.dev/api/:path*"
     },
     {
+      "source": "/watch/:id",
+      "destination": "/watch.html?id=:id"
+    },
+    {
       "source": "/admin",
       "destination": "/admin.html"
     },
