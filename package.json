@@ -1,0 +1,19 @@
+{
+  "name": "moviwatch",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "hash:password": "node scripts/hash-password.mjs",
+    "check": "node --check src/index.js && node --check scripts/hash-password.mjs"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.2.1",
+    "@upstash/redis": "^1.41.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
