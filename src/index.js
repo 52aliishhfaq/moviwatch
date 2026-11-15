@@ -186,7 +186,7 @@ function parseByteRange(value) {
   if (typeof value !== 'string' || !value.startsWith('bytes=')) return null;
   const spec = value.slice(6).trim();
   if (spec.includes(',')) return { invalid: true };
-  const match = /^(\\d*)-(\\d*)$/.exec(spec);
+  const match = /^([0-9]*)-([0-9]*)$/.exec(spec);
   if (!match || (!match[1] && !match[2])) return { invalid: true };
   if (!match[1]) {
     const suffix = Number(match[2]);
@@ -200,7 +200,7 @@ function parseByteRange(value) {
 }
 
 function parseContentRange(value) {
-  const match = /^bytes (\\d+)-(\\d+)\\/(\\d+)$/.exec(value || '');
+  const match = new RegExp('^bytes ([0-9]+)-([0-9]+)/([0-9]+)$').exec(value || '');
   if (!match) return null;
   const start = Number(match[1]), end = Number(match[2]), total = Number(match[3]);
   if (![start, end, total].every(Number.isSafeInteger) || end < start || total <= end) return null;
@@ -242,7 +242,7 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
     'Accept-Encoding': 'identity'
   }));
   if (upstream.status === 416) {
-    const unsatisfied = /^bytes \\/\\/(\\d+)$/.exec(upstream.headers.get('content-range') || '');
+    const unsatisfied = new RegExp('^bytes //([0-9]+)$').exec(upstream.headers.get('content-range') || '');
     if (unsatisfied) return { unsatisfiedTotal: Number(unsatisfied[1]), cacheStatus: 'MISS' };
   }
   const range = parseContentRange(upstream.headers.get('content-range'));
