@@ -50,10 +50,25 @@ video{display:block;width:100%;aspect-ratio:16/9;background:#05080e}
 const $=s=>document.querySelector(s);
 const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||new URLSearchParams(location.search).get('id')||'');
 const video=$('#video');
-let player=null,streamUrl='';
+let player=null,streamUrl='',mediaContainer='unknown',mediaType='';
 function status(message,error=false){$('#status').textContent=message;$('#status').classList.toggle('error',error)}
 function loading(on){$('#loading').hidden=!on}
-function mediaError(){const e=video.error;const messages={1:'Playback was interrupted.',2:'Network error while loading the video.',3:'The video format or encoding is not supported by this browser.',4:'The video source is not supported.'};status(messages[e?.code]||'Video could not be played. Check that the Google Drive file is public and is a supported MP4.',true);$('#retry').classList.add('show');loading(false)}
+function mediaError(){
+  const e=video.error;
+  let message='Video playback failed.';
+  if(e?.code===4){
+    if(['mkv','avi','flv','ogg','ebml'].includes(mediaContainer)){
+      message='This file is '+mediaContainer.toUpperCase()+'. Chrome/Edge cannot play this container directly. It needs MP4 (H.264 video + AAC audio) or HLS conversion.';
+    }else if(mediaContainer==='mp4'){
+      message='The file is an MP4, but its video/audio codec may not be browser-compatible (for example HEVC, AC3 or DTS). Re-encode to H.264 + AAC MP4 or HLS.';
+    }else{
+      message='The browser rejected this media source. Detected container: '+mediaContainer+'. The file may be malformed or use an unsupported codec.';
+    }
+  }else if(e?.code===2) message='Network error while downloading the video stream.';
+  else if(e?.code===3) message='The browser could not decode this video. The codec may be unsupported or the file may be damaged.';
+  else if(e?.code===1) message='Playback was interrupted.';
+  status(message,true);$('#retry').classList.add('show');loading(false);
+}
 function initPlayer(){
   if(window.Plyr&&!player){
     player=new Plyr(video,{controls:['play-large','play','progress','current-time','duration','mute','volume','settings','pip','fullscreen'],settings:['captions','quality','speed'],clickToPlay:true,hideControls:true,resetOnEnd:false,disableContextMenu:true});
@@ -80,7 +95,7 @@ async function prepare(){
       throw new Error(detail);
     }
     if(probe.status!==206)throw new Error('Video server did not return a valid byte-range response (HTTP '+probe.status+').');
-    const type=(probe.headers.get('content-type')||'').toLowerCase();
+    mediaContainer=probe.headers.get('x-moviwatch-container')||'unknown';\n    mediaType=probe.headers.get('content-type')||'unknown';\n    const type=mediaType.toLowerCase();
     if(type.includes('text/html')||type.includes('application/json'))throw new Error('Google Drive returned a web page instead of a video. Set sharing to “Anyone with the link”.');
     await probe.arrayBuffer();
     initPlayer();
@@ -88,7 +103,7 @@ async function prepare(){
     video.type='video/mp4';
     video.load();
     loading(false);
-    status('Stream ready · Press play');
+    status('Stream ready · '+mediaContainer.toUpperCase()+' · '+mediaType+' · Press play');
   }catch(e){
     loading(false);status(e.message||'Unable to prepare this video.',true);$('#retry').classList.add('show');
   }
