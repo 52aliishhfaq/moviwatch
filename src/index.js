@@ -265,7 +265,11 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
   if (bytes.byteLength !== range.end - range.start + 1) {
     throw new Error('Google Drive returned an incomplete video chunk');
   }
-  const contentType = upstream.headers.get('content-type') || 'video/mp4';
+  const upstreamType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  // Google Drive may label a valid MP4 download as generic binary data.
+  // Browsers reject application/octet-stream as a native media source.
+  const contentType = (!upstreamType || upstreamType === 'application/octet-stream' || upstreamType === 'binary/octet-stream')
+    ? 'video/mp4' : upstreamType;
   try {
     const stored = new Response(bytes, {
       status: 200,
