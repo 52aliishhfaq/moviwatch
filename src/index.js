@@ -176,6 +176,182 @@ async function driveFetch(source, method, headers) {
   }
   throw new Error('Drive redirect limit reached');
 }
+
+// Video edge cache: store complete 4 MiB byte chunks as cacheable 200 responses.
+// The public response is reconstructed as a standards-compliant 206 response.
+const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024;
+const VIDEO_CACHE_TTL = 6 * 60 * 60;
+
+function parseByteRange(value) {
+  if (typeof value !== 'string' || !value.startsWith('bytes=')) return null;
+  const spec = value.slice(6).trim();
+  if (spec.includes(',')) return { invalid: true };
+  const match = /^(\\d*)-(\\d*)$/.exec(spec);
+  if (!match || (!match[1] && !match[2])) return { invalid: true };
+  if (!match[1]) {
+    const suffix = Number(match[2]);
+    return Number.isSafeInteger(suffix) && suffix > 0 ? { suffix } : { invalid: true };
+  }
+  const start = Number(match[1]);
+  const end = match[2] ? Number(match[2]) : null;
+  if (!Number.isSafeInteger(start) || start < 0 ||
+      (end !== null && (!Number.isSafeInteger(end) || end < start))) return { invalid: true };
+  return { start, end };
+}
+
+function parseContentRange(value) {
+  const match = /^bytes (\\d+)-(\\d+)\\/(\\d+)$/.exec(value || '');
+  if (!match) return null;
+  const start = Number(match[1]), end = Number(match[2]), total = Number(match[3]);
+  if (![start, end, total].every(Number.isSafeInteger) || end < start || total <= end) return null;
+  return { start, end, total };
+}
+
+function videoCacheKey(req, movieId, optionIndex, sourceHash, chunkStart) {
+  const keyUrl = new URL('/__moviwatch_cache__/video/' +
+    encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash + '/' + chunkStart, req.url);
+  return new Request(keyUrl.toString(), { method: 'GET' });
+}
+
+async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chunkStart) {
+  const cache = caches.default;
+  const key = videoCacheKey(req, movieId, optionIndex, sourceHash, chunkStart);
+  try {
+    const cached = await cache.match(key);
+    if (cached) {
+      const start = Number(cached.headers.get('x-moviwatch-start'));
+      const end = Number(cached.headers.get('x-moviwatch-end'));
+      const total = Number(cached.headers.get('x-moviwatch-total'));
+      if (Number.isSafeInteger(start) && Number.isSafeInteger(end) &&
+          Number.isSafeInteger(total) && start === chunkStart && end >= start && total > end) {
+        return {
+          bytes: new Uint8Array(await cached.arrayBuffer()),
+          start, end, total,
+          contentType: cached.headers.get('content-type') || 'video/mp4',
+          cacheStatus: 'HIT'
+        };
+      }
+    }
+  } catch (error) {
+    console.warn('Video cache read failed:', error?.message || error);
+  }
+
+  const requestedEnd = chunkStart + VIDEO_CHUNK_SIZE - 1;
+  const upstream = await driveFetch(source.url, 'GET', new Headers({
+    Range: 'bytes=' + chunkStart + '-' + requestedEnd,
+    'Accept-Encoding': 'identity'
+  }));
+  if (upstream.status === 416) {
+    const unsatisfied = /^bytes \\/\\/(\\d+)$/.exec(upstream.headers.get('content-range') || '');
+    if (unsatisfied) return { unsatisfiedTotal: Number(unsatisfied[1]), cacheStatus: 'MISS' };
+  }
+  const range = parseContentRange(upstream.headers.get('content-range'));
+  if (upstream.status !== 206 || !range || range.start !== chunkStart ||
+      range.end > requestedEnd || range.end !== Math.min(requestedEnd, range.total - 1)) {
+    try { await upstream.body?.cancel(); } catch {}
+    throw new Error('Google Drive did not honor the video byte range');
+  }
+  const bytes = new Uint8Array(await upstream.arrayBuffer());
+  if (bytes.byteLength !== range.end - range.start + 1) {
+    throw new Error('Google Drive returned an incomplete video chunk');
+  }
+  const contentType = upstream.headers.get('content-type') || 'video/mp4';
+  try {
+    const stored = new Response(bytes, {
+      status: 200,
+      headers: {
+        'content-type': contentType,
+        'content-length': String(bytes.byteLength),
+        'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL,
+        'x-moviwatch-start': String(range.start),
+        'x-moviwatch-end': String(range.end),
+        'x-moviwatch-total': String(range.total)
+      }
+    });
+    await cache.put(key, stored);
+  } catch (error) {
+    console.warn('Video cache write failed:', error?.message || error);
+  }
+  return { bytes, ...range, contentType, cacheStatus: 'MISS' };
+}
+
+async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader) {
+  const parsed = parseByteRange(rangeHeader);
+  if (!parsed || parsed.invalid) {
+    return new Response(null, { status: 416, headers: { 'content-range': 'bytes */*', 'accept-ranges': 'bytes' } });
+  }
+  const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url));
+  const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
+  // A suffix range needs the representation size, so prime/read chunk zero first.
+  const firstStart = parsed.suffix ? 0 : Math.floor(parsed.start / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
+  const firstChunk = await getVideoChunk(req, source, movieId, optionIndex, sourceHash, firstStart);
+  if (firstChunk.unsatisfiedTotal !== undefined) {
+    return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + firstChunk.unsatisfiedTotal, 'accept-ranges': 'bytes' } });
+  }
+  const total = firstChunk.total;
+  let start, end;
+  if (parsed.suffix) {
+    start = Math.max(0, total - parsed.suffix);
+    end = total - 1;
+  } else {
+    start = parsed.start;
+    end = parsed.end === null ? total - 1 : Math.min(parsed.end, total - 1);
+  }
+  if (start >= total || end < start) {
+    return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + total, 'accept-ranges': 'bytes' } });
+  }
+
+  const firstChunkStart = Math.floor(start / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
+  let first = firstChunkStart === firstChunk.start ? firstChunk : await getVideoChunk(
+    req, source, movieId, optionIndex, sourceHash, firstChunkStart
+  );
+  if (first.unsatisfiedTotal !== undefined || first.total !== total) throw new Error('Google Drive video size changed during streaming');
+  const responseStart = start;
+  const responseEnd = end;
+  const contentLength = responseEnd - responseStart + 1;
+  const cacheStates = [first.cacheStatus];
+
+  const body = new ReadableStream({
+    async start(controller) {
+      try {
+        let cursor = responseStart;
+        let chunk = first;
+        while (cursor <= responseEnd) {
+          const expectedChunkStart = Math.floor(cursor / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
+          if (chunk.start !== expectedChunkStart) {
+            chunk = await getVideoChunk(req, source, movieId, optionIndex, sourceHash, expectedChunkStart);
+            if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total) throw new Error('Google Drive video size changed during streaming');
+            cacheStates.push(chunk.cacheStatus);
+          }
+          const from = cursor - chunk.start;
+          const through = Math.min(responseEnd, chunk.end) - chunk.start + 1;
+          if (through <= from) throw new Error('Invalid cached video chunk boundary');
+          controller.enqueue(chunk.bytes.subarray(from, through));
+          cursor = chunk.start + through;
+          chunk = null;
+        }
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      }
+    }
+  });
+
+  return new Response(body, {
+    status: 206,
+    headers: {
+      'content-type': first.contentType,
+      'content-length': String(contentLength),
+      'content-range': 'bytes ' + responseStart + '-' + responseEnd + '/' + total,
+      'accept-ranges': 'bytes',
+      'cache-control': 'public, max-age=3600',
+      'x-moviwatch-cache': cacheStates.every((state) => state === 'HIT') ? 'HIT' :
+        cacheStates.every((state) => state === 'MISS') ? 'MISS' : 'PARTIAL',
+      'x-moviwatch-chunk-size': String(VIDEO_CHUNK_SIZE)
+    }
+  });
+}
+
 async function api(req, env) {
   const url = new URL(req.url);
   const path = url.pathname;
@@ -224,17 +400,34 @@ async function api(req, env) {
   if (watch.length === 5 && watch[1] === 'api' && watch[2] === 'watch' && (method === 'GET' || method === 'HEAD')) {
     const movie = await movieById(env, watch[3]);
     if (!movie) return json({ error: 'Movie not found' }, 404);
-    const source = movie.video_sources?.[Number(watch[4])];
-    if (!source?.url || !Number.isInteger(Number(watch[4]))) return json({ error: 'Video option not found' }, 404);
-    const headers = new Headers();
-    for (const name of ['Range', 'If-Range']) { const value = req.headers.get(name); if (value) headers.set(name, value); }
-    let upstream;
-    try { upstream = await driveFetch(source.url, method, headers); }
-    catch { return json({ error: 'Google Drive could not be reached' }, 502); }
-    if (![200, 206, 416].includes(upstream.status) || (upstream.headers.get('content-type') || '').toLowerCase().includes('text/html')) return json({ error: 'Drive did not return a playable video. Check public sharing and quota.' }, 502);
-    const out = new Headers({ 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'accept-ranges': 'bytes' });
-    for (const name of ['content-type', 'content-length', 'content-range', 'etag', 'last-modified']) { const value = upstream.headers.get(name); if (value) out.set(name, value); }
-    return new Response(method === 'HEAD' ? null : upstream.body, { status: upstream.status, headers: out });
+    const optionIndex = Number(watch[4]);
+    const source = movie.video_sources?.[optionIndex];
+    if (!source?.url || !Number.isInteger(optionIndex) || optionIndex < 0) return json({ error: 'Video option not found' }, 404);
+
+    // HEAD and non-range GETs preserve normal HTTP semantics. Browsers' video
+    // elements generally use Range GETs, which are served from the 4 MiB cache.
+    if (method === 'HEAD' || !req.headers.get('Range') || req.headers.has('If-Range')) {
+      const headers = new Headers();
+      for (const name of ['Range', 'If-Range']) { const value = req.headers.get(name); if (value) headers.set(name, value); }
+      let upstream;
+      try { upstream = await driveFetch(source.url, method, headers); }
+      catch { return json({ error: 'Google Drive could not be reached' }, 502); }
+      if (![200, 206, 416].includes(upstream.status) || (upstream.headers.get('content-type') || '').toLowerCase().includes('text/html')) return json({ error: 'Drive did not return a playable video. Check public sharing and quota.' }, 502);
+      const out = new Headers({ 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'accept-ranges': 'bytes' });
+      for (const name of ['content-type', 'content-length', 'content-range', 'etag', 'last-modified']) { const value = upstream.headers.get(name); if (value) out.set(name, value); }
+      return new Response(method === 'HEAD' ? null : upstream.body, { status: upstream.status, headers: out });
+    }
+
+    try {
+      const response = await cachedVideoRange(req, source, watch[3], optionIndex, req.headers.get('Range'));
+      if ((response.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
+        return json({ error: 'Drive returned an HTML page instead of video. Check public sharing and quota.' }, 502);
+      }
+      return response;
+    } catch (error) {
+      console.error('Video proxy failed:', error?.message || error);
+      return json({ error: 'Google Drive could not provide a playable byte range. Check public sharing and quota.' }, 502);
+    }
   }
 
   if (path.startsWith('/api/admin/')) {
