@@ -68,9 +68,21 @@ async function isAdmin(req, env) {
   const value = getCookie(req);
   return Boolean(value && env.JWT_SECRET && await validToken(env, value));
 }
-function sameOrigin(req) {
+function sameOrigin(req, env) {
   const origin = req.headers.get('Origin');
-  if (!origin || new URL(origin).origin !== new URL(req.url).origin) throw new Error('Cross-origin request blocked');
+  if (!origin) throw new Error('Origin header is required');
+  let incoming;
+  try { incoming = new URL(origin).origin; } catch { throw new Error('Invalid Origin header'); }
+  const trusted = new Set([new URL(req.url).origin]);
+  for (const candidate of (env.APP_ORIGINS || '').split(',')) {
+    const value = candidate.trim();
+    if (!value) continue;
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol === 'https:') trusted.add(parsed.origin);
+    } catch { /* Ignore malformed allowlist entries. */ }
+  }
+  if (!trusted.has(incoming)) throw new Error('Cross-origin request blocked');
 }
 async function readBody(req) {
   if (!(req.headers.get('content-type') || '').toLowerCase().includes('application/json')) throw new Error('Content-Type must be application/json');
@@ -171,7 +183,7 @@ async function api(req, env) {
   if (path === '/api/health' && method === 'GET') return json({ ok: true, service: 'moviwatch' });
 
   if (path === '/api/auth/login' && method === 'POST') {
-    sameOrigin(req);
+    sameOrigin(req, env);
     if (!env.ADMIN_PASSWORD_HASH || !env.ADMIN_PASSWORD_PEPPER || !env.JWT_SECRET) return json({ error: 'Admin authentication is not configured' }, 503);
     let allowed;
     try { allowed = await loginLimit(req, env); } catch { return json({ error: 'Login rate limiter unavailable' }, 503); }
@@ -194,7 +206,7 @@ async function api(req, env) {
     return json({ ok: true }, 200, { 'set-cookie': COOKIE + '=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=' + SESSION });
   }
   if (path === '/api/auth/logout' && method === 'POST') {
-    sameOrigin(req);
+    sameOrigin(req, env);
     return json({ ok: true }, 200, { 'set-cookie': COOKIE + '=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0' });
   }
   if (path === '/api/auth/me' && method === 'GET') return await isAdmin(req, env) ? json({ authenticated: true }) : json({ authenticated: false }, 401);
@@ -227,7 +239,7 @@ async function api(req, env) {
 
   if (path.startsWith('/api/admin/')) {
     if (!await isAdmin(req, env)) return json({ error: 'Admin login required' }, 401);
-    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) sameOrigin(req);
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) sameOrigin(req, env);
     const sql = sqlFor(env);
     if (path === '/api/admin/movies' && method === 'GET') {
       return json({ movies: await sql`SELECT id,title,poster_url,category,video_sources,is_published,created_at,updated_at FROM movies ORDER BY updated_at DESC LIMIT 500` });
