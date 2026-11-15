@@ -204,6 +204,21 @@ function parseByteRange(value) {
   return { start, end };
 }
 
+function sniffVideoContainer(bytes) {
+  if (bytes.length >= 12 && String.fromCharCode(...bytes.subarray(4, 8)) === 'ftyp') return 'mp4';
+  if (bytes.length >= 12 && String.fromCharCode(...bytes.subarray(0, 4)) === 'RIFF' &&
+      String.fromCharCode(...bytes.subarray(8, 12)) === 'AVI ') return 'avi';
+  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 &&
+      bytes[2] === 0xdf && bytes[3] === 0xa3) {
+    const header = new TextDecoder('latin1').decode(bytes.subarray(0, Math.min(bytes.length, 65536))).toLowerCase();
+    return header.includes('webm') ? 'webm' : header.includes('matroska') ? 'mkv' : 'ebml';
+  }
+  if (bytes.length >= 4 && String.fromCharCode(...bytes.subarray(0, 4)) === 'OggS') return 'ogg';
+  if (bytes.length >= 3 && String.fromCharCode(...bytes.subarray(0, 3)) === 'FLV') return 'flv';
+  if (bytes.length >= 1 && bytes[0] === 0x47) return 'mpeg-ts-or-unknown';
+  return 'unknown';
+}
+
 function parseContentRange(value) {
   const match = new RegExp('^bytes ([0-9]+)-([0-9]+)/([0-9]+)$').exec(value || '');
   if (!match) return null;
@@ -213,7 +228,7 @@ function parseContentRange(value) {
 }
 
 function videoCacheKey(req, movieId, optionIndex, sourceHash, chunkStart) {
-  const keyUrl = new URL('/__moviwatch_cache__/video/' +
+  const keyUrl = new URL('/__moviwatch_cache__/video-v2/' +
     encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash + '/' + chunkStart, req.url);
   return new Request(keyUrl.toString(), { method: 'GET' });
 }
@@ -233,6 +248,7 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
           bytes: new Uint8Array(await cached.arrayBuffer()),
           start, end, total,
           contentType: cached.headers.get('content-type') || 'video/mp4',
+          container: cached.headers.get('x-moviwatch-container') || 'unknown',
           cacheStatus: 'HIT'
         };
       }
@@ -268,8 +284,12 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
   const upstreamType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
   // Google Drive may label a valid MP4 download as generic binary data.
   // Browsers reject application/octet-stream as a native media source.
-  const contentType = (!upstreamType || upstreamType === 'application/octet-stream' || upstreamType === 'binary/octet-stream')
-    ? 'video/mp4' : upstreamType;
+  const container = sniffVideoContainer(bytes);
+  const contentType = container === 'mp4' ? 'video/mp4' :
+    container === 'webm' ? 'video/webm' :
+    container === 'mkv' ? 'video/x-matroska' :
+    (!upstreamType || upstreamType === 'application/octet-stream' || upstreamType === 'binary/octet-stream')
+      ? 'video/mp4' : upstreamType;
   try {
     const stored = new Response(bytes, {
       status: 200,
@@ -279,14 +299,15 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
         'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL,
         'x-moviwatch-start': String(range.start),
         'x-moviwatch-end': String(range.end),
-        'x-moviwatch-total': String(range.total)
+        'x-moviwatch-total': String(range.total),
+        'x-moviwatch-container': container
       }
     });
     await cache.put(key, stored);
   } catch (error) {
     console.warn('Video cache write failed:', error?.message || error);
   }
-  return { bytes, ...range, contentType, cacheStatus: 'MISS' };
+  return { bytes, ...range, contentType, container, cacheStatus: 'MISS' };
 }
 
 async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader) {
@@ -355,6 +376,7 @@ async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader) 
     status: 206,
     headers: {
       'content-type': first.contentType,
+      'x-moviwatch-container': first.container || 'unknown',
       'content-length': String(contentLength),
       'content-range': 'bytes ' + responseStart + '-' + responseEnd + '/' + total,
       'accept-ranges': 'bytes',
