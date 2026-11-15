@@ -205,7 +205,12 @@ function parseByteRange(value) {
 }
 
 function sniffVideoContainer(bytes) {
-  if (bytes.length >= 12 && String.fromCharCode(...bytes.subarray(4, 8)) === 'ftyp') return 'mp4';
+  // ISO-BMFF files can place free/wide boxes before the ftyp signature.
+  const scanLimit = Math.min(bytes.length - 4, 65536);
+  for (let i = 4; i <= scanLimit; i++) {
+    if (bytes[i] === 0x66 && bytes[i + 1] === 0x74 &&
+        bytes[i + 2] === 0x79 && bytes[i + 3] === 0x70) return 'mp4';
+  }
   if (bytes.length >= 12 && String.fromCharCode(...bytes.subarray(0, 4)) === 'RIFF' &&
       String.fromCharCode(...bytes.subarray(8, 12)) === 'AVI ') return 'avi';
   if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 &&
