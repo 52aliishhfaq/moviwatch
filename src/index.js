@@ -102,14 +102,14 @@ async function loginLimit(req, env) {
 function driveUrl(input) {
   if (typeof input !== 'string' || !input.trim() || input.length > 2048) throw new Error('A valid Google Drive video link is required');
   const value = input.trim();
-  if (/^[\w-]{10,200}$/.test(value)) return 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(value);
+  if (/^[\w-]{10,200}$/.test(value)) return 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(value) + '&export=download&confirm=t';
   let url;
   try { url = new URL(value); } catch { throw new Error('Invalid video URL'); }
   if (url.protocol !== 'https:') throw new Error('Video URL must use HTTPS');
   const host = url.hostname.toLowerCase();
   if (host !== 'drive.google.com' && host !== 'drive.usercontent.google.com' && !host.endsWith('.googleusercontent.com')) throw new Error('Only public Google Drive links are accepted');
   const id = url.pathname.split('/file/d/')[1]?.split('/')[0] || url.searchParams.get('id');
-  if (id && (host === 'drive.google.com' || host === 'drive.usercontent.google.com')) return 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(id);
+  if (id && (host === 'drive.google.com' || host === 'drive.usercontent.google.com')) return 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(id) + '&export=download&confirm=t';
   return url.toString();
 }
 function movieInput(body) {
@@ -164,6 +164,11 @@ function allowedDriveHost(host) {
 }
 async function driveFetch(source, method, headers) {
   let url = new URL(source);
+  // Normalize legacy database URLs to Google's direct download endpoint.
+  if (url.hostname.toLowerCase() === 'drive.google.com' && url.pathname === '/uc') {
+    const id = url.searchParams.get('id');
+    if (id) url = new URL('https://drive.usercontent.google.com/download?id=' + encodeURIComponent(id) + '&export=download&confirm=t');
+  }
   let currentMethod = method;
   for (let hop = 0; hop <= 5; hop++) {
     if (url.protocol !== 'https:' || !allowedDriveHost(url.hostname)) throw new Error('Unsupported Google Drive redirect');
@@ -248,8 +253,13 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
   const range = parseContentRange(upstream.headers.get('content-range'));
   if (upstream.status !== 206 || !range || range.start !== chunkStart ||
       range.end > requestedEnd || range.end !== Math.min(requestedEnd, range.total - 1)) {
+    const upstreamType = (upstream.headers.get('content-type') || 'unknown').split(';')[0];
+    const upstreamRange = upstream.headers.get('content-range') || 'none';
+    const upstreamStatus = upstream.status;
     try { await upstream.body?.cancel(); } catch {}
-    throw new Error('Google Drive did not honor the video byte range');
+    if (upstreamType.includes('text/html')) throw new Error('Google Drive returned an HTML confirmation, permission, or quota page (HTTP ' + upstreamStatus + '). Check Anyone with the link access and Drive download quota.');
+    if (upstreamStatus === 200) throw new Error('Google Drive ignored the byte-range request (HTTP 200, ' + upstreamType + '). The file endpoint is not supporting seekable streaming.');
+    throw new Error('Google Drive byte-range response was invalid (HTTP ' + upstreamStatus + ', Content-Range: ' + upstreamRange + ', type: ' + upstreamType + ').');
   }
   const bytes = new Uint8Array(await upstream.arrayBuffer());
   if (bytes.byteLength !== range.end - range.start + 1) {
@@ -426,7 +436,8 @@ async function api(req, env) {
       return response;
     } catch (error) {
       console.error('Video proxy failed:', error?.message || error);
-      return json({ error: 'Google Drive could not provide a playable byte range. Check public sharing and quota.' }, 502);
+      const detail = error instanceof Error ? error.message : 'Unknown upstream video error';
+      return json({ error: detail.slice(0, 300) }, 502);
     }
   }
 
