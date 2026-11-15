@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Watch movie · Moviwatch</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#090d18;color:#f4f6fc;font:16px system-ui}header{padding:18px 5%;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #29334b}a{color:#aabaff}.wrap{max-width:1100px;margin:auto;padding:24px 20px}.back{display:inline-block;margin-bottom:18px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 270px;gap:22px}.panel{background:#141d2e;border:1px solid #29334b;border-radius:14px;padding:16px}.poster{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:9px}video{width:100%;max-height:72vh;background:#000;border-radius:10px}.meta{color:#9eabc4}.controls{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:14px}.controls label{color:#b8c2d7}.controls select{background:#0e1627;color:white;border:1px solid #3a4661;border-radius:8px;padding:9px;min-width:180px}.notice{color:#9eabc4;font-size:13px}.error{padding:22px;border:1px dashed #596781;border-radius:10px}@media(max-width:760px){.layout{grid-template-columns:1fr}.side{display:flex;gap:14px;align-items:flex-start}.poster{width:100px}.side-info{flex:1}}
+</style></head>
+<body><header><strong>🎬 Moviwatch</strong><a href="/admin">Admin</a></header>
+<main class="wrap"><a class="back" href="/">← Back to catalogue</a><div id="state" class="error">Loading movie…</div>
+<div id="content" class="layout" hidden><section class="panel"><h1 id="title"></h1><p id="category" class="meta"></p><video id="video" controls playsinline preload="metadata"></video>
+<div class="controls" id="sourceControl" hidden><label for="sourceSelect">Audio / version</label><select id="sourceSelect"></select></div>
+<div class="controls" id="trackControl" hidden><label for="trackSelect">Embedded audio track</label><select id="trackSelect"></select></div>
+<p id="audioNote" class="notice"></p></section>
+<aside class="panel side"><img id="poster" class="poster" alt="Movie poster"><div class="side-info"><h3 id="sideTitle"></h3><p class="meta">Choose an available audio/version option while watching</p></div></aside></div>
+</main>
+<script>
+const $=s=>document.querySelector(s),id=new URLSearchParams(location.search).get('id')||decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||'');
+let movie=null, switching=false;
+async function load(){try{const r=await fetch('/api/movies');const d=await r.json();if(!r.ok)throw Error(d.error||'Catalogue unavailable');movie=(d.movies||[]).find(x=>x.id===id);if(!movie)throw Error('Movie not found or unpublished');$('#state').hidden=true;$('#content').hidden=false;$('#title').textContent=movie.title;$('#sideTitle').textContent=movie.title;$('#category').textContent=movie.category;$('#poster').src=movie.poster_url;const sources=movie.video_sources||[];if(!sources.length)throw Error('No playable video source is configured');if(sources.length>1){$('#sourceControl').hidden=false;sources.forEach((s,i)=>{const o=document.createElement('option');o.value=String(i);o.textContent=s.label||'Option '+(i+1);$('#sourceSelect').append(o)});$('#sourceSelect').onchange=()=>switchSource(Number($('#sourceSelect').value))}else{$('#audioNote').textContent='Only one source is configured for this movie. Add separate language versions in Admin to enable switching between them.'}setSource(0)}catch(e){$('#state').textContent=e.message||'Unable to load movie'}}
+function setSource(index,at=0,wasPlaying=false){const v=$('#video');switching=true;v.src='/api/watch/'+encodeURIComponent(id)+'/'+index;v.load();v.addEventListener('loadedmetadata',function ready(){v.removeEventListener('loadedmetadata',ready);if(at>0&&Number.isFinite(v.duration))v.currentTime=Math.min(at,v.duration);if(wasPlaying)v.play().catch(()=>{});switching=false;refreshTracks()}, {once:true})}
+function switchSource(index){const v=$('#video'),at=v.currentTime,playing=!v.paused;setSource(index,at,playing);$('#audioNote').textContent='Switched source. Playback position is being restored.'}
+function refreshTracks(){const v=$('#video'),list=v.audioTracks;if(!list||!list.length){$('#trackControl').hidden=true;return}$('#trackSelect').replaceChildren();for(let i=0;i<list.length;i++){const t=list[i],o=document.createElement('option');o.value=String(i);o.textContent=t.label||t.language||('Audio '+(i+1));o.selected=!!t.enabled;$('#trackSelect').append(o)}$('#trackControl').hidden=list.length<2;$('#trackSelect').onchange=()=>{for(let i=0;i<list.length;i++)list[i].enabled=i===Number($('#trackSelect').value)};if(list.length>1)$('#audioNote').textContent='This browser exposes multiple embedded audio tracks.'}
+$('#video').addEventListener('loadedmetadata',refreshTracks);$('#video').addEventListener('addtrack',refreshTracks);$('#video').addEventListener('removetrack',refreshTracks);load();
+</script></body></html>
