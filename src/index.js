@@ -143,7 +143,7 @@ async function publicMovies(env, category, query) {
     if (cached) return typeof cached === 'string' ? JSON.parse(cached) : cached;
   } catch (e) { console.warn('Redis cache read failed:', e.message); }
   const sql = sqlFor(env);
-  const rows = await sql`SELECT id,title,poster_url,category,video_sources,created_at FROM movies
+  const rows = await sql`SELECT id,title,poster_url,category,videos AS video_sources,created_at FROM movies
     WHERE is_published=TRUE
     AND (${category || null}::text IS NULL OR category=${category || null})
     AND (${query || null}::text IS NULL OR title ILIKE ${query ? '%' + query + '%' : null})
@@ -155,7 +155,7 @@ async function publicMovies(env, category, query) {
   return rows;
 }
 async function movieById(env, id) {
-  const rows = await sqlFor(env)`SELECT id,video_sources FROM movies WHERE id=${id} AND is_published=TRUE LIMIT 1`;
+  const rows = await sqlFor(env)`SELECT id,videos AS video_sources FROM movies WHERE id=${id} AND is_published=TRUE LIMIT 1`;
   return rows[0] || null;
 }
 function allowedDriveHost(host) {
@@ -242,7 +242,7 @@ async function api(req, env) {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) sameOrigin(req, env);
     const sql = sqlFor(env);
     if (path === '/api/admin/movies' && method === 'GET') {
-      return json({ movies: await sql`SELECT id,title,poster_url,category,video_sources,is_published,created_at,updated_at FROM movies ORDER BY updated_at DESC LIMIT 500` });
+      return json({ movies: await sql`SELECT id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at FROM movies ORDER BY updated_at DESC LIMIT 500` });
     }
     if (path === '/api/admin/stats' && method === 'GET') {
       const rows = await sql`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE is_published)::int AS published,
@@ -251,9 +251,9 @@ async function api(req, env) {
     }
     if (path === '/api/admin/movies' && method === 'POST') {
       const v = movieInput(await readBody(req));
-      const rows = await sql`INSERT INTO movies(id,title,poster_url,category,video_sources,is_published)
+      const rows = await sql`INSERT INTO movies(id,title,poster_url,category,videos,is_published)
         VALUES(${crypto.randomUUID()},${v.title},${v.poster},${v.category},${JSON.stringify(v.sources)}::jsonb,${v.published})
-        RETURNING id,title,poster_url,category,video_sources,is_published,created_at,updated_at`;
+        RETURNING id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at`;
       await invalidateCache(env);
       return json({ movie: rows[0] }, 201);
     }
@@ -263,8 +263,8 @@ async function api(req, env) {
       if (method === 'PUT') {
         const v = movieInput(await readBody(req));
         const rows = await sql`UPDATE movies SET title=${v.title},poster_url=${v.poster},category=${v.category},
-          video_sources=${JSON.stringify(v.sources)}::jsonb,is_published=${v.published},updated_at=NOW()
-          WHERE id=${id} RETURNING id,title,poster_url,category,video_sources,is_published,created_at,updated_at`;
+          videos=${JSON.stringify(v.sources)}::jsonb,is_published=${v.published},updated_at=NOW()
+          WHERE id=${id} RETURNING id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at`;
         if (!rows[0]) return json({ error: 'Movie not found' }, 404);
         await invalidateCache(env);
         return json({ movie: rows[0] });
