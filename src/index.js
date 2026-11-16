@@ -183,7 +183,7 @@ async function movieById(req, env, movieId) {
     console.warn('Movie metadata cache read failed:', error?.message || error);
   }
 
-  const rows = await sqlFor(env)`SELECT id,videos AS video_sources,updated_at
+  const rows = await sqlFor(env)`SELECT id,title,videos AS video_sources,updated_at
     FROM movies WHERE id=${movieId} AND is_published=TRUE LIMIT 1`;
   const movie = rows[0] || null;
   if (movie) {
