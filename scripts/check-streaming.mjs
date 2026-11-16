@@ -1,0 +1,33 @@
+import { readFileSync } from 'node:fs';
+
+const config = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
+const worker = readFileSync('src/index.js', 'utf8');
+const watch = readFileSync('public/watch.html', 'utf8');
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+assert((config.compatibility_flags || []).includes('enable_ctx_exports'),
+  'wrangler.jsonc must enable ctx.exports');
+assert(config.cache?.enabled === true, 'Workers Cache must be enabled');
+assert(config.exports?.default?.cache?.enabled === false,
+  'The gateway entrypoint must bypass cache lookups');
+for (const name of ['PublicCatalogue', 'MovieMetadata', 'VideoChunk']) {
+  assert(config.exports?.[name]?.type === 'worker' && config.exports?.[name]?.cache?.enabled === true,
+    name + ' must use a cached Worker entrypoint');
+  assert(worker.includes('export class ' + name + ' extends WorkerEntrypoint'),
+    name + ' class is missing from src/index.js');
+}
+assert(worker.includes('ctx.exports.VideoChunk.fetch'),
+  'Video chunks must be fetched through the tiered cached entrypoint');
+assert(worker.includes("'cache-tag': 'video-chunks-' + movieId"),
+  'Video chunks must be tagged for movie-level purging');
+assert(!worker.includes('caches.default') && !worker.includes('inflightVideoChunks'),
+  'The old local-only Cache API chunk cache must be removed');
+assert(!/method\s*:\s*['"]HEAD['"]/.test(watch),
+  'Watch page must not make eager HEAD requests on page load');
+assert(watch.includes("Range:'bytes=0-1'"),
+  'Watch page must retain the small stream readiness probe');
+
+console.log('Validated tiered cache entrypoints, cache purging, and lazy download metadata.');
