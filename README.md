@@ -8,7 +8,7 @@ A lightweight movie catalogue and streaming backend built with Cloudflare Worker
 - Exactly one application table: `movies`. Multiple video options are stored in one JSONB array.
 - Action and Romantic categories, poster URLs, publish/unpublish, create/edit/delete, search and filtering.
 - Google Drive public-link proxy with HTTP Range forwarding for video seeking.
-- Cloudflare Cache API stores public catalogue metadata, per-movie source metadata, and 4 MiB video chunks at the edge. Upstash Redis is used only for admin-login rate limiting.
+- Cloudflare Workers Cache (tiered) caches public cacheable responses such as the catalogue; the Cache API stores per-movie metadata and 4 MiB video chunks in the local data-center cache. Upstash Redis is used only for admin-login rate limiting.
 - Admin secrets stay in Worker Secrets. Google OAuth Client ID/Secret is not needed for public Drive share links.
 
 ## Database and Redis
@@ -72,7 +72,7 @@ Vercel project settings:
 - Output Directory: `public`
 - Install Command: default / automatic
 
-After the Vercel project is created, copy its production domain (for example, `https://<project>.vercel.app`). Add that exact origin to the Cloudflare Worker variable `APP_ORIGINS` (comma-separated for more than one origin), under **Workers & Pages → moviewatch → Settings → Variables and Secrets**. Include your production custom domain too, if one is added. The Worker uses this allowlist for admin login/logout and all admin mutations; do not use a wildcard origin. Redeploy the Worker after changing a Wrangler-managed variable, or save the variable in the Cloudflare dashboard.
+After the Vercel project is created, copy its production domain (for example, `https://<project>.vercel.app`). Add that exact origin to the Cloudflare Worker variable `APP_ORIGINS` (comma-separated for more than one origin), under **Workers & Pages → moviewatch → Settings → Variables and Secrets**. Include your production custom domain too, if one is added. The Worker uses this allowlist for admin login/logout and all admin mutations; do not use a wildcard origin. Redeploy the Worker after changing a Wrangler-managed variable, or save the variable in the Cloudflare dashboard. The Workers Cache layer is enabled for cacheable public responses; private/admin and byte-range stream responses remain no-store.
 
 Keep API calls relative (such as `/api/movies`) so the browser always talks to the Vercel origin and Vercel proxies them to Cloudflare. This preserves a first-party cookie on the Vercel domain while the Worker validates the allowed Origin. Verify `/api/health`, the public catalogue, admin login, and a create/edit/delete test after deployment.
 
