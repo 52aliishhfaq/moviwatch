@@ -597,23 +597,79 @@ async function api(req, env) {
   }
 
   const download = path.split('/');
-  if (download.length === 5 && download[1] === 'api' && download[2] === 'download' && method === 'GET') {
+  if (download.length === 5 && download[1] === 'api' && download[2] === 'download' &&
+      (method === 'GET' || method === 'HEAD')) {
     const metadata = await movieById(req, env, download[3]);
     const movie = metadata.movie;
-    if (!movie) return json({ error: 'Movie not found' }, 404);
+    if (!movie) return method === 'HEAD'
+      ? new Response(null, { status: 404, headers: { 'cache-control': 'no-store' } })
+      : json({ error: 'Movie not found' }, 404);
+
     const optionIndex = Number(download[4]);
     const source = movie.video_sources?.[optionIndex];
     if (!source?.url || !Number.isInteger(optionIndex) || optionIndex < 0) {
-      return json({ error: 'Video option not found' }, 404);
+      return method === 'HEAD'
+        ? new Response(null, { status: 404, headers: { 'cache-control': 'no-store' } })
+        : json({ error: 'Video option not found' }, 404);
     }
 
+    const cleanPart = (value) => String(value || '')
+      .normalize('NFKC')
+      .replace(/[\\/:*?"<>|\x00-\x1F]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 90);
+    const baseName = cleanPart(movie.title) || 'Moviwatch';
+    const optionName = cleanPart(source.label || ('Option ' + (optionIndex + 1)));
+
     try {
-      // Stream the complete file through the demand-driven 4 MiB edge cache.
-      // Explicit Range requests remain resumable and keep HTTP 206 semantics.
+      // HEAD discovers total bytes from one cached byte-range probe. It warms
+      // chunk zero so an immediate GET can reuse it without a second Drive read.
+      if (method === 'HEAD') {
+        const probe = await cachedVideoRange(
+          req, source, download[3], optionIndex, 'bytes=0-0', movie.updated_at
+        );
+        if (probe.status !== 206) {
+          try { await probe.body?.cancel(); } catch {}
+          return new Response(null, { status: probe.status, headers: probe.headers });
+        }
+
+        const contentRange = probe.headers.get('content-range') || '';
+        const total = Number(contentRange.split('/')[1]);
+        const container = probe.headers.get('x-moviwatch-container') || 'mp4';
+        const extension = ({
+          mp4: 'mp4', webm: 'webm', mkv: 'mkv', avi: 'avi',
+          flv: 'flv', ogg: 'ogg'
+        })[container] || 'mp4';
+        const filename = baseName + (optionName ? ' - ' + optionName : '') + '.' + extension;
+        const fallback = filename.normalize('NFKD')
+          .replace(/[^\x20-\x7E]/g, '')
+          .replace(/[\\/:*?"<>|\x00-\x1F]/g, '')
+          .replace(/[\r\n]/g, '')
+          .trim() || 'Moviwatch-download.' + extension;
+        const encoded = encodeURIComponent(filename).replace(/[!'()*]/g,
+          (char) => '%' + char.charCodeAt(0).toString(16).toUpperCase());
+
+        try { await probe.body?.cancel(); } catch {}
+        const headers = new Headers(probe.headers);
+        headers.delete('content-range');
+        headers.set('content-length', String(Number.isSafeInteger(total) && total >= 0 ? total : 0));
+        headers.set('content-disposition',
+          'attachment; filename="' + fallback + '"; filename*=UTF-8\'\'' + encoded);
+        headers.set('accept-ranges', 'bytes');
+        headers.set('x-moviwatch-file-size', String(total));
+        headers.set('x-moviwatch-file-name', encoded);
+        headers.set('cache-control', 'private, no-store, max-age=0');
+        headers.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
+        return new Response(null, { status: 200, headers });
+      }
+
+      // GET streams the full file by default. Explicit Range requests preserve
+      // resumable downloads and standard HTTP 206 responses.
       const requestedRange = req.headers.get('Range');
-      const rangeHeader = requestedRange || 'bytes=0-';
       const response = await cachedVideoRange(
-        req, source, download[3], optionIndex, rangeHeader, movie.updated_at
+        req, source, download[3], optionIndex,
+        requestedRange || 'bytes=0-', movie.updated_at
       );
       if (response.status === 416) return response;
 
@@ -622,21 +678,19 @@ async function api(req, env) {
         mp4: 'mp4', webm: 'webm', mkv: 'mkv', avi: 'avi',
         flv: 'flv', ogg: 'ogg'
       })[container] || 'mp4';
-      const cleanPart = (value) => String(value || '')
-        .normalize('NFKC')
-        .replace(/[\\/:*?"<>|\x00-\x1F]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 90);
-      const baseName = cleanPart(movie.title) || 'Moviwatch';
-      const optionName = cleanPart(source.label || ('Option ' + (optionIndex + 1)));
       const filename = baseName + (optionName ? ' - ' + optionName : '') + '.' + extension;
-      const encodedFilename = encodeURIComponent(filename).replace(/[!'()*]/g,
+      const fallback = filename.normalize('NFKD')
+        .replace(/[^\x20-\x7E]/g, '')
+        .replace(/[\\/:*?"<>|\x00-\x1F]/g, '')
+        .replace(/[\r\n]/g, '')
+        .trim() || 'Moviwatch-download.' + extension;
+      const encoded = encodeURIComponent(filename).replace(/[!'()*]/g,
         (char) => '%' + char.charCodeAt(0).toString(16).toUpperCase());
 
       const headers = new Headers(response.headers);
       headers.set('content-disposition',
-        'attachment; filename="Moviwatch-download.' + extension + '"; filename*=UTF-8\'\'' + encodedFilename);
+        'attachment; filename="' + fallback + '"; filename*=UTF-8\'\'' + encoded);
+      headers.set('accept-ranges', 'bytes');
       headers.set('cache-control', 'private, no-store, max-age=0');
       headers.set('x-content-type-options', 'nosniff');
       headers.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
@@ -650,11 +704,13 @@ async function api(req, env) {
     } catch (error) {
       console.error('Video download failed:', error?.message || error);
       const detail = error instanceof Error ? error.message : 'Unknown download error';
-      return json({ error: detail.slice(0, 300) }, 502);
+      return method === 'HEAD'
+        ? new Response(null, { status: 502, headers: { 'cache-control': 'no-store', 'x-moviwatch-error': detail.slice(0, 200) } })
+        : json({ error: detail.slice(0, 300) }, 502);
     }
   }
 
-  const watch = path.split('/');
+    const watch = path.split('/');
   if (watch.length === 5 && watch[1] === 'api' && watch[2] === 'watch' && (method === 'GET' || method === 'HEAD')) {
     const metadata = await movieById(req, env, watch[3]);
     const movie = metadata.movie;
@@ -679,7 +735,7 @@ async function api(req, env) {
     }
 
     try {
-      const response = await cachedVideoRange(req, env, source, watch[3], optionIndex, req.headers.get('Range'), movie.updated_at);
+      const response = await cachedVideoRange(req, source, watch[3], optionIndex, req.headers.get('Range'), movie.updated_at);
       if ((response.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
         return json({ error: 'Drive returned an HTML page instead of video. Check public sharing and quota.' }, 502);
       }
