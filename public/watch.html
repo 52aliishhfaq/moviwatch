@@ -95,12 +95,13 @@ async function prepare(){
       throw new Error(detail);
     }
     if(probe.status!==206)throw new Error('Video server did not return a valid byte-range response (HTTP '+probe.status+').');
-    mediaContainer=probe.headers.get('x-moviwatch-container')||'unknown';\n    mediaType=probe.headers.get('content-type')||'unknown';\n    const type=mediaType.toLowerCase();
+    mediaContainer=probe.headers.get('x-moviwatch-container')||'unknown';
+    mediaType=probe.headers.get('content-type')||'unknown';
+    const type=mediaType.toLowerCase();
     if(type.includes('text/html')||type.includes('application/json'))throw new Error('Google Drive returned a web page instead of a video. Set sharing to “Anyone with the link”.');
     await probe.arrayBuffer();
     initPlayer();
     video.src=streamUrl;
-    video.type='video/mp4';
     video.load();
     loading(false);
     status('Stream ready · '+mediaContainer.toUpperCase()+' · '+mediaType+' · Press play');
