@@ -233,7 +233,12 @@ async function driveFetch(source, method, headers) {
   }
   let currentMethod = method;
   for (let hop = 0; hop <= 5; hop++) {
-    if (url.protocol !== 'https:' || !allowedDriveHost(url.hostname)) throw new Error('Unsupported Google Drive redirect');
+    if (url.protocol !== 'https:') throw new Error('Google Drive redirect must use HTTPS');
+    const host = url.hostname.toLowerCase();
+    if (host === 'accounts.google.com' || host.endsWith('.accounts.google.com')) {
+      throw new Error('Google Drive file requires sign-in. In Google Drive, set General access to Anyone with the link (Viewer), save, and try again.');
+    }
+    if (!allowedDriveHost(host)) throw new Error('Unsupported Google Drive redirect');
     const res = await fetch(url.toString(), { method: currentMethod, headers, redirect: 'manual' });
     if (![301, 302, 303, 307, 308].includes(res.status)) return res;
     const location = res.headers.get('Location');
@@ -610,8 +615,14 @@ async function api(req, env, ctx) {
     const cachedCatalogue = await catalogueEntry.fetch(new Request(catalogueUrl));
     if (!cachedCatalogue.ok) return json({ error: 'Could not load the public catalogue' }, 502);
     const payload = await cachedCatalogue.json();
+    // Cloudflare's cached PublicCatalogue entrypoint is the authoritative cache.
+    // Do not let Vercel cache this gateway response: doing so hides the current
+    // Cloudflare HIT/MISS state and can serve stale catalogue data after tag purges.
     return json(payload, 200, {
-      'cache-control': 'public, max-age=30, stale-while-revalidate=120',
+      'cache-control': 'private, no-store, max-age=0',
+      'cdn-cache-control': 'no-store',
+      'vercel-cdn-cache-control': 'no-store',
+      'surrogate-control': 'no-store',
       'x-moviwatch-catalog-cache': cachedCatalogue.headers.get('cf-cache-status') || 'UNKNOWN'
     });
   }
