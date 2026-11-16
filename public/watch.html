@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#080d18">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Moviwatch">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/svg+xml" href="/assets/moviwatch-app-icon.svg">
+<link rel="apple-touch-icon" href="/assets/moviwatch-app-icon-180.png">
 <title>Watch movie · Moviwatch</title>
 
 <style>
@@ -142,5 +148,6 @@ video.addEventListener('loadedmetadata',()=>{loading(false);status('')});
 $('#retry').addEventListener('click',prepare);
 prepare();
 </script>
+<link rel="stylesheet" href="/pwa-install.css"><script src="/pwa-install.js" defer></script>
 </body>
 </html>
