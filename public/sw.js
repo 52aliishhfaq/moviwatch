@@ -1,9 +1,27 @@
 const CACHE='moviwatch-shell-v1';
 const SHELL=['/','/manifest.webmanifest','/assets/moviwatch-app-icon.svg','/assets/moviwatch-logo-4k.svg','/pwa-install.css','/pwa-install.js'];
-self.addEventListener('install',event=>event.waitUntil((async()=>{const c=await caches.open(CACHE);await Promise.all(SHELL.map(async p=>{try{const r=await fetch(p,{cache:'reload'});if(r.ok)await c.put(p,r)}catch{}}));await self.skipWaiting()})()));
-self.addEventListener('activate',event=>event.waitUntil((async()=>{const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith('moviwatch-shell-')&&k!==CACHE).map(k=>caches.delete(k)));await self.clients.claim()})()));
-self.addEventListener('fetch',event=>{const req=event.request;if(req.method!=='GET')return;const u=new URL(req.url);if(u.origin!==location.origin)return;
-// Never cache APIs, movie/watch routes, downloads, admin pages, or byte-range requests.
-if(u.pathname.startsWith('/api/')||u.pathname.startsWith('/watch/')||u.pathname==='/admin'||u.pathname==='/admin.html'||req.headers.has('Range'))return;
-if(req.mode==='navigate'){event.respondWith((async()=>{try{const r=await fetch(req);if(r.ok&&u.pathname==='/'){const c=await caches.open(CACHE);await c.put('/',r.clone())}return r}catch{return await caches.match('/')||Response.error()}})());return}
-if(u.pathname.startsWith('/assets/')||u.pathname==='/manifest.webmanifest'||u.pathname==='/pwa-install.css'||u.pathname==='/pwa-install.js')event.respondWith((async()=>{const c=await caches.o¶»§q«^
+self.addEventListener('install',event=>event.waitUntil((async()=>{
+ const cache=await caches.open(CACHE);
+ await Promise.all(SHELL.map(async path=>{try{const response=await fetch(path,{cache:'reload'});if(response.ok)await cache.put(path,response)}catch{}}));
+ await self.skipWaiting();
+})()));
+self.addEventListener('activate',event=>event.waitUntil((async()=>{
+ const keys=await caches.keys();
+ await Promise.all(keys.filter(key=>key.startsWith('moviwatch-shell-')&&key!==CACHE).map(key=>caches.delete(key)));
+ await self.clients.claim();
+})()));
+self.addEventListener('fetch',event=>{
+ const request=event.request;if(request.method!=='GET')return;
+ const url=new URL(request.url);if(url.origin!==self.location.origin)return;
+ // Never cache APIs, watch pages, downloads, admin, or byte-range requests.
+ if(url.pathname.startsWith('/api/')||url.pathname.startsWith('/watch/')||url.pathname==='/admin'||url.pathname==='/admin.html'||request.headers.has('Range'))return;
+ if(request.mode==='navigate'){
+  event.respondWith((async()=>{
+   try{const response=await fetch(request);if(response.ok&&url.pathname==='/'){const cache=await caches.open(CACHE);await cache.put('/',response.clone())}return response}
+   catch{return await caches.match('/')||Response.error()}
+  })());return;
+ }
+ if(url.pathname.startsWith('/assets/')||url.pathname==='/manifest.webmanifest'||url.pathname==='/pwa-install.css'||url.pathname==='/pwa-install.js'){
+  event.respondWith((async()=>{const cache=await caches.open(CACHE);const cached=await cache.match(request);if(cached)return cached;const response=await fetch(request);if(response.ok)await cache.put(request,response.clone());return response})());
+ }
+});
