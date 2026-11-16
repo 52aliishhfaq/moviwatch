@@ -19,8 +19,14 @@ for (const name of ['PublicCatalogue', 'MovieMetadata', 'VideoChunk']) {
   assert(worker.includes('export class ' + name + ' extends WorkerEntrypoint'),
     name + ' class is missing from src/index.js');
 }
-assert(worker.includes('ctx.exports.VideoChunk.fetch'),
+assert(worker.includes('ctx.exports.VideoChunk({') && worker.includes('await videoEntry.fetch('),
   'Video chunks must be fetched through the tiered cached entrypoint');
+assert(worker.includes('ctx.exports.MovieMetadata({ props: { movieId } })') &&
+  worker.includes('ctx.exports.PublicCatalogue({ props: { category, query } })'),
+  'Loopback entrypoints must receive props using the documented binding factory');
+assert(worker.includes("catalogueUrl.searchParams.set('category', category)") &&
+  worker.includes("catalogueUrl.searchParams.set('q', query)"),
+  'Catalogue cache keys must vary by category and search query');
 assert(worker.includes('sourceVersion instanceof Date') && worker.includes('normalizedSourceVersion'),
   'Source version must be normalized before it crosses the entrypoint boundary');
 assert(/getVideoChunk\(\s*ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, firstChunkStart/.test(worker),
