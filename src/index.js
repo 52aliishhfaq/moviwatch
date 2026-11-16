@@ -300,7 +300,7 @@ async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSource
     'https://moviwatch.internal'
   );
   const videoEntry = ctx.exports.VideoChunk({
-    props: { sourceUrl: source.url, sourceVersion: String(sourceVersion || '') }
+    props: { sourceUrl: source.url, sourceVersion: normalizedSourceVersion }
   });
   const response = await videoEntry.fetch(new Request(internalUrl));
   const cacheStatus = response.headers.get('cf-cache-status') || 'UNKNOWN';
