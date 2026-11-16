@@ -493,7 +493,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
 
   const firstChunkStart = Math.floor(start / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
   let first = firstChunkStart === firstChunk.start ? firstChunk : await getVideoChunk(
-    req, source, movieId, optionIndex, sourceHash, firstChunkStart
+    ctx, source, movieId, optionIndex, sourceVersion, sourceHash, firstChunkStart
   );
   if (first.unsatisfiedTotal !== undefined || first.total !== total) throw new Error('Google Drive video size changed during streaming');
   const responseStart = start;
