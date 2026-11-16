@@ -249,46 +249,86 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
       const total = Number(cached.headers.get('x-moviwatch-total'));
       if (Number.isSafeInteger(start) && Number.isSafeInteger(end) &&
           Number.isSafeInteger(total) && start === chunkStart && end >= start && total > end) {
-        return {
-          bytes: new Uint8Array(await cached.arrayBuffer()),
-          start, end, total,
-          contentType: cached.headers.get('content-type') || 'video/mp4',
-          container: cached.headers.get('x-moviwatch-container') || 'unknown',
-          cacheStatus: 'HIT'
-        };
+        const bytes = new Uint8Array(await cached.arrayBuffer());
+        if (bytes.byteLength === end - start + 1) {
+          return {
+            bytes, start, end, total,
+            contentType: cached.headers.get('content-type') || 'video/mp4',
+            container: cached.headers.get('x-moviwatch-container') || 'unknown',
+            cacheStatus: 'HIT'
+          };
+        }
       }
     }
   } catch (error) {
     console.warn('Video cache read failed:', error?.message || error);
   }
 
+  // Drive and intermediary download endpoints may cap a Range response below
+  // the requested 4 MiB. Assemble contiguous partial 206 responses so our
+  // edge-cache chunk is complete and its byte offsets remain deterministic.
   const requestedEnd = chunkStart + VIDEO_CHUNK_SIZE - 1;
-  const upstream = await driveFetch(source.url, 'GET', new Headers({
-    Range: 'bytes=' + chunkStart + '-' + requestedEnd,
-    'Accept-Encoding': 'identity'
-  }));
-  if (upstream.status === 416) {
-    const unsatisfied = new RegExp('^bytes [*]/([0-9]+)$').exec(upstream.headers.get('content-range') || '');
-    if (unsatisfied) return { unsatisfiedTotal: Number(unsatisfied[1]), cacheStatus: 'MISS' };
+  const pieces = [];
+  let cursor = chunkStart;
+  let total = null;
+  let upstreamType = '';
+  let expectedEnd = requestedEnd;
+  let requests = 0;
+
+  while (cursor <= expectedEnd) {
+    if (++requests > 128) throw new Error('Google Drive returned too many small video ranges');
+    const upstream = await driveFetch(source.url, 'GET', new Headers({
+      Range: 'bytes=' + cursor + '-' + requestedEnd,
+      'Accept-Encoding': 'identity'
+    }));
+
+    if (upstream.status === 416) {
+      const unsatisfied = new RegExp('^bytes [*]/([0-9]+)$').exec(upstream.headers.get('content-range') || '');
+      if (unsatisfied && cursor === chunkStart) {
+        return { unsatisfiedTotal: Number(unsatisfied[1]), cacheStatus: 'MISS' };
+      }
+    }
+
+    const range = parseContentRange(upstream.headers.get('content-range'));
+    if (upstream.status !== 206 || !range || range.start !== cursor ||
+        range.end > requestedEnd || range.end < cursor ||
+        (total !== null && range.total !== total)) {
+      const type = (upstream.headers.get('content-type') || 'unknown').split(';')[0];
+      const status = upstream.status;
+      const contentRange = upstream.headers.get('content-range') || 'none';
+      try { await upstream.body?.cancel(); } catch {}
+      if (type.includes('text/html')) throw new Error('Google Drive returned an HTML confirmation, permission, or quota page (HTTP ' + status + '). Check Anyone with the link access and Drive download quota.');
+      if (status === 200) throw new Error('Google Drive ignored the byte-range request (HTTP 200, ' + type + '). The file endpoint is not supporting seekable streaming.');
+      throw new Error('Google Drive byte-range response was invalid (HTTP ' + status + ', Content-Range: ' + contentRange + ', type: ' + type + ').');
+    }
+
+    total = range.total;
+    expectedEnd = Math.min(requestedEnd, total - 1);
+    if (cursor > expectedEnd) {
+      try { await upstream.body?.cancel(); } catch {}
+      break;
+    }
+    const bytes = new Uint8Array(await upstream.arrayBuffer());
+    if (bytes.byteLength !== range.end - range.start + 1) {
+      throw new Error('Google Drive returned an incomplete video range');
+    }
+    if (!upstreamType) upstreamType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    pieces.push(bytes);
+    cursor = range.end + 1;
   }
-  const range = parseContentRange(upstream.headers.get('content-range'));
-  if (upstream.status !== 206 || !range || range.start !== chunkStart ||
-      range.end > requestedEnd || range.end !== Math.min(requestedEnd, range.total - 1)) {
-    const upstreamType = (upstream.headers.get('content-type') || 'unknown').split(';')[0];
-    const upstreamRange = upstream.headers.get('content-range') || 'none';
-    const upstreamStatus = upstream.status;
-    try { await upstream.body?.cancel(); } catch {}
-    if (upstreamType.includes('text/html')) throw new Error('Google Drive returned an HTML confirmation, permission, or quota page (HTTP ' + upstreamStatus + '). Check Anyone with the link access and Drive download quota.');
-    if (upstreamStatus === 200) throw new Error('Google Drive ignored the byte-range request (HTTP 200, ' + upstreamType + '). The file endpoint is not supporting seekable streaming.');
-    throw new Error('Google Drive byte-range response was invalid (HTTP ' + upstreamStatus + ', Content-Range: ' + upstreamRange + ', type: ' + upstreamType + ').');
+
+  if (total === null || cursor !== expectedEnd + 1) {
+    throw new Error('Google Drive did not provide a complete contiguous video chunk');
   }
-  const bytes = new Uint8Array(await upstream.arrayBuffer());
-  if (bytes.byteLength !== range.end - range.start + 1) {
-    throw new Error('Google Drive returned an incomplete video chunk');
+  const expectedLength = expectedEnd - chunkStart + 1;
+  const bytes = new Uint8Array(expectedLength);
+  let offset = 0;
+  for (const piece of pieces) {
+    bytes.set(piece, offset);
+    offset += piece.byteLength;
   }
-  const upstreamType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-  // Google Drive may label a valid MP4 download as generic binary data.
-  // Browsers reject application/octet-stream as a native media source.
+  if (offset !== expectedLength) throw new Error('Assembled Google Drive video chunk has an invalid length');
+
   const container = sniffVideoContainer(bytes);
   const contentType = container === 'mp4' ? 'video/mp4' :
     container === 'webm' ? 'video/webm' :
@@ -302,9 +342,9 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
         'content-type': contentType,
         'content-length': String(bytes.byteLength),
         'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL,
-        'x-moviwatch-start': String(range.start),
-        'x-moviwatch-end': String(range.end),
-        'x-moviwatch-total': String(range.total),
+        'x-moviwatch-start': String(chunkStart),
+        'x-moviwatch-end': String(expectedEnd),
+        'x-moviwatch-total': String(total),
         'x-moviwatch-container': container
       }
     });
@@ -312,7 +352,7 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
   } catch (error) {
     console.warn('Video cache write failed:', error?.message || error);
   }
-  return { bytes, ...range, contentType, container, cacheStatus: 'MISS' };
+  return { bytes, start: chunkStart, end: expectedEnd, total, contentType, container, cacheStatus: 'MISS' };
 }
 
 async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader) {
