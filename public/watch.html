@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#080d18">
 <title>Watch movie · Moviwatch</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.css">
+
 <style>
 :root{color-scheme:dark;--bg:#080d18;--panel:#111a2b;--line:#26334a;--muted:#9eabc4;--accent:#7185ff}
 *{box-sizing:border-box}
@@ -20,8 +20,7 @@ main{width:min(1160px,calc(100% - 40px));margin:30px auto 64px}
 h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px}
 .meta{color:var(--muted);margin:8px 0 0;font-size:14px}
 .player-shell{padding:12px;background:#0b1220;border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 80px #0006}
-.player-shell .plyr{border-radius:10px;overflow:hidden;--plyr-color-main:var(--accent);--plyr-video-background:#05080e;--plyr-menu-background:#111a2b;--plyr-menu-color:#f4f6fc;--plyr-tooltip-background:#111a2b;--plyr-tooltip-color:#f4f6fc;--plyr-control-radius:7px}
-video{display:block;width:100%;aspect-ratio:16/9;background:#05080e}
+.player-shell movi-player{display:block;width:100%;aspect-ratio:16/9;min-height:220px;border-radius:10px;overflow:hidden;background:#05080e;--movi-accent:var(--accent);--movi-background:#05080e;--movi-panel:#111a2b;--movi-text:#f4f6fc}
 .status{min-height:24px;margin:12px 4px 2px;color:var(--muted);font-size:13px}
 .status.error{color:#ff9d9d}
 .status:empty{display:none}
@@ -39,18 +38,18 @@ video{display:block;width:100%;aspect-ratio:16/9;background:#05080e}
 <a class="back" href="/">← Back to catalogue</a>
 <div class="heading"><div><h1 id="title">Loading movie…</h1><p class="meta" id="category"></p></div></div>
 <section class="player-shell" aria-label="Movie player">
-  <video id="video" controls playsinline preload="none"></video>
+  <movi-player id="video" controls playsinline preload="none" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
   <div id="loading" class="loading"><span class="spinner"></span><span>Checking video stream…</span></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <button id="retry" class="retry" type="button">Retry stream</button>
 </section>
 </main>
-<script src="https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js"></script>
 <script>
 const $=s=>document.querySelector(s);
 const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||new URLSearchParams(location.search).get('id')||'');
 const video=$('#video');
-let player=null,streamUrl='',mediaContainer='unknown',mediaType='';
+let streamUrl='',mediaContainer='unknown',mediaType='';
 function status(message,error=false){$('#status').textContent=message;$('#status').classList.toggle('error',error)}
 function loading(on){$('#loading').hidden=!on}
 function mediaError(){
@@ -68,11 +67,6 @@ function mediaError(){
   else if(e?.code===3) message='The browser could not decode this video. The codec may be unsupported or the file may be damaged.';
   else if(e?.code===1) message='Playback was interrupted.';
   status(message,true);$('#retry').classList.add('show');loading(false);
-}
-function initPlayer(){
-  if(window.Plyr&&!player){
-    player=new Plyr(video,{controls:['play-large','play','progress','current-time','duration','mute','volume','settings','pip','fullscreen'],settings:['captions','quality','speed'],clickToPlay:true,hideControls:true,resetOnEnd:false,disableContextMenu:true});
-  }
 }
 async function prepare(){
   $('#retry').classList.remove('show');loading(true);status('');
@@ -100,7 +94,6 @@ async function prepare(){
     const type=mediaType.toLowerCase();
     if(type.includes('text/html')||type.includes('application/json'))throw new Error('Google Drive returned a web page instead of a video. Set sharing to “Anyone with the link”.');
     await probe.arrayBuffer();
-    initPlayer();
     video.src=streamUrl;
     video.load();
     loading(false);
