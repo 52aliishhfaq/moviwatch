@@ -433,7 +433,14 @@ async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader) 
       'content-length': String(contentLength),
       'content-range': 'bytes ' + responseStart + '-' + responseEnd + '/' + total,
       'accept-ranges': 'bytes',
-      'cache-control': 'public, max-age=3600',
+      // The Vercel front proxy must never cache a 206 response by URL alone:
+      // Range is part of the representation, while Cloudflare's internal chunk
+      // cache above already handles origin caching safely.
+      'cache-control': 'private, no-store, max-age=0',
+      'cdn-cache-control': 'no-store',
+      'vercel-cdn-cache-control': 'no-store',
+      'surrogate-control': 'no-store',
+      'vary': 'Range',
       'x-moviwatch-cache': cacheStates.every((state) => state === 'HIT') ? 'HIT' :
         cacheStates.every((state) => state === 'MISS') ? 'MISS' : 'PARTIAL',
       'x-moviwatch-chunk-size': String(VIDEO_CHUNK_SIZE)
