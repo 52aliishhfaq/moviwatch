@@ -1,5 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 import { Redis } from '@upstash/redis';
+import { WorkerEntrypoint } from 'cloudflare:workers';
 
 const COOKIE = 'moviwatch_admin';
 const SESSION = 8 * 60 * 60;
@@ -127,33 +128,12 @@ function movieInput(body) {
     published: body.isPublished !== false
   };
 }
-const CATALOGUE_CACHE_TTL = 120;
-const MOVIE_METADATA_CACHE_TTL = 120;
-
-function catalogueCacheKey(req) {
-  const url = new URL('/__moviwatch_cache__/catalogue-v1', req.url);
-  return new Request(url.toString(), { method: 'GET' });
-}
-
-function movieMetadataCacheKey(req, movieId) {
-  const url = new URL('/__moviwatch_cache__/movie-meta-v1/' + encodeURIComponent(movieId), req.url);
-  return new Request(url.toString(), { method: 'GET' });
-}
-
-async function invalidateCatalogueCache(req) {
-  try { await caches.default.delete(catalogueCacheKey(req)); }
-  catch (error) { console.warn('Catalogue cache invalidation failed:', error?.message || error); }
-}
-
-async function invalidateMovieMetadataCache(req, movieId) {
-  try { await caches.default.delete(movieMetadataCacheKey(req, movieId)); }
-  catch (error) { console.warn('Movie metadata cache invalidation failed:', error?.message || error); }
-}
+const CATALOGUE_CACHE_TTL = 30;
+const MOVIE_METADATA_CACHE_TTL = 30;
 
 async function publicMovies(env, category, query) {
   const sql = sqlFor(env);
-  // The public catalogue only needs the option labels. Never transfer private
-  // Google Drive URLs (stored in videos JSONB) to Neon client code and discard them.
+  // Only option labels are public. Never send stored Google Drive URLs to clients.
   return await sql`SELECT id,title,poster_url,category,created_at,
     COALESCE((
       SELECT jsonb_agg(
@@ -169,37 +149,77 @@ async function publicMovies(env, category, query) {
     ORDER BY created_at DESC LIMIT 100`;
 }
 
-async function movieById(req, env, movieId) {
-  if (!/^[0-9a-f-]{36}$/i.test(movieId)) return { movie: null, cacheStatus: 'BYPASS' };
-  const cache = caches.default;
-  const key = movieMetadataCacheKey(req, movieId);
-  try {
-    const cached = await cache.match(key);
-    if (cached) {
-      const movie = await cached.json();
-      if (movie && Array.isArray(movie.video_sources)) return { movie, cacheStatus: 'HIT' };
-    }
-  } catch (error) {
-    console.warn('Movie metadata cache read failed:', error?.message || error);
+export class PublicCatalogue extends WorkerEntrypoint {
+  async fetch(request) {
+    if (request.method !== 'GET') return new Response(null, { status: 405, headers: { allow: 'GET', 'cache-control': 'no-store' } });
+    const { category = '', query = '' } = this.ctx.props || {};
+    const rows = await publicMovies(this.env, category, query);
+    const payload = {
+      movies: rows.map(({ video_sources, ...movie }) => ({
+        ...movie,
+        video_sources: (video_sources || []).map((source) => ({ label: source.label || 'Play' }))
+      }))
+    };
+    return json(payload, 200, {
+      'cache-control': 'public, max-age=' + CATALOGUE_CACHE_TTL + ', stale-while-revalidate=120',
+      'cache-tag': 'public-catalogue'
+    });
   }
 
-  const rows = await sqlFor(env)`SELECT id,title,videos AS video_sources,updated_at
-    FROM movies WHERE id=${movieId} AND is_published=TRUE LIMIT 1`;
-  const movie = rows[0] || null;
-  if (movie) {
-    try {
-      await cache.put(key, new Response(JSON.stringify(movie), {
-        headers: {
-          'content-type': 'application/json; charset=utf-8',
-          'cache-control': 'public, max-age=' + MOVIE_METADATA_CACHE_TTL
-        }
-      }));
-    } catch (error) {
-      console.warn('Movie metadata cache write failed:', error?.message || error);
-    }
+  async invalidate() {
+    return this.ctx.cache.purge({ tags: ['public-catalogue'] });
   }
-  return { movie, cacheStatus: 'MISS' };
 }
+
+export class MovieMetadata extends WorkerEntrypoint {
+  async fetch(request) {
+    if (request.method !== 'GET') return new Response(null, { status: 405, headers: { allow: 'GET', 'cache-control': 'no-store' } });
+    const movieId = this.ctx.props?.movieId;
+    if (typeof movieId !== 'string' || !/^[0-9a-f-]{36}$/i.test(movieId)) {
+      return json({ movie: null }, 200, { 'cache-control': 'public, max-age=5' });
+    }
+    const rows = await sqlFor(this.env)`SELECT id,title,videos AS video_sources,updated_at
+      FROM movies WHERE id=${movieId} AND is_published=TRUE LIMIT 1`;
+    return json({ movie: rows[0] || null }, 200, {
+      'cache-control': 'public, max-age=' + MOVIE_METADATA_CACHE_TTL + ', stale-while-revalidate=90',
+      'cache-tag': 'movie-meta-' + movieId
+    });
+  }
+
+  async invalidate(movieId) {
+    if (typeof movieId !== 'string' || !/^[0-9a-f-]{36}$/i.test(movieId)) return { success: false };
+    return this.ctx.cache.purge({ tags: ['movie-meta-' + movieId] });
+  }
+}
+
+async function movieById(ctx, env, movieId) {
+  if (!/^[0-9a-f-]{36}$/i.test(movieId)) return { movie: null, cacheStatus: 'BYPASS' };
+  const response = await ctx.exports.MovieMetadata.fetch(
+    new Request('https://moviwatch.internal/__movie_metadata__/' + encodeURIComponent(movieId)),
+    { props: { movieId } }
+  );
+  if (!response.ok) throw new Error('Movie metadata lookup failed (HTTP ' + response.status + ')');
+  const payload = await response.json();
+  return {
+    movie: payload.movie || null,
+    cacheStatus: response.headers.get('cf-cache-status') || 'UNKNOWN'
+  };
+}
+
+async function invalidateContentCaches(ctx, movieId) {
+  const operations = [ctx.exports.PublicCatalogue.invalidate()];
+  if (movieId) {
+    operations.push(
+      ctx.exports.MovieMetadata.invalidate(movieId),
+      ctx.exports.VideoChunk.invalidate(movieId)
+    );
+  }
+  const results = await Promise.allSettled(operations);
+  for (const result of results) {
+    if (result.status === 'rejected') console.warn('Workers Cache invalidation failed:', result.reason?.message || result.reason);
+  }
+}
+
 function allowedDriveHost(host) {
   host = host.toLowerCase();
   return host === 'drive.google.com' || host === 'drive.usercontent.google.com' || host.endsWith('.googleusercontent.com');
@@ -274,64 +294,45 @@ function parseContentRange(value) {
   return { start, end, total };
 }
 
-function videoCacheKey(req, movieId, optionIndex, sourceHash, chunkStart) {
-  const keyUrl = new URL('/__moviwatch_cache__/video-v5/' +
-    encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash + '/' + chunkStart, req.url);
-  return new Request(keyUrl.toString(), { method: 'GET' });
+async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, chunkStart) {
+  const internalUrl = new URL(
+    '/__video_chunk__/' + encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash + '/' + chunkStart,
+    'https://moviwatch.internal'
+  );
+  const response = await ctx.exports.VideoChunk.fetch(new Request(internalUrl), {
+    props: { sourceUrl: source.url, sourceVersion: String(sourceVersion || '') }
+  });
+  const cacheStatus = response.headers.get('cf-cache-status') || 'UNKNOWN';
+
+  if (response.status === 416) {
+    const total = Number((response.headers.get('content-range') || '').split('/')[1]);
+    return { unsatisfiedTotal: Number.isSafeInteger(total) ? total : 0, cacheStatus };
+  }
+  if (!response.ok) {
+    let detail = 'Video chunk fetch failed (HTTP ' + response.status + ')';
+    try {
+      const payload = await response.json();
+      if (typeof payload.error === 'string') detail = payload.error;
+    } catch {}
+    throw new Error(detail);
+  }
+
+  const start = Number(response.headers.get('x-moviwatch-start'));
+  const end = Number(response.headers.get('x-moviwatch-end'));
+  const total = Number(response.headers.get('x-moviwatch-total'));
+  const contentType = response.headers.get('content-type') || 'video/mp4';
+  const container = response.headers.get('x-moviwatch-container') || 'unknown';
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
+      !Number.isSafeInteger(total) || start !== chunkStart || end < start ||
+      total <= end || bytes.byteLength !== end - start + 1) {
+    throw new Error('Cloudflare returned an invalid cached video chunk');
+  }
+  return { bytes, start, end, total, contentType, container, cacheStatus };
 }
 
-// Coalesce simultaneous cold reads for the same byte chunk within a Worker isolate.
-// This is best-effort single-flight (not a distributed lock); the edge cache remains
-// the durable layer and no Redis command is added to the per-range hot path.
-const inflightVideoChunks = new Map();
-
-async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chunkStart) {
-  const cache = caches.default;
-  const key = videoCacheKey(req, movieId, optionIndex, sourceHash, chunkStart);
-  try {
-    const cached = await cache.match(key);
-    if (cached) {
-      const start = Number(cached.headers.get('x-moviwatch-start'));
-      const end = Number(cached.headers.get('x-moviwatch-end'));
-      const total = Number(cached.headers.get('x-moviwatch-total'));
-      if (Number.isSafeInteger(start) && Number.isSafeInteger(end) &&
-          Number.isSafeInteger(total) && start === chunkStart && end >= start && total > end) {
-        const bytes = new Uint8Array(await cached.arrayBuffer());
-        if (bytes.byteLength === end - start + 1) {
-          return {
-            bytes, start, end, total,
-            contentType: cached.headers.get('content-type') || 'video/mp4',
-            container: cached.headers.get('x-moviwatch-container') || 'unknown',
-            cacheStatus: 'HIT'
-          };
-        }
-      }
-      await cache.delete(key);
-    }
-  } catch (error) {
-    console.warn('Video cache read failed:', error?.message || error);
-  }
-
-  const pending = inflightVideoChunks.get(key.url);
-  if (pending) {
-    const shared = await pending;
-    return { ...shared, cacheStatus: 'SHARED' };
-  }
-
-  const fill = fetchAndCacheVideoChunk(req, source, movieId, optionIndex, sourceHash, chunkStart, key);
-  inflightVideoChunks.set(key.url, fill);
-  try {
-    return await fill;
-  } finally {
-    if (inflightVideoChunks.get(key.url) === fill) inflightVideoChunks.delete(key.url);
-  }
-}
-
-async function fetchAndCacheVideoChunk(req, source, movieId, optionIndex, sourceHash, chunkStart, key) {
-  const cache = caches.default;
-  // Drive and intermediary download endpoints may cap a Range response below
-  // the requested 4 MiB. Assemble contiguous partial 206 responses so our
-  // edge-cache chunk is complete and its byte offsets remain deterministic.
+async function fetchAndCacheVideoChunk(source, chunkStart) {
+  // Assemble a complete 4 MiB chunk from Drive's contiguous partial 206 responses.
   const requestedEnd = chunkStart + VIDEO_CHUNK_SIZE - 1;
   const pieces = [];
   let cursor = chunkStart;
@@ -349,9 +350,7 @@ async function fetchAndCacheVideoChunk(req, source, movieId, optionIndex, source
 
     if (upstream.status === 416) {
       const unsatisfied = new RegExp('^bytes [*]/([0-9]+)$').exec(upstream.headers.get('content-range') || '');
-      if (unsatisfied && cursor === chunkStart) {
-        return { unsatisfiedTotal: Number(unsatisfied[1]), cacheStatus: 'MISS' };
-      }
+      if (unsatisfied && cursor === chunkStart) return { unsatisfiedTotal: Number(unsatisfied[1]) };
     }
 
     const range = parseContentRange(upstream.headers.get('content-range'));
@@ -374,17 +373,13 @@ async function fetchAndCacheVideoChunk(req, source, movieId, optionIndex, source
       break;
     }
     const bytes = new Uint8Array(await upstream.arrayBuffer());
-    if (bytes.byteLength !== range.end - range.start + 1) {
-      throw new Error('Google Drive returned an incomplete video range');
-    }
+    if (bytes.byteLength !== range.end - range.start + 1) throw new Error('Google Drive returned an incomplete video range');
     if (!upstreamType) upstreamType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     pieces.push(bytes);
     cursor = range.end + 1;
   }
 
-  if (total === null || cursor !== expectedEnd + 1) {
-    throw new Error('Google Drive did not provide a complete contiguous video chunk');
-  }
+  if (total === null || cursor !== expectedEnd + 1) throw new Error('Google Drive did not provide a complete contiguous video chunk');
   const expectedLength = expectedEnd - chunkStart + 1;
   const bytes = new Uint8Array(expectedLength);
   let offset = 0;
@@ -400,36 +395,91 @@ async function fetchAndCacheVideoChunk(req, source, movieId, optionIndex, source
     container === 'mkv' ? 'video/x-matroska' :
     (!upstreamType || upstreamType === 'application/octet-stream' || upstreamType === 'binary/octet-stream')
       ? 'video/mp4' : upstreamType;
-  try {
-    const stored = new Response(bytes, {
-      status: 200,
-      headers: {
-        'content-type': contentType,
-        'content-length': String(bytes.byteLength),
-        'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL,
-        'x-moviwatch-start': String(chunkStart),
-        'x-moviwatch-end': String(expectedEnd),
-        'x-moviwatch-total': String(total),
-        'x-moviwatch-container': container
-      }
-    });
-    await cache.put(key, stored);
-  } catch (error) {
-    console.warn('Video cache write failed:', error?.message || error);
-  }
-  return { bytes, start: chunkStart, end: expectedEnd, total, contentType, container, cacheStatus: 'MISS' };
+
+  return { bytes, start: chunkStart, end: expectedEnd, total, contentType, container };
 }
 
-async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader, sourceVersion = '') {
+export class VideoChunk extends WorkerEntrypoint {
+  async fetch(request) {
+    if (request.method !== 'GET') return new Response(null, { status: 405, headers: { allow: 'GET', 'cache-control': 'no-store' } });
+    const match = /^\/__video_chunk__\/([0-9a-f-]{36})\/(\d+)\/([0-9a-f]{32})\/(\d+)$/.exec(new URL(request.url).pathname);
+    if (!match) return json({ error: 'Invalid internal video chunk request' }, 404);
+    const movieId = match[1];
+    const optionIndex = Number(match[2]);
+    const sourceHash = match[3];
+    const chunkStart = Number(match[4]);
+    const props = this.ctx.props || {};
+    const sourceUrl = props.sourceUrl;
+    const sourceVersion = String(props.sourceVersion || '');
+
+    if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex > 7 ||
+        !Number.isSafeInteger(chunkStart) || chunkStart < 0 || chunkStart % VIDEO_CHUNK_SIZE !== 0 ||
+        typeof sourceUrl !== 'string' || sourceUrl.length > 2048) {
+      return json({ error: 'Invalid internal video chunk parameters' }, 400);
+    }
+
+    try {
+      const parsedSource = new URL(sourceUrl);
+      if (parsedSource.protocol !== 'https:' || !allowedDriveHost(parsedSource.hostname)) {
+        return json({ error: 'Unsupported Google Drive video source' }, 400);
+      }
+      const digest = await crypto.subtle.digest('SHA-256', enc.encode(sourceUrl + '|' + sourceVersion));
+      const expectedHash = hex(new Uint8Array(digest)).slice(0, 32);
+      if (expectedHash !== sourceHash) return json({ error: 'Video cache key did not match its source' }, 400);
+
+      const result = await fetchAndCacheVideoChunk({ url: sourceUrl }, chunkStart);
+      if (result.unsatisfiedTotal !== undefined) {
+        return new Response(null, {
+          status: 416,
+          headers: {
+            'content-range': 'bytes */' + result.unsatisfiedTotal,
+            'accept-ranges': 'bytes',
+            'cache-control': 'no-store'
+          }
+        });
+      }
+
+      return new Response(result.bytes, {
+        status: 200,
+        headers: {
+          'content-type': result.contentType,
+          'content-length': String(result.bytes.byteLength),
+          'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600',
+          'cache-tag': 'video-chunks-' + movieId,
+          'x-moviwatch-start': String(result.start),
+          'x-moviwatch-end': String(result.end),
+          'x-moviwatch-total': String(result.total),
+          'x-moviwatch-container': result.container
+        }
+      });
+    } catch (error) {
+      console.error('Tiered video chunk fill failed:', error?.message || error);
+      const detail = error instanceof Error ? error.message : 'Unknown video chunk error';
+      return json({ error: detail.slice(0, 300) }, 502);
+    }
+  }
+
+  async invalidate(movieId) {
+    if (typeof movieId !== 'string' || !/^[0-9a-f-]{36}$/i.test(movieId)) return { success: false };
+    return this.ctx.cache.purge({ tags: ['video-chunks-' + movieId] });
+  }
+}
+
+async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHeader, sourceVersion = '') {
   const parsed = parseByteRange(rangeHeader);
   if (!parsed || parsed.invalid) {
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */*', 'accept-ranges': 'bytes' } });
   }
-  const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url + '|' + String(sourceVersion || '')));
+  // Normalize Postgres timestamps before crossing the ctx.exports boundary:
+  // Date instances serialize to ISO strings in entrypoint props.
+  const normalizedSourceVersion = sourceVersion instanceof Date
+    ? sourceVersion.toISOString()
+    : String(sourceVersion || '');
+  const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url + '|' + normalizedSourceVersion));
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
   // A suffix range needs the representation size, so prime/read chunk zero first.
   const firstStart = parsed.suffix ? 0 : Math.floor(parsed.start / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
-  const firstChunk = await getVideoChunk(req, source, movieId, optionIndex, sourceHash, firstStart);
+  const firstChunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, firstStart);
   if (firstChunk.unsatisfiedTotal !== undefined) {
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + firstChunk.unsatisfiedTotal, 'accept-ranges': 'bytes' } });
   }
@@ -448,7 +498,7 @@ async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader, 
 
   const firstChunkStart = Math.floor(start / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
   let first = firstChunkStart === firstChunk.start ? firstChunk : await getVideoChunk(
-    req, source, movieId, optionIndex, sourceHash, firstChunkStart
+    ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, firstChunkStart
   );
   if (first.unsatisfiedTotal !== undefined || first.total !== total) throw new Error('Google Drive video size changed during streaming');
   const responseStart = start;
@@ -467,7 +517,7 @@ async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader, 
         }
         const expectedChunkStart = Math.floor(cursor / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
         if (!chunk || chunk.start !== expectedChunkStart) {
-          chunk = await getVideoChunk(req, source, movieId, optionIndex, sourceHash, expectedChunkStart);
+          chunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, expectedChunkStart);
           if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total) {
             throw new Error('Google Drive video size changed during streaming');
           }
@@ -512,7 +562,7 @@ async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader, 
   });
 }
 
-async function api(req, env) {
+async function api(req, env, ctx) {
   const url = new URL(req.url);
   const path = url.pathname;
   const method = req.method;
@@ -552,54 +602,22 @@ async function api(req, env) {
     const query = (url.searchParams.get('q') || '').trim().slice(0, 80);
     if (category && !CATEGORIES.has(category)) return json({ error: 'Unknown category' }, 400);
 
-    // The homepage and watch page use the full public catalogue; keep this hot
-    // response in the local Cloudflare edge cache. Filtered searches remain uncached.
-    const cacheable = !category && !query;
-    const key = cacheable ? catalogueCacheKey(req) : null;
-    if (cacheable) {
-      try {
-        const cached = await caches.default.match(key);
-        if (cached) {
-          const payload = await cached.json();
-          return json(payload, 200, {
-            'cache-control': 'public, max-age=30, stale-while-revalidate=120',
-            'x-moviwatch-catalog-cache': 'HIT'
-          });
-        }
-      } catch (error) {
-        console.warn('Catalogue cache read failed:', error?.message || error);
-      }
-    }
-
-    const rows = await publicMovies(env, category, query);
-    const payload = {
-      movies: rows.map(({ video_sources, ...movie }) => ({
-        ...movie,
-        video_sources: (video_sources || []).map((s) => ({ label: s.label || 'Play' }))
-      }))
-    };
-    if (cacheable) {
-      try {
-        await caches.default.put(key, new Response(JSON.stringify(payload), {
-          headers: {
-            'content-type': 'application/json; charset=utf-8',
-            'cache-control': 'public, max-age=' + CATALOGUE_CACHE_TTL
-          }
-        }));
-      } catch (error) {
-        console.warn('Catalogue cache write failed:', error?.message || error);
-      }
-    }
+    const cachedCatalogue = await ctx.exports.PublicCatalogue.fetch(
+      new Request('https://moviwatch.internal/__public_catalogue__'),
+      { props: { category, query } }
+    );
+    if (!cachedCatalogue.ok) return json({ error: 'Could not load the public catalogue' }, 502);
+    const payload = await cachedCatalogue.json();
     return json(payload, 200, {
       'cache-control': 'public, max-age=30, stale-while-revalidate=120',
-      'x-moviwatch-catalog-cache': cacheable ? 'MISS' : 'BYPASS'
+      'x-moviwatch-catalog-cache': cachedCatalogue.headers.get('cf-cache-status') || 'UNKNOWN'
     });
   }
 
   const download = path.split('/');
   if (download.length === 5 && download[1] === 'api' && download[2] === 'download' &&
       (method === 'GET' || method === 'HEAD')) {
-    const metadata = await movieById(req, env, download[3]);
+    const metadata = await movieById(ctx, env, download[3]);
     const movie = metadata.movie;
     if (!movie) return method === 'HEAD'
       ? new Response(null, { status: 404, headers: { 'cache-control': 'no-store' } })
@@ -627,7 +645,7 @@ async function api(req, env) {
       // chunk zero so an immediate GET can reuse it without a second Drive read.
       if (method === 'HEAD') {
         const probe = await cachedVideoRange(
-          req, source, download[3], optionIndex, 'bytes=0-0', movie.updated_at
+          req, ctx, source, download[3], optionIndex, 'bytes=0-0', movie.updated_at
         );
         if (probe.status !== 206) {
           try { await probe.body?.cancel(); } catch {}
@@ -668,7 +686,7 @@ async function api(req, env) {
       // resumable downloads and standard HTTP 206 responses.
       const requestedRange = req.headers.get('Range');
       const response = await cachedVideoRange(
-        req, source, download[3], optionIndex,
+        req, ctx, source, download[3], optionIndex,
         requestedRange || 'bytes=0-', movie.updated_at
       );
       if (response.status === 416) return response;
@@ -712,7 +730,7 @@ async function api(req, env) {
 
     const watch = path.split('/');
   if (watch.length === 5 && watch[1] === 'api' && watch[2] === 'watch' && (method === 'GET' || method === 'HEAD')) {
-    const metadata = await movieById(req, env, watch[3]);
+    const metadata = await movieById(ctx, env, watch[3]);
     const movie = metadata.movie;
     if (!movie) return json({ error: 'Movie not found' }, 404);
     const optionIndex = Number(watch[4]);
@@ -750,7 +768,7 @@ async function api(req, env) {
     try {
       if (method === 'HEAD') {
         const probe = await cachedVideoRange(
-          req, source, watch[3], optionIndex, 'bytes=0-0', movie.updated_at
+          req, ctx, source, watch[3], optionIndex, 'bytes=0-0', movie.updated_at
         );
         if (probe.status !== 206) {
           try { await probe.body?.cancel(); } catch {}
@@ -767,7 +785,7 @@ async function api(req, env) {
       }
 
       const response = await cachedVideoRange(
-        req, source, watch[3], optionIndex,
+        req, ctx, source, watch[3], optionIndex,
         req.headers.get('Range') || 'bytes=0-', movie.updated_at
       );
       if ((response.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
@@ -787,19 +805,6 @@ async function api(req, env) {
       return json({ error: detail.slice(0, 300) }, 502);
     }
 
-    try {
-      const response = await cachedVideoRange(req, source, watch[3], optionIndex, req.headers.get('Range'), movie.updated_at);
-      if ((response.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
-        return json({ error: 'Drive returned an HTML page instead of video. Check public sharing and quota.' }, 502);
-      }
-      const responseHeaders = new Headers(response.headers);
-      responseHeaders.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
-      return new Response(response.body, { status: response.status, statusText: response.statusText, headers: responseHeaders });
-    } catch (error) {
-      console.error('Video proxy failed:', error?.message || error);
-      const detail = error instanceof Error ? error.message : 'Unknown upstream video error';
-      return json({ error: detail.slice(0, 300) }, 502);
-    }
   }
 
   if (path.startsWith('/api/admin/')) {
@@ -819,7 +824,7 @@ async function api(req, env) {
       const rows = await sql`INSERT INTO movies(id,title,poster_url,category,videos,is_published)
         VALUES(${crypto.randomUUID()},${v.title},${v.poster},${v.category},${JSON.stringify(v.sources)}::jsonb,${v.published})
         RETURNING id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at`;
-      await invalidateCatalogueCache(req);
+      await invalidateContentCaches(ctx);
       return json({ movie: rows[0] }, 201);
     }
     const id = path.split('/')[4];
@@ -831,15 +836,13 @@ async function api(req, env) {
           videos=${JSON.stringify(v.sources)}::jsonb,is_published=${v.published},updated_at=NOW()
           WHERE id=${id} RETURNING id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at`;
         if (!rows[0]) return json({ error: 'Movie not found' }, 404);
-        await invalidateCatalogueCache(req);
-        await invalidateMovieMetadataCache(req, id);
+        await invalidateContentCaches(ctx, id);
         return json({ movie: rows[0] });
       }
       if (method === 'DELETE') {
         const rows = await sql`DELETE FROM movies WHERE id=${id} RETURNING id`;
         if (!rows[0]) return json({ error: 'Movie not found' }, 404);
-        await invalidateCatalogueCache(req);
-        await invalidateMovieMetadataCache(req, id);
+        await invalidateContentCaches(ctx, id);
         return json({ ok: true });
       }
     }
@@ -849,10 +852,10 @@ async function api(req, env) {
 }
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     try {
       const url = new URL(req.url);
-      if (url.pathname.startsWith('/api/')) return await api(req, env);
+      if (url.pathname.startsWith('/api/')) return await api(req, env, ctx);
       if (url.pathname === '/admin.html') return Response.redirect(new URL('/admin', url), 302);
       if (url.pathname === '/admin') return env.ASSETS.fetch(new Request(new URL('/admin.html', url), req));
       return env.ASSETS.fetch(req);

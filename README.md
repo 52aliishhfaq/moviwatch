@@ -7,8 +7,8 @@ A lightweight movie catalogue and streaming backend built with Cloudflare Worker
 - Password-protected admin dashboard at `/admin`.
 - Exactly one application table: `movies`. Multiple video options are stored in one JSONB array.
 - Action and Romantic categories, poster URLs, publish/unpublish, create/edit/delete, search and filtering.
-- Google Drive public-link proxy with HTTP Range forwarding for video seeking.
-- Cloudflare Workers Cache (tiered) caches public cacheable responses such as the catalogue; the Cache API stores per-movie metadata and 4 MiB video chunks in the local data-center cache. Upstash Redis is used only for admin-login rate limiting.
+- Google Drive public-link proxy with HTTP Range forwarding for video seeking, with global tiered Workers Cache for complete 4 MiB chunks.
+- Cloudflare Workers Cache stores the public catalogue, per-movie stream metadata, and complete 4 MiB video chunks through separately cached internal entrypoints. These entries use Cloudflare's tiered Workers Cache; Upstash Redis is used only for admin-login rate limiting.
 - Admin secrets stay in Worker Secrets. Google OAuth Client ID/Secret is not needed for public Drive share links.
 
 ## Database and Redis
@@ -72,7 +72,7 @@ Vercel project settings:
 - Output Directory: `public`
 - Install Command: default / automatic
 
-After the Vercel project is created, copy its production domain (for example, `https://<project>.vercel.app`). Add that exact origin to the Cloudflare Worker variable `APP_ORIGINS` (comma-separated for more than one origin), under **Workers & Pages → moviewatch → Settings → Variables and Secrets**. Include your production custom domain too, if one is added. The Worker uses this allowlist for admin login/logout and all admin mutations; do not use a wildcard origin. Redeploy the Worker after changing a Wrangler-managed variable, or save the variable in the Cloudflare dashboard. The Workers Cache layer is enabled for cacheable public responses; private/admin and byte-range stream responses remain no-store.
+After the Vercel project is created, copy its production domain (for example, `https://<project>.vercel.app`). Add that exact origin to the Cloudflare Worker variable `APP_ORIGINS` (comma-separated for more than one origin), under **Workers & Pages → moviewatch → Settings → Variables and Secrets**. Include your production custom domain too, if one is added. The Worker uses this allowlist for admin login/logout and all admin mutations; do not use a wildcard origin. Redeploy the Worker after changing a Wrangler-managed variable, or save the variable in the Cloudflare dashboard. Workers Cache is enabled only on the internal catalogue, movie-metadata, and 4 MiB video-chunk entrypoints. The public gateway is deliberately uncached; private/admin and byte-range responses remain no-store. Chunk responses are cached for 24 hours and purged by movie tag when a movie is edited or deleted.
 
 Keep API calls relative (such as `/api/movies`) so the browser always talks to the Vercel origin and Vercel proxies them to Cloudflare. This preserves a first-party cookie on the Vercel domain while the Worker validates the allowed Origin. Verify `/api/health`, the public catalogue, admin login, and a create/edit/delete test after deployment.
 
@@ -91,7 +91,7 @@ Keep API calls relative (such as `/api/movies`) so the browser always talks to t
 | GET | `/api/admin/stats` | Admin |
 
 ## Google Drive quota note
-A Cloudflare Worker proxy does **not** bypass Google's Drive bandwidth limits, view/download restrictions, or API quotas. The Worker forwards Range requests and keeps original Drive URLs out of the public catalogue response, but video bytes still come from Drive. For reliable high-volume streaming, use media storage/CDN (such as Cloudflare R2) and distribute only content you have rights to share.
+A Cloudflare Worker proxy does **not** bypass Google's Drive bandwidth limits, view/download restrictions, or API quotas. The Worker fetches video bytes from Drive on a tiered-cache miss and keeps original Drive URLs out of the public catalogue response. Cached chunks can reduce repeated Drive reads across Cloudflare locations, but Google Drive quota still applies to cache misses. For reliable high-volume streaming, use media storage/CDN (such as Cloudflare R2) and distribute only content you have rights to share.
 
 ## Security and scope
 - Only directly playable public Google Drive links are supported. Drive interstitials, permissions, or quota restrictions can still block playback.

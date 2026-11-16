@@ -2,7 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "moviwatch",
   "main": "src/index.js",
-  "compatibility_date": "2026-11-15",
+  "compatibility_date": "2026-11-16",
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
@@ -19,5 +19,34 @@
   },
   "cache": {
     "enabled": true
+  },
+  "compatibility_flags": [
+    "enable_ctx_exports"
+  ],
+  "exports": {
+    "default": {
+      "type": "worker",
+      "cache": {
+        "enabled": false
+      }
+    },
+    "PublicCatalogue": {
+      "type": "worker",
+      "cache": {
+        "enabled": true
+      }
+    },
+    "MovieMetadata": {
+      "type": "worker",
+      "cache": {
+        "enabled": true
+      }
+    },
+    "VideoChunk": {
+      "type": "worker",
+      "cache": {
+        "enabled": true
+      }
+    }
   }
 }

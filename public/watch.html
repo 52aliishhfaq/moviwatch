@@ -116,34 +116,6 @@ async function prepare(){
       downloadList.append(link);
     });
     $('#downloads').hidden=false;
-    // Fetch metadata using HEAD; this reports the exact total size without
-    // downloading the file. The first 1-byte range is cached for the GET.
-    await Promise.all(movie.video_sources.map(async(source,index)=>{
-      try{
-        const response=await fetch('/api/download/'+encodeURIComponent(movieId)+'/'+index,{
-          method:'HEAD',cache:'no-store'
-        });
-        const link=downloadList.querySelector('[data-download-index="'+index+'"]');
-        if(!link)return;
-        if(!response.ok){
-          const hint=link.querySelector('small');
-          if(hint)hint.textContent='Download details unavailable';
-          return;
-        }
-        const bytes=Number(response.headers.get('x-moviwatch-file-size')||response.headers.get('content-length'));
-        const size=Number.isFinite(bytes)&&bytes>0
-          ? (bytes/1073741824>=1?(bytes/1073741824).toFixed(2)+' GB':(bytes/1048576).toFixed(1)+' MB')
-          : 'Size unavailable';
-        const hint=link.querySelector('small');
-        if(hint)hint.textContent='Download now · '+size;
-        const filename=response.headers.get('content-disposition')||'';
-        if(filename)link.title=filename;
-      }catch{
-        const link=downloadList.querySelector('[data-download-index="'+index+'"]');
-        const hint=link?.querySelector('small');
-        if(hint)hint.textContent='Download now';
-      }
-    }));
     status('Checking video source…');
     const probe=await fetch(streamUrl,{headers:{Range:'bytes=0-1'},cache:'no-store'});
     if(!probe.ok){
