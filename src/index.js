@@ -127,36 +127,78 @@ function movieInput(body) {
     published: body.isPublished !== false
   };
 }
-async function invalidateCache(env) {
-  try {
-    const r = redisFor(env);
-    const keys = await r.keys('moviwatch:catalog:*');
-    if (keys.length) await r.del(...keys);
-  } catch (e) { console.warn('Redis cache invalidation failed:', e.message); }
+const CATALOGUE_CACHE_TTL = 120;
+const MOVIE_METADATA_CACHE_TTL = 120;
+
+function catalogueCacheKey(req) {
+  const url = new URL('/__moviwatch_cache__/catalogue-v1', req.url);
+  return new Request(url.toString(), { method: 'GET' });
 }
+
+function movieMetadataCacheKey(req, movieId) {
+  const url = new URL('/__moviwatch_cache__/movie-meta-v1/' + encodeURIComponent(movieId), req.url);
+  return new Request(url.toString(), { method: 'GET' });
+}
+
+async function invalidateCatalogueCache(req) {
+  try { await caches.default.delete(catalogueCacheKey(req)); }
+  catch (error) { console.warn('Catalogue cache invalidation failed:', error?.message || error); }
+}
+
+async function invalidateMovieMetadataCache(req, movieId) {
+  try { await caches.default.delete(movieMetadataCacheKey(req, movieId)); }
+  catch (error) { console.warn('Movie metadata cache invalidation failed:', error?.message || error); }
+}
+
 async function publicMovies(env, category, query) {
-  const key = 'moviwatch:catalog:' + (category || 'all') + ':' + encodeURIComponent(query).slice(0, 80);
-  let r;
-  try {
-    r = redisFor(env);
-    const cached = await r.get(key);
-    if (cached) return typeof cached === 'string' ? JSON.parse(cached) : cached;
-  } catch (e) { console.warn('Redis cache read failed:', e.message); }
   const sql = sqlFor(env);
-  const rows = await sql`SELECT id,title,poster_url,category,videos AS video_sources,created_at FROM movies
+  // The public catalogue only needs the option labels. Never transfer private
+  // Google Drive URLs (stored in videos JSONB) to Neon client code and discard them.
+  return await sql`SELECT id,title,poster_url,category,created_at,
+    COALESCE((
+      SELECT jsonb_agg(
+        jsonb_build_object('label', COALESCE(NULLIF(item.value->>'label',''),'Play'))
+        ORDER BY item.ordinality
+      )
+      FROM jsonb_array_elements(videos) WITH ORDINALITY AS item(value, ordinality)
+    ), '[]'::jsonb) AS video_sources
+    FROM movies
     WHERE is_published=TRUE
-    AND (${category || null}::text IS NULL OR category=${category || null})
-    AND (${query || null}::text IS NULL OR title ILIKE ${query ? '%' + query + '%' : null})
+      AND (${category || null}::text IS NULL OR category=${category || null})
+      AND (${query || null}::text IS NULL OR title ILIKE ${query ? '%' + query + '%' : null})
     ORDER BY created_at DESC LIMIT 100`;
-  try {
-    if (!r) r = redisFor(env);
-    await r.set(key, JSON.stringify(rows), { ex: 60 });
-  } catch (e) { console.warn('Redis cache write failed:', e.message); }
-  return rows;
 }
-async function movieById(env, id) {
-  const rows = await sqlFor(env)`SELECT id,videos AS video_sources FROM movies WHERE id=${id} AND is_published=TRUE LIMIT 1`;
-  return rows[0] || null;
+
+async function movieById(req, env, movieId) {
+  if (!/^[0-9a-f-]{36}$/i.test(movieId)) return { movie: null, cacheStatus: 'BYPASS' };
+  const cache = caches.default;
+  const key = movieMetadataCacheKey(req, movieId);
+  try {
+    const cached = await cache.match(key);
+    if (cached) {
+      const movie = await cached.json();
+      if (movie && Array.isArray(movie.video_sources)) return { movie, cacheStatus: 'HIT' };
+    }
+  } catch (error) {
+    console.warn('Movie metadata cache read failed:', error?.message || error);
+  }
+
+  const rows = await sqlFor(env)`SELECT id,videos AS video_sources,updated_at
+    FROM movies WHERE id=${movieId} AND is_published=TRUE LIMIT 1`;
+  const movie = rows[0] || null;
+  if (movie) {
+    try {
+      await cache.put(key, new Response(JSON.stringify(movie), {
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'public, max-age=' + MOVIE_METADATA_CACHE_TTL
+        }
+      }));
+    } catch (error) {
+      console.warn('Movie metadata cache write failed:', error?.message || error);
+    }
+  }
+  return { movie, cacheStatus: 'MISS' };
 }
 function allowedDriveHost(host) {
   host = host.toLowerCase();
@@ -185,7 +227,7 @@ async function driveFetch(source, method, headers) {
 // Video edge cache: store complete 4 MiB byte chunks as cacheable 200 responses.
 // The public response is reconstructed as a standards-compliant 206 response.
 const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024;
-const VIDEO_CACHE_TTL = 6 * 60 * 60;
+const VIDEO_CACHE_TTL = 24 * 60 * 60;
 
 function parseByteRange(value) {
   if (typeof value !== 'string' || !value.startsWith('bytes=')) return null;
@@ -233,10 +275,15 @@ function parseContentRange(value) {
 }
 
 function videoCacheKey(req, movieId, optionIndex, sourceHash, chunkStart) {
-  const keyUrl = new URL('/__moviwatch_cache__/video-v2/' +
+  const keyUrl = new URL('/__moviwatch_cache__/video-v3/' +
     encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash + '/' + chunkStart, req.url);
   return new Request(keyUrl.toString(), { method: 'GET' });
 }
+
+// Coalesce simultaneous cold reads for the same byte chunk within a Worker isolate.
+// This is best-effort single-flight (not a distributed lock); the edge cache remains
+// the durable layer and no Redis command is added to the per-range hot path.
+const inflightVideoChunks = new Map();
 
 async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chunkStart) {
   const cache = caches.default;
@@ -259,11 +306,29 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
           };
         }
       }
+      await cache.delete(key);
     }
   } catch (error) {
     console.warn('Video cache read failed:', error?.message || error);
   }
 
+  const pending = inflightVideoChunks.get(key.url);
+  if (pending) {
+    const shared = await pending;
+    return { ...shared, cacheStatus: 'SHARED' };
+  }
+
+  const fill = fetchAndCacheVideoChunk(req, source, movieId, optionIndex, sourceHash, chunkStart, key);
+  inflightVideoChunks.set(key.url, fill);
+  try {
+    return await fill;
+  } finally {
+    if (inflightVideoChunks.get(key.url) === fill) inflightVideoChunks.delete(key.url);
+  }
+}
+
+async function fetchAndCacheVideoChunk(req, source, movieId, optionIndex, sourceHash, chunkStart, key) {
+  const cache = caches.default;
   // Drive and intermediary download endpoints may cap a Range response below
   // the requested 4 MiB. Assemble contiguous partial 206 responses so our
   // edge-cache chunk is complete and its byte offsets remain deterministic.
@@ -355,12 +420,12 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
   return { bytes, start: chunkStart, end: expectedEnd, total, contentType, container, cacheStatus: 'MISS' };
 }
 
-async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader) {
+async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader, sourceVersion = '') {
   const parsed = parseByteRange(rangeHeader);
   if (!parsed || parsed.invalid) {
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */*', 'accept-ranges': 'bytes' } });
   }
-  const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url));
+  const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url + '|' + String(sourceVersion || '')));
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
   // A suffix range needs the representation size, so prime/read chunk zero first.
   const firstStart = parsed.suffix ? 0 : Math.floor(parsed.start / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
@@ -487,14 +552,55 @@ async function api(req, env) {
     const category = url.searchParams.get('category') || '';
     const query = (url.searchParams.get('q') || '').trim().slice(0, 80);
     if (category && !CATEGORIES.has(category)) return json({ error: 'Unknown category' }, 400);
+
+    // The homepage and watch page use the full public catalogue; keep this hot
+    // response in the local Cloudflare edge cache. Filtered searches remain uncached.
+    const cacheable = !category && !query;
+    const key = cacheable ? catalogueCacheKey(req) : null;
+    if (cacheable) {
+      try {
+        const cached = await caches.default.match(key);
+        if (cached) {
+          const payload = await cached.json();
+          return json(payload, 200, {
+            'cache-control': 'public, max-age=30, stale-while-revalidate=120',
+            'x-moviwatch-catalog-cache': 'HIT'
+          });
+        }
+      } catch (error) {
+        console.warn('Catalogue cache read failed:', error?.message || error);
+      }
+    }
+
     const rows = await publicMovies(env, category, query);
-    return json({ movies: rows.map(({ video_sources, ...movie }) => ({ ...movie, video_sources: (video_sources || []).map((s) => ({ label: s.label || 'Play' })) })) }, 200,
-      { 'cache-control': 'public, max-age=30, stale-while-revalidate=60' });
+    const payload = {
+      movies: rows.map(({ video_sources, ...movie }) => ({
+        ...movie,
+        video_sources: (video_sources || []).map((s) => ({ label: s.label || 'Play' }))
+      }))
+    };
+    if (cacheable) {
+      try {
+        await caches.default.put(key, new Response(JSON.stringify(payload), {
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'public, max-age=' + CATALOGUE_CACHE_TTL
+          }
+        }));
+      } catch (error) {
+        console.warn('Catalogue cache write failed:', error?.message || error);
+      }
+    }
+    return json(payload, 200, {
+      'cache-control': 'public, max-age=30, stale-while-revalidate=120',
+      'x-moviwatch-catalog-cache': cacheable ? 'MISS' : 'BYPASS'
+    });
   }
 
   const watch = path.split('/');
   if (watch.length === 5 && watch[1] === 'api' && watch[2] === 'watch' && (method === 'GET' || method === 'HEAD')) {
-    const movie = await movieById(env, watch[3]);
+    const metadata = await movieById(req, env, watch[3]);
+    const movie = metadata.movie;
     if (!movie) return json({ error: 'Movie not found' }, 404);
     const optionIndex = Number(watch[4]);
     const source = movie.video_sources?.[optionIndex];
@@ -511,15 +617,18 @@ async function api(req, env) {
       if (![200, 206, 416].includes(upstream.status) || (upstream.headers.get('content-type') || '').toLowerCase().includes('text/html')) return json({ error: 'Drive did not return a playable video. Check public sharing and quota.' }, 502);
       const out = new Headers({ 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'accept-ranges': 'bytes' });
       for (const name of ['content-type', 'content-length', 'content-range', 'etag', 'last-modified']) { const value = upstream.headers.get(name); if (value) out.set(name, value); }
+      out.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
       return new Response(method === 'HEAD' ? null : upstream.body, { status: upstream.status, headers: out });
     }
 
     try {
-      const response = await cachedVideoRange(req, source, watch[3], optionIndex, req.headers.get('Range'));
+      const response = await cachedVideoRange(req, source, watch[3], optionIndex, req.headers.get('Range'), movie.updated_at);
       if ((response.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
         return json({ error: 'Drive returned an HTML page instead of video. Check public sharing and quota.' }, 502);
       }
-      return response;
+      const responseHeaders = new Headers(response.headers);
+      responseHeaders.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
+      return new Response(response.body, { status: response.status, statusText: response.statusText, headers: responseHeaders });
     } catch (error) {
       console.error('Video proxy failed:', error?.message || error);
       const detail = error instanceof Error ? error.message : 'Unknown upstream video error';
@@ -544,7 +653,7 @@ async function api(req, env) {
       const rows = await sql`INSERT INTO movies(id,title,poster_url,category,videos,is_published)
         VALUES(${crypto.randomUUID()},${v.title},${v.poster},${v.category},${JSON.stringify(v.sources)}::jsonb,${v.published})
         RETURNING id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at`;
-      await invalidateCache(env);
+      await invalidateCatalogueCache(req);
       return json({ movie: rows[0] }, 201);
     }
     const id = path.split('/')[4];
@@ -556,13 +665,15 @@ async function api(req, env) {
           videos=${JSON.stringify(v.sources)}::jsonb,is_published=${v.published},updated_at=NOW()
           WHERE id=${id} RETURNING id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at`;
         if (!rows[0]) return json({ error: 'Movie not found' }, 404);
-        await invalidateCache(env);
+        await invalidateCatalogueCache(req);
+        await invalidateMovieMetadataCache(req, id);
         return json({ movie: rows[0] });
       }
       if (method === 'DELETE') {
         const rows = await sql`DELETE FROM movies WHERE id=${id} RETURNING id`;
         if (!rows[0]) return json({ error: 'Movie not found' }, 404);
-        await invalidateCache(env);
+        await invalidateCatalogueCache(req);
+        await invalidateMovieMetadataCache(req, id);
         return json({ ok: true });
       }
     }
