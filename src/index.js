@@ -719,19 +719,72 @@ async function api(req, env) {
     const source = movie.video_sources?.[optionIndex];
     if (!source?.url || !Number.isInteger(optionIndex) || optionIndex < 0) return json({ error: 'Video option not found' }, 404);
 
-    // HEAD and non-range GETs preserve normal HTTP semantics. Browsers' video
-    // elements generally use Range GETs, which are served from the 4 MiB cache.
-    if (method === 'HEAD' || !req.headers.get('Range') || req.headers.has('If-Range')) {
+    // Serve HEAD and ordinary full-file GET through the same 4 MiB edge cache.
+    // Only If-Range stays on the origin path because it depends on origin validators.
+    if (req.headers.has('If-Range')) {
       const headers = new Headers();
-      for (const name of ['Range', 'If-Range']) { const value = req.headers.get(name); if (value) headers.set(name, value); }
+      for (const name of ['Range', 'If-Range']) {
+        const value = req.headers.get(name);
+        if (value) headers.set(name, value);
+      }
       let upstream;
       try { upstream = await driveFetch(source.url, method, headers); }
       catch { return json({ error: 'Google Drive could not be reached' }, 502); }
-      if (![200, 206, 416].includes(upstream.status) || (upstream.headers.get('content-type') || '').toLowerCase().includes('text/html')) return json({ error: 'Drive did not return a playable video. Check public sharing and quota.' }, 502);
-      const out = new Headers({ 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'accept-ranges': 'bytes' });
-      for (const name of ['content-type', 'content-length', 'content-range', 'etag', 'last-modified']) { const value = upstream.headers.get(name); if (value) out.set(name, value); }
+      if (![200, 206, 416].includes(upstream.status) ||
+          (upstream.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
+        return json({ error: 'Drive did not return a playable video. Check public sharing and quota.' }, 502);
+      }
+      const out = new Headers({
+        'cache-control': 'private, no-store',
+        'x-content-type-options': 'nosniff',
+        'accept-ranges': 'bytes'
+      });
+      for (const name of ['content-type', 'content-length', 'content-range', 'etag', 'last-modified']) {
+        const value = upstream.headers.get(name);
+        if (value) out.set(name, value);
+      }
       out.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
       return new Response(method === 'HEAD' ? null : upstream.body, { status: upstream.status, headers: out });
+    }
+
+    try {
+      if (method === 'HEAD') {
+        const probe = await cachedVideoRange(
+          req, source, watch[3], optionIndex, 'bytes=0-0', movie.updated_at
+        );
+        if (probe.status !== 206) {
+          try { await probe.body?.cancel(); } catch {}
+          return new Response(null, { status: probe.status, headers: probe.headers });
+        }
+        const total = Number((probe.headers.get('content-range') || '').split('/')[1]);
+        const headers = new Headers(probe.headers);
+        headers.delete('content-range');
+        headers.set('content-length', String(Number.isSafeInteger(total) && total >= 0 ? total : 0));
+        headers.set('cache-control', 'private, no-store, max-age=0');
+        headers.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
+        try { await probe.body?.cancel(); } catch {}
+        return new Response(null, { status: 200, headers });
+      }
+
+      const response = await cachedVideoRange(
+        req, source, watch[3], optionIndex,
+        req.headers.get('Range') || 'bytes=0-', movie.updated_at
+      );
+      if ((response.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
+        return json({ error: 'Drive returned an HTML page instead of video. Check public sharing and quota.' }, 502);
+      }
+      const responseHeaders = new Headers(response.headers);
+      responseHeaders.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
+      if (!req.headers.has('Range')) responseHeaders.delete('content-range');
+      return new Response(response.body, {
+        status: req.headers.has('Range') ? response.status : 200,
+        statusText: req.headers.has('Range') ? response.statusText : 'OK',
+        headers: responseHeaders
+      });
+    } catch (error) {
+      console.error('Video proxy failed:', error?.message || error);
+      const detail = error instanceof Error ? error.message : 'Unknown upstream video error';
+      return json({ error: detail.slice(0, 300) }, 502);
     }
 
     try {
