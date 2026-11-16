@@ -71,7 +71,6 @@ main{width:min(calc(100% - 44px),var(--content));margin:0 auto;padding:24px 0 80
 .poster{display:block;width:100%;height:100%;object-fit:cover;transition:transform .35s ease}
 .movie-card:hover .poster{transform:scale(1.045)}
 .poster-wrap::after{content:"";position:absolute;inset:45% 0 0;background:linear-gradient(0deg,#080b149c,transparent);pointer-events:none}
-.poster-fallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:18px;color:#b9c4dc;text-align:center;font-size:17px;font-weight:800}
 .play-indicator{position:absolute;z-index:2;left:13px;bottom:13px;width:36px;height:36px;display:grid;place-items:center;border:1px solid #ffffff66;border-radius:50%;background:#111827b8;color:#fff;opacity:0;transform:translateY(5px);transition:.2s}
 .movie-card:hover .play-indicator,.movie-card:focus-visible .play-indicator{opacity:1;transform:none}
 .movie-details{padding:13px 13px 15px}
@@ -221,13 +220,11 @@ function renderCatalogue(){
   for(const movie of rows){
     const card=node('a','movie-card');card.href=watchPath(movie.id);card.setAttribute('aria-label','Watch '+movie.title);
     const posterWrap=node('div','poster-wrap');
-    const fallback=node('span','poster-fallback',movie.title||'Moviwatch');
     const poster=node('img','poster');poster.alt=(movie.title||'Movie')+' poster';poster.loading='lazy';poster.decoding='async';poster.referrerPolicy='no-referrer';
-    poster.onload=()=>{fallback.hidden=true};
-    poster.onerror=()=>{poster.remove();fallback.hidden=false};
+    poster.onerror=()=>poster.remove();
     if(movie.poster_url)poster.src=movie.poster_url;else poster.hidden=true;
     const play=node('span','play-indicator','▶');play.setAttribute('aria-hidden','true');
-    posterWrap.append(fallback,poster,play);
+    posterWrap.append(poster,play);
     const details=node('div','movie-details');
     details.append(node('span','movie-title',movie.title||'Untitled movie'),node('span','movie-category',movie.category||'Movie'));
     card.append(posterWrap,details);grid.append(card);
