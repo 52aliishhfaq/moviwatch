@@ -194,9 +194,9 @@ export class MovieMetadata extends WorkerEntrypoint {
 
 async function movieById(ctx, env, movieId) {
   if (!/^[0-9a-f-]{36}$/i.test(movieId)) return { movie: null, cacheStatus: 'BYPASS' };
-  const response = await ctx.exports.MovieMetadata.fetch(
-    new Request('https://moviwatch.internal/__movie_metadata__/' + encodeURIComponent(movieId)),
-    { props: { movieId } }
+  const metadataEntry = ctx.exports.MovieMetadata({ props: { movieId } });
+  const response = await metadataEntry.fetch(
+    new Request('https://moviwatch.internal/__movie_metadata__/' + encodeURIComponent(movieId))
   );
   if (!response.ok) throw new Error('Movie metadata lookup failed (HTTP ' + response.status + ')');
   const payload = await response.json();
@@ -207,11 +207,11 @@ async function movieById(ctx, env, movieId) {
 }
 
 async function invalidateContentCaches(ctx, movieId) {
-  const operations = [ctx.exports.PublicCatalogue.invalidate()];
+  const operations = [ctx.exports.PublicCatalogue().invalidate()];
   if (movieId) {
     operations.push(
-      ctx.exports.MovieMetadata.invalidate(movieId),
-      ctx.exports.VideoChunk.invalidate(movieId)
+      ctx.exports.MovieMetadata({ props: { movieId } }).invalidate(movieId),
+      ctx.exports.VideoChunk().invalidate(movieId)
     );
   }
   const results = await Promise.allSettled(operations);
@@ -299,9 +299,10 @@ async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSource
     '/__video_chunk__/' + encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash + '/' + chunkStart,
     'https://moviwatch.internal'
   );
-  const response = await ctx.exports.VideoChunk.fetch(new Request(internalUrl), {
+  const videoEntry = ctx.exports.VideoChunk({
     props: { sourceUrl: source.url, sourceVersion: String(sourceVersion || '') }
   });
+  const response = await videoEntry.fetch(new Request(internalUrl));
   const cacheStatus = response.headers.get('cf-cache-status') || 'UNKNOWN';
 
   if (response.status === 416) {
@@ -602,10 +603,11 @@ async function api(req, env, ctx) {
     const query = (url.searchParams.get('q') || '').trim().slice(0, 80);
     if (category && !CATEGORIES.has(category)) return json({ error: 'Unknown category' }, 400);
 
-    const cachedCatalogue = await ctx.exports.PublicCatalogue.fetch(
-      new Request('https://moviwatch.internal/__public_catalogue__'),
-      { props: { category, query } }
-    );
+    const catalogueUrl = new URL('https://moviwatch.internal/__public_catalogue__');
+    if (category) catalogueUrl.searchParams.set('category', category);
+    if (query) catalogueUrl.searchParams.set('q', query);
+    const catalogueEntry = ctx.exports.PublicCatalogue({ props: { category, query } });
+    const cachedCatalogue = await catalogueEntry.fetch(new Request(catalogueUrl));
     if (!cachedCatalogue.ok) return json({ error: 'Could not load the public catalogue' }, 502);
     const payload = await cachedCatalogue.json();
     return json(payload, 200, {
