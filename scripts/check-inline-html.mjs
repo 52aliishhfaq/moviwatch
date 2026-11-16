@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { Script } from 'node:vm';
 
-const files = ['public/watch.html'];
+const files = ['public/index.html', 'public/watch.html', 'public/admin.html'];
 let checked = 0;
 
 for (const file of files) {
