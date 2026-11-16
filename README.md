@@ -8,7 +8,7 @@ A lightweight movie catalogue and streaming backend built with Cloudflare Worker
 - Exactly one application table: `movies`. Multiple video options are stored in one JSONB array.
 - Action and Romantic categories, poster URLs, publish/unpublish, create/edit/delete, search and filtering.
 - Google Drive public-link proxy with HTTP Range forwarding for video seeking.
-- Upstash Redis provides short-lived catalogue caching and login rate limiting.
+- Cloudflare Cache API stores public catalogue metadata, per-movie source metadata, and 4 MiB video chunks at the edge. Upstash Redis is used only for admin-login rate limiting.
 - Admin secrets stay in Worker Secrets. Google OAuth Client ID/Secret is not needed for public Drive share links.
 
 ## Database and Redis
@@ -85,6 +85,7 @@ Keep API calls relative (such as `/api/movies`) so the browser always talks to t
 | GET | `/api/auth/me` | Session status |
 | GET | `/api/movies?q=&category=` | Public catalogue |
 | GET/HEAD | `/api/watch/:movieId/:optionIndex` | Public Range-aware stream |
+| GET/HEAD | `/api/download/:movieId/:optionIndex` | Public attachment download |
 | GET | `/api/admin/movies` | Admin |
 | POST/PUT/DELETE | `/api/admin/movies[/:id]` | Admin |
 | GET | `/api/admin/stats` | Admin |
