@@ -196,7 +196,7 @@ async function movieById(ctx, env, movieId) {
   if (!/^[0-9a-f-]{36}$/i.test(movieId)) return { movie: null, cacheStatus: 'BYPASS' };
   const metadataEntry = ctx.exports.MovieMetadata({ props: { movieId } });
   const response = await metadataEntry.fetch(
-    new Request('https://moviwatch.internal/__movie_metadata__/' + encodeURIComponent(movieId))
+    new Request('https://moviwatch.internal/__movie_metadata__v2/' + encodeURIComponent(movieId))
   );
   if (!response.ok) throw new Error('Movie metadata lookup failed (HTTP ' + response.status + ')');
   const payload = await response.json();
