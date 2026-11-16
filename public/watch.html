@@ -29,6 +29,14 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 @keyframes spin{to{transform:rotate(360deg)}}
 .retry{display:none;margin:8px 4px 2px;border:1px solid #53658a;border-radius:8px;background:#1b2941;color:#fff;padding:9px 14px;font:inherit;cursor:pointer}
 .retry.show{display:inline-flex}
+.downloads{margin:18px 0 28px;padding:18px;background:linear-gradient(145deg,#111a2b,#0d1524);border:1px solid var(--line);border-radius:14px}
+.downloads h2{font-size:17px;margin:0 0 5px}.download-note{color:var(--muted);font-size:13px;margin:0 0 13px}
+.download-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.download-link{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid #3a4a6a;border-radius:10px;background:#182640;color:#f5f7ff;text-decoration:none;font-weight:650;transition:background .15s,border-color .15s}
+.download-link:hover,.download-link:focus-visible{background:#263a60;border-color:#8294ff;outline:none}
+.download-link small{display:block;color:#b9c6e1;font-size:11px;font-weight:450}
+.download-link .download-icon{font-size:19px}
+@media(max-width:650px){.downloads{padding:14px}.download-list{grid-template-columns:1fr}}
 @media(max-width:650px){header{height:58px}main{width:calc(100% - 24px);margin:20px auto 40px}.player-shell{padding:6px;border-radius:12px}.heading{display:block}h1{font-size:25px}}
 </style>
 </head>
@@ -42,6 +50,11 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
   <div id="loading" class="loading"><span class="spinner"></span><span>Checking video stream…</span></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <button id="retry" class="retry" type="button">Retry stream</button>
+</section>
+<section id="downloads" class="downloads" aria-labelledby="downloadHeading" hidden>
+  <h2 id="downloadHeading">Download this video</h2>
+  <p class="download-note">Choose the available quality or video option. Each download is separate.</p>
+  <div id="downloadList" class="download-list"></div>
 </section>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js"></script>
@@ -81,6 +94,27 @@ async function prepare(){
     if(movie.poster_url)video.poster=movie.poster_url;
     streamUrl='/api/watch/'+encodeURIComponent(movieId)+'/0';
     if(!Array.isArray(movie.video_sources)||!movie.video_sources.length)throw new Error('No video source is configured for this movie.');
+    const downloadList=$('#downloadList');
+    downloadList.replaceChildren();
+    movie.video_sources.forEach((source,index)=>{
+      const link=document.createElement('a');
+      link.className='download-link';
+      link.href='/api/download/'+encodeURIComponent(movieId)+'/'+index;
+      link.setAttribute('download','');
+      const text=document.createElement('span');
+      const name=document.createElement('span');
+      name.textContent=source.label||('Video '+(index+1));
+      const hint=document.createElement('small');
+      hint.textContent='Download video file';
+      text.append(name,hint);
+      const icon=document.createElement('span');
+      icon.className='download-icon';
+      icon.textContent='↓';
+      icon.setAttribute('aria-hidden','true');
+      link.append(text,icon);
+      downloadList.append(link);
+    });
+    $('#downloads').hidden=false;
     status('Checking video source…');
     const probe=await fetch(streamUrl,{headers:{Range:'bytes=0-1'},cache:'no-store'});
     if(!probe.ok){
