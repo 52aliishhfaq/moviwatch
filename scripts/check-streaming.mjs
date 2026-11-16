@@ -30,6 +30,13 @@ assert(worker.includes('ctx.exports.MovieMetadata({ props: { movieId } })') &&
 assert(worker.includes("catalogueUrl.searchParams.set('category', category)") &&
   worker.includes("catalogueUrl.searchParams.set('q', query)"),
   'Catalogue cache keys must vary by category and search query');
+const catalogueGateway = worker.slice(worker.indexOf("if (path === '/api/movies'"), worker.indexOf("const download = path.split('/');"));
+assert(catalogueGateway.includes("'cache-control': 'private, no-store, max-age=0'") &&
+  catalogueGateway.includes("'vercel-cdn-cache-control': 'no-store'"),
+  'Catalogue gateway must bypass outer Vercel CDN caching and expose Cloudflare cache status');
+assert(worker.includes("host === 'accounts.google.com'") &&
+  worker.includes('Google Drive file requires sign-in'),
+  'Private Google Drive redirects must return a clear sharing-permission error');
 assert(worker.includes('sourceVersion instanceof Date') && worker.includes('normalizedSourceVersion'),
   'Source version must be normalized before it crosses the entrypoint boundary');
 assert(/getVideoChunk\(\s*ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, firstChunkStart/.test(worker),
