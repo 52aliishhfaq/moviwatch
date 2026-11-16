@@ -21,6 +21,9 @@ for (const name of ['PublicCatalogue', 'MovieMetadata', 'VideoChunk']) {
 }
 assert(worker.includes('ctx.exports.VideoChunk({') && worker.includes('await videoEntry.fetch('),
   'Video chunks must be fetched through the tiered cached entrypoint');
+const videoFetchBody = worker.slice(worker.indexOf('async function getVideoChunk('), worker.indexOf('async function fetchAndCacheVideoChunk('));
+assert(videoFetchBody.includes('sourceVersion: normalizedSourceVersion') && !videoFetchBody.includes('String(sourceVersion'),
+  'Video cache entrypoint must receive the normalized source version without an undefined variable');
 assert(worker.includes('ctx.exports.MovieMetadata({ props: { movieId } })') &&
   worker.includes('ctx.exports.PublicCatalogue({ props: { category, query } })'),
   'Loopback entrypoints must receive props using the documented binding factory');
