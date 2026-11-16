@@ -391,29 +391,37 @@ async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader) 
   const contentLength = responseEnd - responseStart + 1;
   const cacheStates = [first.cacheStatus];
 
+  let cursor = responseStart;
+  let chunk = first;
   const body = new ReadableStream({
-    async start(controller) {
+    async pull(controller) {
       try {
-        let cursor = responseStart;
-        let chunk = first;
-        while (cursor <= responseEnd) {
-          const expectedChunkStart = Math.floor(cursor / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
-          if (chunk.start !== expectedChunkStart) {
-            chunk = await getVideoChunk(req, source, movieId, optionIndex, sourceHash, expectedChunkStart);
-            if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total) throw new Error('Google Drive video size changed during streaming');
-            cacheStates.push(chunk.cacheStatus);
-          }
-          const from = cursor - chunk.start;
-          const through = Math.min(responseEnd, chunk.end) - chunk.start + 1;
-          if (through <= from) throw new Error('Invalid cached video chunk boundary');
-          controller.enqueue(chunk.bytes.subarray(from, through));
-          cursor = chunk.start + through;
-          chunk = null;
+        if (cursor > responseEnd) {
+          controller.close();
+          return;
         }
-        controller.close();
+        const expectedChunkStart = Math.floor(cursor / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
+        if (!chunk || chunk.start !== expectedChunkStart) {
+          chunk = await getVideoChunk(req, source, movieId, optionIndex, sourceHash, expectedChunkStart);
+          if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total) {
+            throw new Error('Google Drive video size changed during streaming');
+          }
+          cacheStates.push(chunk.cacheStatus);
+        }
+        const from = cursor - chunk.start;
+        const through = Math.min(responseEnd, chunk.end) - chunk.start + 1;
+        if (through <= from) throw new Error('Invalid cached video chunk boundary');
+        const output = chunk.bytes.subarray(from, through);
+        cursor += output.byteLength;
+        controller.enqueue(output);
+        if (cursor > responseEnd) controller.close();
       } catch (error) {
         controller.error(error);
       }
+    },
+    cancel() {
+      // No eager upstream loop exists: canceling stops future chunk fetches.
+      chunk = null;
     }
   });
 
