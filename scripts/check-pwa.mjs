@@ -5,6 +5,8 @@ const manifest = JSON.parse(fs.readFileSync('public/manifest.webmanifest', 'utf8
 assert.equal(manifest.name, 'Moviwatch');
 assert.equal(manifest.start_url, '/');
 assert.equal(manifest.display, 'standalone');
+assert.ok(manifest.icons.some(icon => icon.sizes === '192x192'));
+assert.ok(manifest.icons.some(icon => icon.sizes === '512x512'));
 for (const icon of manifest.icons) assert.ok(fs.existsSync('public' + icon.src), 'Missing icon: ' + icon.src);
 
 const logo = fs.readFileSync('public/assets/moviwatch-logo-4k.svg', 'utf8');
