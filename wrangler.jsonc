@@ -16,11 +16,5 @@
   },
   "vars": {
     "APP_ORIGINS": "https://moviwatch.vercel.app,https://moviwatch-aliishhfaq.vercel.app"
-  },
-  "r2_buckets": [
-    {
-      "binding": "VIDEO_CACHE",
-      "bucket_name": "moviwatch-video-cache"
-    }
-  ]
+  }
 }
