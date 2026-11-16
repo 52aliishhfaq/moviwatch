@@ -275,17 +275,41 @@ function parseContentRange(value) {
 }
 
 function videoCacheKey(req, movieId, optionIndex, sourceHash, chunkStart) {
-  const keyUrl = new URL('/__moviwatch_cache__/video-v3/' +
+  const keyUrl = new URL('/__moviwatch_cache__/video-v4/' +
     encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash + '/' + chunkStart, req.url);
   return new Request(keyUrl.toString(), { method: 'GET' });
 }
 
-// Coalesce simultaneous cold reads for the same byte chunk within a Worker isolate.
-// This is best-effort single-flight (not a distributed lock); the edge cache remains
-// the durable layer and no Redis command is added to the per-range hot path.
+function videoR2ObjectKey(movieId, optionIndex, sourceHash, chunkStart) {
+  return 'video-chunks/v4/' + encodeURIComponent(movieId) + '/' +
+    optionIndex + '/' + sourceHash + '/' + chunkStart;
+}
+
+// Coalesce simultaneous cold reads for the same chunk within one Worker isolate.
+// R2 provides the cross-region shared layer; this map prevents local stampedes.
 const inflightVideoChunks = new Map();
 
-async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chunkStart) {
+function videoChunkHeaders(chunk) {
+  return {
+    'content-type': chunk.contentType || 'video/mp4',
+    'content-length': String(chunk.bytes.byteLength),
+    'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL,
+    'x-moviwatch-start': String(chunk.start),
+    'x-moviwatch-end': String(chunk.end),
+    'x-moviwatch-total': String(chunk.total),
+    'x-moviwatch-container': chunk.container || 'unknown'
+  };
+}
+
+async function storeLocalVideoChunk(cache, key, chunk) {
+  try {
+    await cache.put(key, new Response(chunk.bytes, { status: 200, headers: videoChunkHeaders(chunk) }));
+  } catch (error) {
+    console.warn('Local video cache write failed:', error?.message || error);
+  }
+}
+
+async function getVideoChunk(req, env, source, movieId, optionIndex, sourceHash, chunkStart) {
   const cache = caches.default;
   const key = videoCacheKey(req, movieId, optionIndex, sourceHash, chunkStart);
   try {
@@ -309,7 +333,7 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
       await cache.delete(key);
     }
   } catch (error) {
-    console.warn('Video cache read failed:', error?.message || error);
+    console.warn('Local video cache read failed:', error?.message || error);
   }
 
   const pending = inflightVideoChunks.get(key.url);
@@ -318,7 +342,7 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
     return { ...shared, cacheStatus: 'SHARED' };
   }
 
-  const fill = fetchAndCacheVideoChunk(req, source, movieId, optionIndex, sourceHash, chunkStart, key);
+  const fill = fetchAndCacheVideoChunk(req, env, source, movieId, optionIndex, sourceHash, chunkStart, key);
   inflightVideoChunks.set(key.url, fill);
   try {
     return await fill;
@@ -327,11 +351,45 @@ async function getVideoChunk(req, source, movieId, optionIndex, sourceHash, chun
   }
 }
 
-async function fetchAndCacheVideoChunk(req, source, movieId, optionIndex, sourceHash, chunkStart, key) {
+async function fetchAndCacheVideoChunk(req, env, source, movieId, optionIndex, sourceHash, chunkStart, key) {
   const cache = caches.default;
-  // Drive and intermediary download endpoints may cap a Range response below
-  // the requested 4 MiB. Assemble contiguous partial 206 responses so our
-  // edge-cache chunk is complete and its byte offsets remain deterministic.
+  const r2Key = videoR2ObjectKey(movieId, optionIndex, sourceHash, chunkStart);
+
+  // Shared cross-region tier: local Cache API first, private R2 second, Drive last.
+  // R2 objects expire through the bucket lifecycle rule; metadata also carries a
+  // logical expiry so stale objects are never served while lifecycle deletion runs.
+  if (env.VIDEO_CACHE) {
+    try {
+      const object = await env.VIDEO_CACHE.get(r2Key);
+      if (object) {
+        const metadata = object.customMetadata || {};
+        const start = Number(metadata.start);
+        const end = Number(metadata.end);
+        const total = Number(metadata.total);
+        const expiresAt = Number(metadata.expiresAt);
+        const bytes = new Uint8Array(await object.arrayBuffer());
+        if (Number.isSafeInteger(start) && Number.isSafeInteger(end) &&
+            Number.isSafeInteger(total) && start === chunkStart &&
+            end >= start && total > end && bytes.byteLength === end - start + 1 &&
+            Number.isFinite(expiresAt) && expiresAt > Date.now()) {
+          const chunk = {
+            bytes, start, end, total,
+            contentType: metadata.contentType || object.httpMetadata?.contentType || 'video/mp4',
+            container: metadata.container || 'unknown',
+            cacheStatus: 'R2-HIT'
+          };
+          await storeLocalVideoChunk(cache, key, chunk);
+          return chunk;
+        }
+      }
+    } catch (error) {
+      // R2 is an optimization only. A temporary R2 issue must not stop playback.
+      console.warn('Shared R2 video cache read failed:', error?.message || error);
+    }
+  }
+
+  // Google Drive may cap a Range response below 4 MiB. Assemble contiguous
+  // partial responses before writing either cache tier.
   const requestedEnd = chunkStart + VIDEO_CHUNK_SIZE - 1;
   const pieces = [];
   let cursor = chunkStart;
@@ -400,27 +458,36 @@ async function fetchAndCacheVideoChunk(req, source, movieId, optionIndex, source
     container === 'mkv' ? 'video/x-matroska' :
     (!upstreamType || upstreamType === 'application/octet-stream' || upstreamType === 'binary/octet-stream')
       ? 'video/mp4' : upstreamType;
-  try {
-    const stored = new Response(bytes, {
-      status: 200,
-      headers: {
-        'content-type': contentType,
-        'content-length': String(bytes.byteLength),
-        'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL,
-        'x-moviwatch-start': String(chunkStart),
-        'x-moviwatch-end': String(expectedEnd),
-        'x-moviwatch-total': String(total),
-        'x-moviwatch-container': container
-      }
-    });
-    await cache.put(key, stored);
-  } catch (error) {
-    console.warn('Video cache write failed:', error?.message || error);
-  }
-  return { bytes, start: chunkStart, end: expectedEnd, total, contentType, container, cacheStatus: 'MISS' };
-}
 
-async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader, sourceVersion = '') {
+  const chunk = {
+    bytes, start: chunkStart, end: expectedEnd, total, contentType, container,
+    cacheStatus: 'MISS'
+  };
+  await storeLocalVideoChunk(cache, key, chunk);
+
+  if (env.VIDEO_CACHE) {
+    try {
+      await env.VIDEO_CACHE.put(r2Key, bytes, {
+        httpMetadata: {
+          contentType,
+          cacheControl: 'public, max-age=86400'
+        },
+        customMetadata: {
+          start: String(chunkStart),
+          end: String(expectedEnd),
+          total: String(total),
+          container,
+          contentType,
+          expiresAt: String(Date.now() + 24 * 60 * 60 * 1000)
+        }
+      });
+    } catch (error) {
+      console.warn('Shared R2 video cache write failed:', error?.message || error);
+    }
+  }
+  return chunk;
+}
+async function cachedVideoRange(req, env, source, movieId, optionIndex, rangeHeader, sourceVersion = '') {
   const parsed = parseByteRange(rangeHeader);
   if (!parsed || parsed.invalid) {
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */*', 'accept-ranges': 'bytes' } });
@@ -429,7 +496,7 @@ async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader, 
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
   // A suffix range needs the representation size, so prime/read chunk zero first.
   const firstStart = parsed.suffix ? 0 : Math.floor(parsed.start / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
-  const firstChunk = await getVideoChunk(req, source, movieId, optionIndex, sourceHash, firstStart);
+  const firstChunk = await getVideoChunk(req, env, source, movieId, optionIndex, sourceHash, firstStart);
   if (firstChunk.unsatisfiedTotal !== undefined) {
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + firstChunk.unsatisfiedTotal, 'accept-ranges': 'bytes' } });
   }
@@ -506,8 +573,7 @@ async function cachedVideoRange(req, source, movieId, optionIndex, rangeHeader, 
       'vercel-cdn-cache-control': 'no-store',
       'surrogate-control': 'no-store',
       'vary': 'Range',
-      'x-moviwatch-cache': cacheStates.every((state) => state === 'HIT') ? 'HIT' :
-        cacheStates.every((state) => state === 'MISS') ? 'MISS' : 'PARTIAL',
+      'x-moviwatch-cache': new Set(cacheStates).size === 1 ? cacheStates[0] : 'PARTIAL',
       'x-moviwatch-chunk-size': String(VIDEO_CHUNK_SIZE)
     }
   });
@@ -622,7 +688,7 @@ async function api(req, env) {
     }
 
     try {
-      const response = await cachedVideoRange(req, source, watch[3], optionIndex, req.headers.get('Range'), movie.updated_at);
+      const response = await cachedVideoRange(req, env, source, watch[3], optionIndex, req.headers.get('Range'), movie.updated_at);
       if ((response.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
         return json({ error: 'Drive returned an HTML page instead of video. Check public sharing and quota.' }, 502);
       }
