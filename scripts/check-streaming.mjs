@@ -21,6 +21,12 @@ for (const name of ['PublicCatalogue', 'MovieMetadata', 'VideoChunk']) {
 }
 assert(worker.includes('ctx.exports.VideoChunk.fetch'),
   'Video chunks must be fetched through the tiered cached entrypoint');
+assert(worker.includes('sourceVersion instanceof Date') && worker.includes('normalizedSourceVersion'),
+  'Source version must be normalized before it crosses the entrypoint boundary');
+assert(/getVideoChunk\(\s*ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, firstChunkStart/.test(worker),
+  'Suffix ranges must fetch their second chunk with the correct cache context');
+assert(!worker.includes('const response = await cachedVideoRange(req, source, watch[3]'),
+  'Unreachable duplicate watch streaming code must be removed');
 assert(worker.includes("'cache-tag': 'video-chunks-' + movieId"),
   'Video chunks must be tagged for movie-level purging');
 assert(!worker.includes('caches.default') && !worker.includes('inflightVideoChunks'),
