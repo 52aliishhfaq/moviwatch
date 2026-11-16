@@ -294,7 +294,7 @@ function parseContentRange(value) {
   return { start, end, total };
 }
 
-async function getVideoChunk(ctx, source, movieId, optionIndex, sourceVersion, sourceHash, chunkStart) {
+async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, chunkStart) {
   const internalUrl = new URL(
     '/__video_chunk__/' + encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash + '/' + chunkStart,
     'https://moviwatch.internal'
@@ -470,11 +470,16 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   if (!parsed || parsed.invalid) {
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */*', 'accept-ranges': 'bytes' } });
   }
-  const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url + '|' + String(sourceVersion || '')));
+  // Normalize Postgres timestamps before crossing the ctx.exports boundary:
+  // Date instances serialize to ISO strings in entrypoint props.
+  const normalizedSourceVersion = sourceVersion instanceof Date
+    ? sourceVersion.toISOString()
+    : String(sourceVersion || '');
+  const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url + '|' + normalizedSourceVersion));
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
   // A suffix range needs the representation size, so prime/read chunk zero first.
   const firstStart = parsed.suffix ? 0 : Math.floor(parsed.start / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
-  const firstChunk = await getVideoChunk(ctx, source, movieId, optionIndex, sourceVersion, sourceHash, firstStart);
+  const firstChunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, firstStart);
   if (firstChunk.unsatisfiedTotal !== undefined) {
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + firstChunk.unsatisfiedTotal, 'accept-ranges': 'bytes' } });
   }
@@ -512,7 +517,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
         }
         const expectedChunkStart = Math.floor(cursor / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
         if (!chunk || chunk.start !== expectedChunkStart) {
-          chunk = await getVideoChunk(ctx, source, movieId, optionIndex, sourceVersion, sourceHash, expectedChunkStart);
+          chunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, expectedChunkStart);
           if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total) {
             throw new Error('Google Drive video size changed during streaming');
           }
