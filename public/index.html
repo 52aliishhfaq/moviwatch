@@ -4,12 +4,282 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#080b14">
-<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Moviwatch">
-<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" type="image/svg+xml" href="/assets/moviwatch-app-icon.svg"><link rel="apple-touch-icon" href="/assets/moviwatch-app-icon-180.png">
-<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Moviwatch">
-<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" type="image/svg+xml" href="/assets/moviwatch-app-icon.svg"><link rel="apple-touch-icon" href="/assets/moviwatch-app-icon-180.png">
-<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Moviwatch">
-<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" type="image/svg+xml" href="/assets/moviwatch-app-icon.svg"><link rel="apple-touch-icon" href="/assets/moviwatch-app-icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Moviwatch">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/svg+xml" href="/assets/moviwatch-app-icon.svg">
+<link rel="apple-touch-icon" href="/assets/moviwatch-app-icon-180.png">
 <meta name="description" content="Discover and watch movies on Moviwatch.">
 <title>Moviwatch — Discover movies</title>
-<st���q�^
+<style>
+:root{color-scheme:dark;--bg:#080b14;--panel:#111827;--panel-2:#171f31;--line:#263149;--muted:#9aa8c1;--text:#f6f7fb;--accent:#8795ff;--accent-2:#bac2ff;--topbar:70px;--content:1900px}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:150px}
+body{margin:0;min-width:320px;background:radial-gradient(ellipse at 50% -28%,#1b2847 0,transparent 55%),var(--bg);color:var(--text);font:16px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+button,input,a{font:inherit}
+a{color:inherit}
+button{color:inherit}
+.topbar{position:sticky;top:0;z-index:50;min-height:var(--topbar);background:#080b14ed;border-bottom:1px solid #ffffff12;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.topbar-inner{width:min(calc(100% - 44px),var(--content));min-height:var(--topbar);margin:auto;display:grid;grid-template-columns:auto minmax(180px,520px) auto;align-items:center;gap:30px}
+.brand{display:inline-flex;align-items:center;gap:11px;width:max-content;text-decoration:none;font-size:22px;font-weight:850;letter-spacing:-.8px}
+.brand-mark{width:36px;height:36px;display:grid;place-items:center;border-radius:11px;background:linear-gradient(145deg,#a7b0ff,#5969e8);box-shadow:0 7px 24px #6274ff48;color:#0c1020;font-size:18px}
+.search-wrap{position:relative}
+.search-wrap svg{position:absolute;left:15px;top:50%;transform:translateY(-50%);width:18px;height:18px;color:#8290aa;pointer-events:none}
+.search{width:100%;height:43px;padding:0 42px 0 44px;border:1px solid #ffffff16;border-radius:12px;outline:0;background:#ffffff09;color:var(--text);font-size:14px;transition:border-color .18s,background .18s}
+.search::placeholder{color:#8491a9}
+.search:focus{border-color:#8a98ff99;background:#ffffff0d}
+.clear-search{position:absolute;right:8px;top:50%;transform:translateY(-50%);width:30px;height:30px;border:0;border-radius:8px;background:transparent;color:#9eabc3;cursor:pointer;display:none}
+.search-wrap.has-value .clear-search{display:block}
+.top-actions{display:flex;justify-content:flex-end;align-items:center;gap:10px}
+.admin-link{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:0 15px;border:1px solid #ffffff1b;border-radius:11px;background:#ffffff08;text-decoration:none;color:#d8def2;font-size:13px;font-weight:650;transition:.18s}
+.admin-link:hover{border-color:#8c9aff80;background:#ffffff12}
+.category-shell{position:sticky;top:var(--topbar);z-index:40;border-bottom:1px solid #ffffff0e;background:#0b101bee;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+.category-inner{width:min(calc(100% - 44px),var(--content));height:62px;margin:auto;display:flex;align-items:center;gap:12px}
+.category-label{flex:0 0 auto;margin-right:5px;color:#74829d;font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase}
+.category-nav{display:flex;align-items:center;gap:9px;min-width:0;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;padding:7px 2px}
+.category-nav::-webkit-scrollbar{display:none}
+.category-pill{flex:0 0 auto;min-height:38px;padding:0 17px;border:1px solid #ffffff15;border-radius:999px;background:#ffffff06;color:#b8c2d8;font-size:13px;font-weight:700;white-space:nowrap;cursor:pointer;transition:background .18s,border-color .18s,color .18s,transform .18s}
+.category-pill:hover{border-color:#a1adff70;background:#ffffff10;color:#fff}
+.category-pill[aria-pressed="true"]{border-color:#9ba6ff;background:linear-gradient(135deg,#aab3ff,#7787f4);color:#11162a;box-shadow:0 5px 20px #7887ff30}
+.category-count{margin-left:7px;font-size:11px;opacity:.72}
+main{width:min(calc(100% - 44px),var(--content));margin:0 auto;padding:24px 0 80px}
+.featured{position:relative;isolation:isolate;display:flex;align-items:flex-end;min-height:390px;overflow:hidden;border:1px solid #ffffff1a;border-radius:24px;background:#151e31;box-shadow:0 22px 80px #0004}
+.featured[hidden]{display:none}
+.featured-poster{position:absolute;z-index:-2;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 34%;opacity:.76}
+.featured::before{content:"";position:absolute;z-index:-1;inset:0;background:linear-gradient(90deg,#080b14f5 0%,#080b14d9 35%,#080b1480 66%,#080b1430 100%),linear-gradient(0deg,#080b14d9 0%,transparent 62%)}
+.featured-content{max-width:720px;padding:42px 48px 40px}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;margin:0 0 15px;color:#d7dcff;font-size:11px;font-weight:850;letter-spacing:1.7px;text-transform:uppercase}
+.eyebrow-dot{width:7px;height:7px;border-radius:50%;background:#aab4ff;box-shadow:0 0 14px #aab4ff}
+.featured-title{max-width:700px;margin:0;font-size:clamp(30px,4.6vw,62px);font-weight:850;line-height:1.03;letter-spacing:-1.8px;text-wrap:balance}
+.featured-meta{margin:15px 0 25px;color:#c1c9dc;font-size:14px}
+.featured-actions{display:flex;flex-wrap:wrap;gap:12px}
+.primary-cta,.secondary-cta{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:46px;padding:0 20px;border-radius:12px;text-decoration:none;font-size:13px;font-weight:800;transition:transform .18s,box-shadow .18s,background .18s}
+.primary-cta{background:#f1f2ff;color:#11162a;box-shadow:0 8px 25px #0003}
+.primary-cta:hover{transform:translateY(-2px);box-shadow:0 12px 30px #0005}
+.secondary-cta{border:1px solid #ffffff35;background:#ffffff12;color:#fff}
+.secondary-cta:hover{background:#ffffff20}
+.section-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin:35px 2px 19px}
+.section-title{margin:0;font-size:clamp(21px,2.5vw,29px);font-weight:800;letter-spacing:-.8px}
+.section-subtitle{margin:4px 0 0;color:var(--muted);font-size:13px}
+.movie-count{flex:0 0 auto;color:#8794ad;font-size:12px;font-weight:650}
+.movie-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:25px 18px}
+.movie-card{display:block;min-width:0;overflow:hidden;border:1px solid #ffffff10;border-radius:15px;background:linear-gradient(180deg,#151d2d,#101725);text-decoration:none;outline:0;box-shadow:0 8px 26px #0002;transition:transform .2s,border-color .2s,box-shadow .2s}
+.movie-card:hover{transform:translateY(-5px);border-color:#99a6ff70;box-shadow:0 16px 35px #0005}
+.movie-card:focus-visible,.category-pill:focus-visible,.admin-link:focus-visible,.primary-cta:focus-visible,.secondary-cta:focus-visible,.clear-search:focus-visible{outline:3px solid #d7dcff;outline-offset:4px;box-shadow:0 0 0 6px #7887ff45}
+.poster-wrap{position:relative;aspect-ratio:2/3;overflow:hidden;background:linear-gradient(145deg,#26334c,#111827)}
+.poster{display:block;width:100%;height:100%;object-fit:cover;transition:transform .35s ease}
+.movie-card:hover .poster{transform:scale(1.045)}
+.poster-wrap::after{content:"";position:absolute;inset:45% 0 0;background:linear-gradient(0deg,#080b149c,transparent);pointer-events:none}
+.poster-fallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:18px;color:#b9c4dc;text-align:center;font-size:17px;font-weight:800}
+.play-indicator{position:absolute;z-index:2;left:13px;bottom:13px;width:36px;height:36px;display:grid;place-items:center;border:1px solid #ffffff66;border-radius:50%;background:#111827b8;color:#fff;opacity:0;transform:translateY(5px);transition:.2s}
+.movie-card:hover .play-indicator,.movie-card:focus-visible .play-indicator{opacity:1;transform:none}
+.movie-details{padding:13px 13px 15px}
+.movie-title{display:block;overflow:hidden;margin:0;color:#f3f5fb;font-size:14px;font-weight:750;line-height:1.35;text-overflow:ellipsis;white-space:nowrap}
+.movie-category{display:block;margin-top:6px;color:#93a1bd;font-size:11px;font-weight:650;letter-spacing:.35px;text-transform:uppercase}
+.state-panel{grid-column:1/-1;display:flex;min-height:180px;flex-direction:column;align-items:center;justify-content:center;padding:30px;border:1px dashed #35415a;border-radius:18px;background:#ffffff04;text-align:center;color:var(--muted)}
+.state-title{margin:0 0 5px;color:#e2e7f4;font-size:16px;font-weight:750}
+.state-message{margin:0;font-size:13px}
+.retry-button{margin-top:14px;padding:9px 16px;border:1px solid #8795ff88;border-radius:9px;background:#8795ff1a;color:#e5e8ff;font-size:13px;font-weight:700;cursor:pointer}
+.footer{margin-top:60px;padding:22px 0;border-top:1px solid #ffffff12;color:#75829b;text-align:center;font-size:12px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(max-width:1250px){.movie-grid{grid-template-columns:repeat(5,minmax(0,1fr));gap:22px 15px}.featured{min-height:350px}}
+@media(max-width:950px){.topbar-inner,.category-inner,main{width:calc(100% - 36px)}.topbar-inner{gap:18px}.movie-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.featured{min-height:320px}.featured-content{padding:34px}}
+@media(max-width:650px){:root{--topbar:62px}.topbar-inner{width:calc(100% - 24px);grid-template-columns:auto minmax(0,1fr) auto;gap:10px}.brand{gap:7px;font-size:18px;letter-spacing:-.6px}.brand-mark{width:32px;height:32px;border-radius:9px;font-size:16px}.search{height:38px;padding-left:35px;padding-right:32px;font-size:12px;border-radius:10px}.search-wrap svg{left:11px;width:15px}.clear-search{right:3px;width:26px;height:26px}.admin-link{min-height:36px;width:38px;padding:0;font-size:0;gap:0}.admin-link svg{width:17px;height:17px}.category-inner{width:100%;height:55px;padding:0 12px;gap:9px}.category-label{display:none}.category-nav{width:100%;gap:7px;padding:6px 1px}.category-pill{min-height:35px;padding:0 14px;font-size:12px}.category-count{margin-left:5px;font-size:10px}main{width:calc(100% - 24px);padding-top:15px;padding-bottom:50px}.featured{min-height:300px;border-radius:17px}.featured::before{background:linear-gradient(0deg,#080b14f2 0%,#080b14b8 48%,#080b1450 100%)}.featured-poster{object-position:center 25%;opacity:.55}.featured-content{padding:22px 20px 23px}.eyebrow{margin-bottom:10px;font-size:10px}.featured-title{font-size:clamp(27px,8vw,39px);letter-spacing:-1px}.featured-meta{margin:10px 0 17px;font-size:12px}.primary-cta,.secondary-cta{min-height:41px;padding:0 15px;font-size:12px;border-radius:10px}.section-heading{margin:27px 1px 14px}.section-title{font-size:21px}.section-subtitle{font-size:11px}.movie-count{font-size:10px}.movie-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:17px 11px}.movie-card{border-radius:12px}.movie-details{padding:10px 10px 12px}.movie-title{font-size:12px}.movie-category{font-size:10px;margin-top:5px}.play-indicator{left:9px;bottom:9px;width:31px;height:31px;opacity:1;transform:none}.footer{margin-top:42px}}
+@media(max-width:370px){.brand{font-size:16px}.brand-mark{width:29px;height:29px}.admin-link{width:33px}.search{font-size:11px}.movie-grid{gap:14px 9px}.movie-details{padding:9px}.movie-title{font-size:11px}}
+@media(min-width:1600px){:root{--content:2100px}.movie-grid{grid-template-columns:repeat(7,minmax(0,1fr));gap:28px 22px}.featured{min-height:450px}.featured-content{max-width:850px;padding:54px}.section-heading{margin-top:44px}.movie-title{font-size:16px}.movie-details{padding:15px 16px 17px}}
+@media(min-width:2300px){:root{--content:2500px}.movie-grid{grid-template-columns:repeat(8,minmax(0,1fr));gap:32px 26px}.featured{min-height:540px}.featured-title{font-size:76px}.topbar-inner{gap:42px}.category-pill{min-height:46px;padding:0 23px;font-size:16px}.category-inner{height:74px}.category-shell{top:var(--topbar)}main{padding-top:34px}.movie-title{font-size:18px}.movie-category{font-size:13px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+.brand-mark{display:block;width:40px;height:40px;object-fit:cover;border-radius:11px;box-shadow:0 6px 22px #347eff33}
+@media(max-width:650px){.brand-mark{width:32px;height:32px;border-radius:9px}}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/" aria-label="Moviwatch home"><img class="brand-mark" src="/assets/moviwatch-app-icon.svg" alt="" width="40" height="40"><span>Moviwatch</span></a>
+    <div class="search-wrap" id="searchWrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
+      <label class="sr-only" for="search">Search movies</label>
+      <input id="search" class="search" type="search" placeholder="Search movies..." autocomplete="off">
+      <button class="clear-search" id="clearSearch" type="button" aria-label="Clear search">✕</button>
+    </div>
+    <div class="top-actions">
+      <a class="admin-link" href="/admin" aria-label="Admin dashboard">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z"></path><path d="m9 12 2 2 4-4"></path></svg>
+        Admin
+      </a>
+    </div>
+  </div>
+</header>
+<div class="category-shell">
+  <div class="category-inner">
+    <span class="category-label">Explore</span>
+    <nav id="categories" class="category-nav" aria-label="Movie categories" role="toolbar">
+      <span class="category-pill" aria-hidden="true">Loading categories…</span>
+    </nav>
+  </div>
+</div>
+<main>
+  <section id="featured" class="featured" aria-label="Featured movie" hidden>
+    <img id="featuredPoster" class="featured-poster" alt="" aria-hidden="true">
+    <div class="featured-content">
+      <p class="eyebrow"><span class="eyebrow-dot"></span><span id="featuredEyebrow">Featured movie</span></p>
+      <h1 id="featuredTitle" class="featured-title"></h1>
+      <p id="featuredMeta" class="featured-meta"></p>
+      <div class="featured-actions">
+        <a id="featuredWatch" class="primary-cta" href="#">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
+          Watch now
+        </a>
+        <a class="secondary-cta" href="#catalogue">Explore movies</a>
+      </div>
+    </div>
+  </section>
+  <section id="catalogue" aria-labelledby="catalogueTitle">
+    <div class="section-heading">
+      <div>
+        <h2 id="catalogueTitle" class="section-title">Browse all movies</h2>
+        <p id="catalogueSubtitle" class="section-subtitle">Pick a category and find your next watch.</p>
+      </div>
+      <span id="movieCount" class="movie-count"></span>
+    </div>
+    <div id="grid" class="movie-grid" aria-live="polite" aria-busy="true">
+      <div class="state-panel"><p class="state-title">Loading your movies</p><p class="state-message">Getting the catalogue ready…</p></div>
+    </div>
+  </section>
+  <footer class="footer">Made for movie nights · Moviwatch</footer>
+</main>
+<script>
+const $=selector=>document.querySelector(selector);
+const grid=$('#grid'),categoryNav=$('#categories'),searchInput=$('#search');
+let allMovies=[],activeCategory='All',categoryButtons=[];
+const node=(tag,cls,txt)=>{const el=document.createElement(tag);if(cls)el.className=cls;if(txt!==undefined)el.textContent=txt;return el};
+const watchPath=id=>'/watch/'+encodeURIComponent(id);
+function setState(title,message,action){
+  grid.replaceChildren();
+  const panel=node('div','state-panel');
+  panel.append(node('p','state-title',title),node('p','state-message',message));
+  if(action){const button=node('button','retry-button',action.label);button.type='button';button.addEventListener('click',action.run);panel.append(button)}
+  grid.append(panel);grid.setAttribute('aria-busy','false');
+}
+function categoryList(rows){
+  const unique=[...new Set(rows.map(movie=>(movie.category||'').trim()).filter(Boolean))];
+  const priority=['Action','Romantic'];
+  return unique.sort((a,b)=>{const ai=priority.indexOf(a),bi=priority.indexOf(b);if(ai!==-1||bi!==-1)return (ai===-1?999:ai)-(bi===-1?999:bi);return a.localeCompare(b)});
+}
+function buildCategories(){
+  const categories=categoryList(allMovies);
+  const entries=[{name:'All',count:allMovies.length},...categories.map(name=>({name,count:allMovies.filter(movie=>movie.category===name).length}))];
+  categoryNav.replaceChildren();categoryButtons=[];
+  for(const item of entries){
+    const button=node('button','category-pill');
+    button.type='button';button.dataset.category=item.name;button.setAttribute('aria-pressed',String(item.name===activeCategory));
+    const label=node('span','',item.name);
+    const count=node('span','category-count',String(item.count));
+    button.append(label,count);
+    button.addEventListener('click',()=>selectCategory(item.name));
+    categoryNav.append(button);categoryButtons.push(button);
+  }
+}
+function selectCategory(name){
+  activeCategory=name;
+  for(const button of categoryButtons)button.setAttribute('aria-pressed',String(button.dataset.category===name));
+  renderCatalogue();
+}
+function filteredMovies(){
+  const query=searchInput.value.trim().toLocaleLowerCase();
+  return allMovies.filter(movie=>(activeCategory==='All'||movie.category===activeCategory)&&(!query||(movie.title||'').toLocaleLowerCase().includes(query)));
+}
+function setFeatured(movie){
+  const section=$('#featured');
+  if(!movie){section.hidden=true;return}
+  section.hidden=false;
+  const image=$('#featuredPoster');
+  image.onerror=()=>{image.style.display='none'};
+  image.onload=()=>{image.style.display='block'};
+  image.src=movie.poster_url||'';
+  $('#featuredEyebrow').textContent=activeCategory==='All'?'Featured movie':'Featured in '+activeCategory;
+  $('#featuredTitle').textContent=movie.title||'Untitled movie';
+  $('#featuredMeta').textContent=(movie.category||'Movie')+' · Now available on Moviwatch';
+  $('#featuredWatch').href=watchPath(movie.id);
+}
+function renderCatalogue(){
+  const rows=filteredMovies();
+  const query=searchInput.value.trim();
+  const heading=activeCategory==='All'?'Browse all movies':activeCategory+' movies';
+  $('#catalogueTitle').textContent=query?('Search results for “'+query+'”'):heading;
+  $('#catalogueSubtitle').textContent=activeCategory==='All'?'Pick a category and find your next watch.':'Explore titles from the '+activeCategory+' collection.';
+  $('#movieCount').textContent=rows.length+' '+(rows.length===1?'movie':'movies');
+  setFeatured(rows[0]);
+  grid.replaceChildren();grid.setAttribute('aria-busy','false');
+  if(!rows.length){
+    const message=query?'Try another title or clear your search.':'There are no movies in this category yet.';
+    setState('No movies found',message,query?{label:'Clear search',run:()=>{searchInput.value='';syncSearch();renderCatalogue()}}:null);
+    return;
+  }
+  for(const movie of rows){
+    const card=node('a','movie-card');card.href=watchPath(movie.id);card.setAttribute('aria-label','Watch '+movie.title);
+    const posterWrap=node('div','poster-wrap');
+    const fallback=node('span','poster-fallback',movie.title||'Moviwatch');
+    const poster=node('img','poster');poster.alt=(movie.title||'Movie')+' poster';poster.loading='lazy';poster.decoding='async';poster.referrerPolicy='no-referrer';
+    poster.onload=()=>{fallback.hidden=true};
+    poster.onerror=()=>{poster.remove();fallback.hidden=false};
+    if(movie.poster_url)poster.src=movie.poster_url;else poster.hidden=true;
+    const play=node('span','play-indicator','▶');play.setAttribute('aria-hidden','true');
+    posterWrap.append(fallback,poster,play);
+    const details=node('div','movie-details');
+    details.append(node('span','movie-title',movie.title||'Untitled movie'),node('span','movie-category',movie.category||'Movie'));
+    card.append(posterWrap,details);grid.append(card);
+  }
+}
+function syncSearch(){ $('#searchWrap').classList.toggle('has-value',!!searchInput.value) }
+async function loadMovies(){
+  grid.setAttribute('aria-busy','true');
+  try{
+    const response=await fetch('/api/movies',{cache:'no-store',headers:{Accept:'application/json'}});
+    const data=await response.json();
+    if(!response.ok)throw new Error(data.error||'Could not load the catalogue.');
+    allMovies=Array.isArray(data.movies)?data.movies:[];
+    buildCategories();renderCatalogue();
+  }catch(error){
+    setState('Could not load movies',error.message||'Please check your connection and try again.',{label:'Try again',run:loadMovies});
+    $('#featured').hidden=true;
+    $('#catalogueSubtitle').textContent='Your movie catalogue is temporarily unavailable.';
+    $('#movieCount').textContent='';
+  }
+}
+searchInput.addEventListener('input',()=>{syncSearch();renderCatalogue()});
+$('#clearSearch').addEventListener('click',()=>{searchInput.value='';syncSearch();renderCatalogue();searchInput.focus()});
+searchInput.addEventListener('keydown',event=>{if(event.key==='Escape'&&searchInput.value){searchInput.value='';syncSearch();renderCatalogue()}});
+categoryNav.addEventListener('keydown',event=>{
+  const current=categoryButtons.indexOf(document.activeElement);
+  if(current<0)return;
+  if(event.key==='ArrowRight'||event.key==='ArrowLeft'){
+    event.preventDefault();
+    const next=(current+(event.key==='ArrowRight'?1:-1)+categoryButtons.length)%categoryButtons.length;
+    categoryButtons[next]?.focus();categoryButtons[next]?.scrollIntoView({block:'nearest',inline:'nearest'});
+  }
+  if(event.key==='ArrowDown'){
+    event.preventDefault();grid.querySelector('a.movie-card')?.focus();
+  }
+});
+grid.addEventListener('keydown',event=>{
+  const cards=[...grid.querySelectorAll('a.movie-card')],index=cards.indexOf(document.activeElement);
+  if(index<0)return;
+  const columns=Math.max(1,getComputedStyle(grid).gridTemplateColumns.split(' ').length);
+  let next=index;
+  if(event.key==='ArrowRight')next=index+1;
+  else if(event.key==='ArrowLeft')next=index-1;
+  else if(event.key==='ArrowDown')next=index+columns;
+  else if(event.key==='ArrowUp'){
+    if(index-columns<0){event.preventDefault();categoryButtons.find(button=>button.dataset.category===activeCategory)?.focus();return}
+    next=index-columns;
+  }else return;
+  if(cards[next]){event.preventDefault();cards[next].focus();cards[next].scrollIntoView({block:'nearest',inline:'nearest'})}
+});
+loadMovies();
+</script>
+<link rel="stylesheet" href="/pwa-install.css"><script src="/pwa-install.js" defer></script>
+</body>
+</html>
