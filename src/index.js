@@ -364,6 +364,7 @@ async function getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourc
     total: payload.total,
     moovEnd: payload.moovEnd,
     container: payload.container || 'unknown',
+    contentType: payload.contentType || 'video/mp4',
     cacheStatus: response.headers.get('cf-cache-status') || 'UNKNOWN'
   };
 }
@@ -502,7 +503,13 @@ export class VideoHeader extends WorkerEntrypoint {
       if (bytes.byteLength !== range.end + 1) throw new Error('Google Drive returned an incomplete video header');
       const container = sniffVideoContainer(bytes);
       const moovEnd = container === 'mp4' ? mp4MoovEnd(bytes) : null;
-      return json({ total: range.total, moovEnd, container }, 200, {
+      const upstreamType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+      const contentType = container === 'mp4' ? 'video/mp4' :
+        container === 'webm' ? 'video/webm' :
+        container === 'mkv' ? 'video/x-matroska' :
+        (!upstreamType || upstreamType === 'application/octet-stream' || upstreamType === 'binary/octet-stream')
+          ? 'video/mp4' : upstreamType;
+      return json({ total: range.total, moovEnd, container, contentType }, 200, {
         'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL,
         'cache-tag': 'video-headers-' + movieId
       });
@@ -589,50 +596,69 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   if (!parsed || parsed.invalid) {
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */*', 'accept-ranges': 'bytes' } });
   }
-  // Normalize Postgres timestamps before crossing the ctx.exports boundary:
-  // Date instances serialize to ISO strings in entrypoint props.
+
   const normalizedSourceVersion = sourceVersion instanceof Date
     ? sourceVersion.toISOString()
     : String(sourceVersion || '');
   const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url + '|' + normalizedSourceVersion));
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
-  // MP4 files in this catalogue carry an 8-12 MiB moov index at the start.
-  // Discover its end using a tiny cached 256-byte probe, then load every chunk
-  // needed to parse it concurrently instead of serially stalling on each 4 MiB.
-  const firstStart = parsed.suffix ? 0 : Math.floor(parsed.start / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
+
+  const startupPrefetch = req.method === 'GET' && !parsed.suffix && parsed.start === 0;
   const prefetched = new Map();
   let headerCacheStatus = 'BYPASS';
   let startupPrefetchCount = 0;
   let startupPrefetchMs = 0;
-  let firstChunk;
-  if (req.method === 'GET' && !parsed.suffix && parsed.start === 0) {
+  let total = 0;
+  let contentType = 'video/mp4';
+  let container = 'unknown';
+  let cacheStatus = 'BYPASS';
+
+  if (startupPrefetch) {
+    // The header probe tells us the MP4 moov boundary. Start all required
+    // chunks concurrently, but do not wait for every chunk before returning
+    // the response: the browser receives chunk zero as soon as it is ready.
     const prefetchStarted = Date.now();
     const header = await getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash);
     headerCacheStatus = header.cacheStatus;
+    total = header.total;
+    contentType = header.contentType;
+    container = header.container;
+
     const moovEnd = header.moovEnd || VIDEO_CHUNK_SIZE;
     const lastRequiredStart = Math.floor(Math.max(0, moovEnd - 1) / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
     const boundedLastStart = Math.min(lastRequiredStart, 7 * VIDEO_CHUNK_SIZE);
     const starts = [];
     for (let chunkStart = 0; chunkStart <= boundedLastStart; chunkStart += VIDEO_CHUNK_SIZE) starts.push(chunkStart);
-    const startupChunks = await Promise.all(starts.map((chunkStart) =>
+
+    const chunkPromises = starts.map((chunkStart) =>
       getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, chunkStart)
-    ));
-    for (const chunk of startupChunks) {
-      if (chunk.unsatisfiedTotal !== undefined) {
-        return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + chunk.unsatisfiedTotal, 'accept-ranges': 'bytes' } });
-      }
-      prefetched.set(chunk.start, chunk);
-    }
-    startupPrefetchCount = startupChunks.length;
+    );
+    for (let i = 0; i < starts.length; i++) prefetched.set(starts[i], chunkPromises[i]);
+
+    // Keep the remaining metadata fills alive if the browser only requests a
+    // small initial range or cancels before reading all of the prefetched data.
+    ctx.waitUntil(Promise.allSettled(chunkPromises));
+    startupPrefetchCount = starts.length;
     startupPrefetchMs = Date.now() - prefetchStarted;
-    firstChunk = prefetched.get(0);
+    cacheStatus = 'PREFETCH';
   } else {
-    firstChunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, firstStart);
+    const firstStart = parsed.suffix ? 0 : Math.floor(parsed.start / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
+    const firstChunk = await getVideoChunk(
+      ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, firstStart
+    );
+    if (firstChunk.unsatisfiedTotal !== undefined) {
+      return new Response(null, {
+        status: 416,
+        headers: { 'content-range': 'bytes */' + firstChunk.unsatisfiedTotal, 'accept-ranges': 'bytes' }
+      });
+    }
+    total = firstChunk.total;
+    contentType = firstChunk.contentType;
+    container = firstChunk.container || 'unknown';
+    cacheStatus = firstChunk.cacheStatus;
+    prefetched.set(firstStart, Promise.resolve(firstChunk));
   }
-  if (firstChunk.unsatisfiedTotal !== undefined) {
-    return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + firstChunk.unsatisfiedTotal, 'accept-ranges': 'bytes' } });
-  }
-  const total = firstChunk.total;
+
   let start, end;
   if (parsed.suffix) {
     start = Math.max(0, total - parsed.suffix);
@@ -645,19 +671,12 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + total, 'accept-ranges': 'bytes' } });
   }
 
-  const firstChunkStart = Math.floor(start / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
-  let first = firstChunkStart === firstChunk.start ? firstChunk : await getVideoChunk(
-    ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, firstChunkStart
-  );
-  if (first.unsatisfiedTotal !== undefined || first.total !== total) throw new Error('Google Drive video size changed during streaming');
   const responseStart = start;
   const responseEnd = end;
   const contentLength = responseEnd - responseStart + 1;
-  const cacheStates = [...prefetched.values()].map((chunk) => chunk.cacheStatus);
-  if (!cacheStates.length) cacheStates.push(first.cacheStatus);
 
   let cursor = responseStart;
-  let chunk = first;
+  let chunk = null;
   const body = new ReadableStream({
     async pull(controller) {
       try {
@@ -667,13 +686,13 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
         }
         const expectedChunkStart = Math.floor(cursor / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
         if (!chunk || chunk.start !== expectedChunkStart) {
-          chunk = prefetched.get(expectedChunkStart) || await getVideoChunk(
-            ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, expectedChunkStart
-          );
+          const pending = prefetched.get(expectedChunkStart);
+          chunk = pending
+            ? await pending
+            : await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, expectedChunkStart);
           if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total) {
             throw new Error('Google Drive video size changed during streaming');
           }
-          if (!prefetched.has(expectedChunkStart)) cacheStates.push(chunk.cacheStatus);
         }
         const from = cursor - chunk.start;
         const through = Math.min(responseEnd, chunk.end) - chunk.start + 1;
@@ -687,7 +706,6 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
       }
     },
     cancel() {
-      // No eager upstream loop exists: canceling stops future chunk fetches.
       chunk = null;
     }
   });
@@ -695,20 +713,17 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   return new Response(body, {
     status: 206,
     headers: {
-      'content-type': first.contentType,
-      'x-moviwatch-container': first.container || 'unknown',
+      'content-type': contentType,
+      'x-moviwatch-container': container,
       'content-length': String(contentLength),
       'content-range': 'bytes ' + responseStart + '-' + responseEnd + '/' + total,
       'accept-ranges': 'bytes',
-      // The Vercel front proxy must never cache a 206 response by URL alone:
-      // Range is part of the representation, while Cloudflare's internal chunk
-      // cache above already handles origin caching safely.
       'cache-control': 'private, no-store, max-age=0',
       'cdn-cache-control': 'no-store',
       'vercel-cdn-cache-control': 'no-store',
       'surrogate-control': 'no-store',
       'vary': 'Range',
-      'x-moviwatch-cache': new Set(cacheStates).size === 1 ? cacheStates[0] : 'PARTIAL',
+      'x-moviwatch-cache': cacheStatus,
       'x-moviwatch-chunk-size': String(VIDEO_CHUNK_SIZE),
       'x-moviwatch-header-cache': headerCacheStatus,
       'x-moviwatch-startup-prefetch-chunks': String(startupPrefetchCount),
