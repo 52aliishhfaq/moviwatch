@@ -69,8 +69,12 @@ const $=s=>document.querySelector(s);
 const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||new URLSearchParams(location.search).get('id')||'');
 const video=$('#video');
 let streamUrl='',mediaContainer='unknown',mediaType='';
+let startupTimer=null,prepareGeneration=0;
 function status(message,error=false){$('#status').textContent=message;$('#status').classList.toggle('error',error)}
 function loading(on){$('#loading').hidden=!on}
+function clearStartupTimer(){if(startupTimer!==null){clearTimeout(startupTimer);startupTimer=null}}
+function showPlayerError(message){clearStartupTimer();loading(false);status(message,true);$('#retry').classList.add('show')}
+function playbackReady(){clearStartupTimer();loading(false);status('');$('#retry').classList.remove('show')}
 function mediaError(){
   const e=video.error;
   let message='Video playback failed.';
@@ -85,9 +89,11 @@ function mediaError(){
   }else if(e?.code===2) message='Network error while downloading the video stream.';
   else if(e?.code===3) message='The browser could not decode this video. The codec may be unsupported or the file may be damaged.';
   else if(e?.code===1) message='Playback was interrupted.';
-  status(message,true);$('#retry').classList.add('show');loading(false);
+  showPlayerError(message);
 }
 async function prepare(){
+  const generation=++prepareGeneration;
+  clearStartupTimer();
   $('#retry').classList.remove('show');loading(true);status('');
   try{
     const catalog=await fetch('/api/movies',{cache:'no-store'});
@@ -122,22 +128,31 @@ async function prepare(){
       downloadList.append(link);
     });
     $('#downloads').hidden=false;
-    // Let the browser begin filling its buffer immediately. The Worker detects
-    // fragmented MP4 files, serves a compact 512 KiB first segment, and primes
-    // the following 4 MiB media segment through Cloudflare's cache.
-    status('Preparing video for fast playback…');
+    // The converter must produce a progressive MP4 with a complete front-loaded
+    // moov index. An empty_moov fragmented file can leave duration unknown and
+    // force the player to scan a very large part of the source before first frame.
+    status('Reading video index and preparing playback…');
     video.preload='auto';
     video.src=streamUrl;
     video.load();
-    loading(false);
-    status('Preparing video for playback…');
+    startupTimer=setTimeout(()=>{
+      if(generation!==prepareGeneration)return;
+      if(!(Number(video.duration)>0)&&video.readyState<1){
+        showPlayerError('Video startup is still waiting for its duration/index. This can happen with an older empty_moov fragmented MP4. Re-convert it with Filmio Smart MP4 Converter V3 (progressive MP4 + faststart), upload the new file to Google Drive, and replace this movie source in Admin.');
+      }
+    },45000);
   }catch(e){
-    loading(false);status(e.message||'Unable to prepare this video.',true);$('#retry').classList.add('show');
+    clearStartupTimer();loading(false);status(e.message||'Unable to prepare this video.',true);$('#retry').classList.add('show');
   }
 }
 video.addEventListener('error',mediaError);
-video.addEventListener('loadedmetadata',()=>{loading(false);status('')});
-video.addEventListener('canplay',()=>{loading(false);status('')});
+video.addEventListener('loadedmetadata',playbackReady);
+video.addEventListener('canplay',playbackReady);
+video.addEventListener('errordisplay',event=>{
+  const detail=event.detail||{};
+  const message=[detail.title,detail.message].filter(Boolean).join(': ')||'Movi Player could not read this video source.';
+  showPlayerError(message);
+});
 video.addEventListener('waiting',()=>{if(!video.paused)status('Buffering the next video segment…')});
 video.addEventListener('playing',()=>status(''));
 $('#retry').addEventListener('click',prepare);

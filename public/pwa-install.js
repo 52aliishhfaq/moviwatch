@@ -2,7 +2,7 @@
 const KEY='moviwatch-install-choice-v1',ua=navigator.userAgent||'';
 const ios=/iPhone|iPad|iPod/i.test(ua)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 const macSafari=/Macintosh/i.test(ua)&&/Safari/i.test(ua)&&!/Chrome|Chromium|Edg|Firefox|OPR/i.test(ua);
-const android=/Android/i.test(ua),edge=/Edg\\//i.test(ua),chromium=/Chrome|Chromium/i.test(ua)||edge,firefox=/Firefox/i.test(ua);
+const android=/Android/i.test(ua),edge=/Edg\//i.test(ua),chromium=/Chrome|Chromium/i.test(ua)||edge,firefox=/Firefox/i.test(ua);
 let promptEvent=null,modal=null,steps=null,primary=null,explained=false;
 const standalone=()=>matchMedia('(display-mode: standalone)').matches||matchMedia('(display-mode: minimal-ui)').matches||navigator.standalone===true;
 const choice=()=>{try{return localStorage.getItem(KEY)||''}catch{return ''}};
