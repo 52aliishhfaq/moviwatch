@@ -211,7 +211,8 @@ async function invalidateContentCaches(ctx, movieId) {
   if (movieId) {
     operations.push(
       ctx.exports.MovieMetadata({ props: { movieId } }).invalidate(movieId),
-      ctx.exports.VideoChunk().invalidate(movieId)
+      ctx.exports.VideoChunk().invalidate(movieId),
+      ctx.exports.VideoHeader().invalidate(movieId)
     );
   }
   const results = await Promise.allSettled(operations);
@@ -337,6 +338,64 @@ async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSource
   return { bytes, start, end, total, contentType, container, cacheStatus };
 }
 
+async function getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash) {
+  const internalUrl = new URL(
+    '/__video_header__/' + encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash,
+    'https://moviwatch.internal'
+  );
+  const headerEntry = ctx.exports.VideoHeader({
+    props: { sourceUrl: source.url, sourceVersion: normalizedSourceVersion }
+  });
+  const response = await headerEntry.fetch(new Request(internalUrl));
+  if (!response.ok) {
+    let detail = 'Video metadata probe failed (HTTP ' + response.status + ')';
+    try {
+      const payload = await response.json();
+      if (typeof payload.error === 'string') detail = payload.error;
+    } catch {}
+    throw new Error(detail);
+  }
+  const payload = await response.json();
+  if (!Number.isSafeInteger(payload.total) || payload.total < 1 ||
+      (payload.moovEnd !== null && (!Number.isSafeInteger(payload.moovEnd) || payload.moovEnd < 0))) {
+    throw new Error('Google Drive returned invalid MP4 metadata');
+  }
+  return {
+    total: payload.total,
+    moovEnd: payload.moovEnd,
+    container: payload.container || 'unknown',
+    cacheStatus: response.headers.get('cf-cache-status') || 'UNKNOWN'
+  };
+}
+
+function mp4MoovEnd(bytes) {
+  // Parse top-level ISO-BMFF boxes from the small cached file-header probe.
+  let offset = 0;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let count = 0; count < 16 && offset + 8 <= bytes.byteLength; count++) {
+    let size = view.getUint32(offset);
+    const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
+    let headerSize = 8;
+    if (size === 1) {
+      if (offset + 16 > bytes.byteLength) return null;
+      const largeSize = view.getBigUint64(offset + 8);
+      if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+      size = Number(largeSize);
+      headerSize = 16;
+    } else if (size === 0) {
+      return null;
+    }
+    if (size < headerSize) return null;
+    if (type === 'moov') {
+      const end = offset + size;
+      return Number.isSafeInteger(end) && end <= 64 * 1024 * 1024 ? end : null;
+    }
+    if (offset + size > bytes.byteLength) return null;
+    offset += size;
+  }
+  return null;
+}
+
 async function fetchAndCacheVideoChunk(source, chunkStart) {
   // Assemble a complete 4 MiB chunk from Drive's contiguous partial 206 responses.
   const requestedEnd = chunkStart + VIDEO_CHUNK_SIZE - 1;
@@ -403,6 +462,60 @@ async function fetchAndCacheVideoChunk(source, chunkStart) {
       ? 'video/mp4' : upstreamType;
 
   return { bytes, start: chunkStart, end: expectedEnd, total, contentType, container };
+}
+
+export class VideoHeader extends WorkerEntrypoint {
+  async fetch(request) {
+    if (request.method !== 'GET') return new Response(null, { status: 405, headers: { allow: 'GET', 'cache-control': 'no-store' } });
+    const match = /^\/__video_header__\/([0-9a-f-]{36})\/(\d+)\/([0-9a-f]{32})$/.exec(new URL(request.url).pathname);
+    if (!match) return json({ error: 'Invalid internal video header request' }, 404);
+    const movieId = match[1];
+    const optionIndex = Number(match[2]);
+    const sourceHash = match[3];
+    const props = this.ctx.props || {};
+    const sourceUrl = props.sourceUrl;
+    const sourceVersion = String(props.sourceVersion || '');
+    if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex > 7 ||
+        typeof sourceUrl !== 'string' || sourceUrl.length > 2048) {
+      return json({ error: 'Invalid internal video header parameters' }, 400);
+    }
+    try {
+      const parsedSource = new URL(sourceUrl);
+      if (parsedSource.protocol !== 'https:' || !allowedDriveHost(parsedSource.hostname)) {
+        return json({ error: 'Unsupported Google Drive video source' }, 400);
+      }
+      const digest = await crypto.subtle.digest('SHA-256', enc.encode(sourceUrl + '|' + sourceVersion));
+      const expectedHash = hex(new Uint8Array(digest)).slice(0, 32);
+      if (expectedHash !== sourceHash) return json({ error: 'Video header cache key did not match its source' }, 400);
+      const upstream = await driveFetch(sourceUrl, 'GET', new Headers({
+        Range: 'bytes=0-255',
+        'Accept-Encoding': 'identity'
+      }));
+      const range = parseContentRange(upstream.headers.get('content-range'));
+      if (upstream.status !== 206 || !range || range.start !== 0 || range.end < 39) {
+        const type = (upstream.headers.get('content-type') || 'unknown').split(';')[0];
+        try { await upstream.body?.cancel(); } catch {}
+        if (type.includes('text/html')) throw new Error('Google Drive returned an HTML permission or quota page instead of video metadata');
+        throw new Error('Google Drive did not return a valid video header (HTTP ' + upstream.status + ')');
+      }
+      const bytes = new Uint8Array(await upstream.arrayBuffer());
+      if (bytes.byteLength !== range.end + 1) throw new Error('Google Drive returned an incomplete video header');
+      const container = sniffVideoContainer(bytes);
+      const moovEnd = container === 'mp4' ? mp4MoovEnd(bytes) : null;
+      return json({ total: range.total, moovEnd, container }, 200, {
+        'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL,
+        'cache-tag': 'video-headers-' + movieId
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Unknown video header error';
+      console.error('Video header probe failed:', detail);
+      return json({ error: detail.slice(0, 300) }, 502);
+    }
+  }
+  async invalidate(movieId) {
+    if (typeof movieId !== 'string' || !/^[0-9a-f-]{36}$/i.test(movieId)) return { success: false };
+    return this.ctx.cache.purge({ tags: ['video-headers-' + movieId] });
+  }
 }
 
 export class VideoChunk extends WorkerEntrypoint {
@@ -483,9 +596,39 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
     : String(sourceVersion || '');
   const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url + '|' + normalizedSourceVersion));
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
-  // A suffix range needs the representation size, so prime/read chunk zero first.
+  // MP4 files in this catalogue carry an 8-12 MiB moov index at the start.
+  // Discover its end using a tiny cached 256-byte probe, then load every chunk
+  // needed to parse it concurrently instead of serially stalling on each 4 MiB.
   const firstStart = parsed.suffix ? 0 : Math.floor(parsed.start / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
-  const firstChunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, firstStart);
+  const prefetched = new Map();
+  let headerCacheStatus = 'BYPASS';
+  let startupPrefetchCount = 0;
+  let startupPrefetchMs = 0;
+  let firstChunk;
+  if (req.method === 'GET' && !parsed.suffix && parsed.start === 0) {
+    const prefetchStarted = Date.now();
+    const header = await getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash);
+    headerCacheStatus = header.cacheStatus;
+    const moovEnd = header.moovEnd || VIDEO_CHUNK_SIZE;
+    const lastRequiredStart = Math.floor(Math.max(0, moovEnd - 1) / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
+    const boundedLastStart = Math.min(lastRequiredStart, 7 * VIDEO_CHUNK_SIZE);
+    const starts = [];
+    for (let chunkStart = 0; chunkStart <= boundedLastStart; chunkStart += VIDEO_CHUNK_SIZE) starts.push(chunkStart);
+    const startupChunks = await Promise.all(starts.map((chunkStart) =>
+      getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, chunkStart)
+    ));
+    for (const chunk of startupChunks) {
+      if (chunk.unsatisfiedTotal !== undefined) {
+        return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + chunk.unsatisfiedTotal, 'accept-ranges': 'bytes' } });
+      }
+      prefetched.set(chunk.start, chunk);
+    }
+    startupPrefetchCount = startupChunks.length;
+    startupPrefetchMs = Date.now() - prefetchStarted;
+    firstChunk = prefetched.get(0);
+  } else {
+    firstChunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, firstStart);
+  }
   if (firstChunk.unsatisfiedTotal !== undefined) {
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + firstChunk.unsatisfiedTotal, 'accept-ranges': 'bytes' } });
   }
@@ -510,7 +653,8 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   const responseStart = start;
   const responseEnd = end;
   const contentLength = responseEnd - responseStart + 1;
-  const cacheStates = [first.cacheStatus];
+  const cacheStates = [...prefetched.values()].map((chunk) => chunk.cacheStatus);
+  if (!cacheStates.length) cacheStates.push(first.cacheStatus);
 
   let cursor = responseStart;
   let chunk = first;
@@ -523,11 +667,13 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
         }
         const expectedChunkStart = Math.floor(cursor / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
         if (!chunk || chunk.start !== expectedChunkStart) {
-          chunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, expectedChunkStart);
+          chunk = prefetched.get(expectedChunkStart) || await getVideoChunk(
+            ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, expectedChunkStart
+          );
           if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total) {
             throw new Error('Google Drive video size changed during streaming');
           }
-          cacheStates.push(chunk.cacheStatus);
+          if (!prefetched.has(expectedChunkStart)) cacheStates.push(chunk.cacheStatus);
         }
         const from = cursor - chunk.start;
         const through = Math.min(responseEnd, chunk.end) - chunk.start + 1;
@@ -563,7 +709,10 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
       'surrogate-control': 'no-store',
       'vary': 'Range',
       'x-moviwatch-cache': new Set(cacheStates).size === 1 ? cacheStates[0] : 'PARTIAL',
-      'x-moviwatch-chunk-size': String(VIDEO_CHUNK_SIZE)
+      'x-moviwatch-chunk-size': String(VIDEO_CHUNK_SIZE),
+      'x-moviwatch-header-cache': headerCacheStatus,
+      'x-moviwatch-startup-prefetch-chunks': String(startupPrefetchCount),
+      'x-moviwatch-startup-prefetch-ms': String(startupPrefetchMs)
     }
   });
 }
