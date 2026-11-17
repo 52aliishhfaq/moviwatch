@@ -13,12 +13,21 @@ assert((config.compatibility_flags || []).includes('enable_ctx_exports'),
 assert(config.cache?.enabled === true, 'Workers Cache must be enabled');
 assert(config.exports?.default?.cache?.enabled === false,
   'The gateway entrypoint must bypass cache lookups');
-for (const name of ['PublicCatalogue', 'MovieMetadata', 'VideoChunk']) {
+for (const name of ['PublicCatalogue', 'MovieMetadata', 'VideoChunk', 'VideoHeader']) {
   assert(config.exports?.[name]?.type === 'worker' && config.exports?.[name]?.cache?.enabled === true,
     name + ' must use a cached Worker entrypoint');
   assert(worker.includes('export class ' + name + ' extends WorkerEntrypoint'),
     name + ' class is missing from src/index.js');
 }
+assert(worker.includes('ctx.exports.VideoHeader({') && worker.includes('await headerEntry.fetch('),
+  'MP4 headers must be fetched through the tiered cached VideoHeader entrypoint');
+assert(worker.includes("Range: 'bytes=0-255'") && worker.includes('mp4MoovEnd(bytes)'),
+  'Startup metadata discovery must use a small byte-range header probe');
+assert(worker.includes('Promise.all(starts.map((chunkStart)') &&
+  worker.includes('startupPrefetchCount'),
+  'MP4 metadata chunks must be prefetched concurrently before playback');
+assert(worker.includes("ctx.exports.VideoHeader().invalidate(movieId)"),
+  'Video header cache must be purged when a movie is edited or deleted');
 assert(worker.includes('ctx.exports.VideoChunk({') && worker.includes('await videoEntry.fetch('),
   'Video chunks must be fetched through the tiered cached entrypoint');
 const videoFetchBody = worker.slice(worker.indexOf('async function getVideoChunk('), worker.indexOf('async function fetchAndCacheVideoChunk('));
