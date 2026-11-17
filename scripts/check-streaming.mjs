@@ -23,9 +23,12 @@ assert(worker.includes('ctx.exports.VideoHeader({') && worker.includes('await he
   'MP4 headers must be fetched through the tiered cached VideoHeader entrypoint');
 assert(worker.includes("Range: 'bytes=0-255'") && worker.includes('mp4MoovEnd(bytes)'),
   'Startup metadata discovery must use a small byte-range header probe');
-assert(worker.includes('Promise.all(starts.map((chunkStart)') &&
-  worker.includes('startupPrefetchCount'),
-  'MP4 metadata chunks must be prefetched concurrently before playback');
+assert(worker.includes('Promise.allSettled(chunkPromises)') &&
+  worker.includes('prefetched.set(starts[i], chunkPromises[i])') &&
+  worker.includes('ctx.waitUntil(Promise.allSettled(chunkPromises))'),
+  'MP4 metadata chunks must be prefetched concurrently and continue filling the cache after early stream completion');
+assert(worker.includes("cacheStatus = 'PREFETCH'") && worker.includes("await pending"),
+  'The initial response must stream the first ready chunk without waiting for every metadata chunk');
 assert(worker.includes("ctx.exports.VideoHeader().invalidate(movieId)"),
   'Video header cache must be purged when a movie is edited or deleted');
 assert(worker.includes('ctx.exports.VideoChunk({') && worker.includes('await videoEntry.fetch('),
