@@ -34,7 +34,7 @@ const install = fs.readFileSync('public/pwa-install.js', 'utf8');
 assert.ok(install.includes('beforeinstallprompt'));
 assert.ok(install.includes('appinstalled'));
 assert.ok(install.includes('moviwatch-install-choice-v1'));
-assert.ok(install.includes(String.raw`edge=/Edg\//i`), 'Edge user-agent regex must use one escaped slash.');
-assert.ok(!install.includes(String.raw`edge=/Edg\\//i`), 'Edge user-agent regex must not be over-escaped.');
+assert.ok(install.includes('edge=/Edg\\//i'), 'Edge user-agent regex must use one escaped slash.');
+assert.ok(!install.includes('edge=/Edg\\\\//i'), 'Edge user-agent regex must not be over-escaped.');
 
 console.log('Validated Moviwatch PWA manifest, icons, 4K logo, install prompt, and streaming-safe service worker.');
