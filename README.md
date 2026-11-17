@@ -7,7 +7,7 @@ A lightweight movie catalogue and streaming backend built with Cloudflare Worker
 - Password-protected admin dashboard at `/admin`.
 - Exactly one application table: `movies`. Multiple video options are stored in one JSONB array.
 - Action and Romantic categories, poster URLs, publish/unpublish, create/edit/delete, search and filtering.
-- Google Drive public-link proxy with HTTP Range forwarding for video seeking, with global tiered Workers Cache for complete 4 MiB chunks.
+- Google Drive public-link proxy with HTTP Range forwarding for video seeking, with tiered Workers Cache for complete 4 MiB chunks. At playback startup, a tiny cached MP4 header probe discovers the moov index size and fetches the required initial chunks in parallel, reducing cold-start buffering.
 - Cloudflare Workers Cache stores the public catalogue, per-movie stream metadata, and complete 4 MiB video chunks through separately cached internal entrypoints. These entries use Cloudflare's tiered Workers Cache; Upstash Redis is used only for admin-login rate limiting.
 - Admin secrets stay in Worker Secrets. Google OAuth Client ID/Secret is not needed for public Drive share links.
 

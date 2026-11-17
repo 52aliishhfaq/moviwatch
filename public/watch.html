@@ -52,8 +52,8 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 <a class="back" href="/">← Back to catalogue</a>
 <div class="heading"><div><h1 id="title">Loading movie…</h1><p class="meta" id="category"></p></div></div>
 <section class="player-shell" aria-label="Movie player">
-  <movi-player id="video" controls playsinline preload="none" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
-  <div id="loading" class="loading"><span class="spinner"></span><span>Checking video stream…</span></div>
+  <movi-player id="video" controls playsinline preload="metadata" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
+  <div id="loading" class="loading"><span class="spinner"></span><span>Preparing video for quick playback…</span></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <button id="retry" class="retry" type="button">Retry stream</button>
 </section>
@@ -122,23 +122,15 @@ async function prepare(){
       downloadList.append(link);
     });
     $('#downloads').hidden=false;
-    status('Checking video source…');
-    const probe=await fetch(streamUrl,{headers:{Range:'bytes=0-1'},cache:'no-store'});
-    if(!probe.ok){
-      let detail='Video server returned HTTP '+probe.status+'.';
-      try{const body=await probe.json();if(body.error)detail=body.error}catch{}
-      throw new Error(detail);
-    }
-    if(probe.status!==206)throw new Error('Video server did not return a valid byte-range response (HTTP '+probe.status+').');
-    mediaContainer=probe.headers.get('x-moviwatch-container')||'unknown';
-    mediaType=probe.headers.get('content-type')||'unknown';
-    const type=mediaType.toLowerCase();
-    if(type.includes('text/html')||type.includes('application/json'))throw new Error('Google Drive returned a web page instead of a video. Set sharing to “Anyone with the link”.');
-    await probe.arrayBuffer();
+    // Let the browser request real media metadata directly. The Worker detects
+    // the first byte-range read, fetches the MP4 index chunks concurrently, and
+    // serves them from the tiered cache. Avoid a separate 2-byte probe here.
+    status('Preparing video metadata…');
+    video.preload='metadata';
     video.src=streamUrl;
     video.load();
     loading(false);
-    status('Stream ready · '+mediaContainer.toUpperCase()+' · '+mediaType+' · Press play');
+    status('Preparing video for playback…');
   }catch(e){
     loading(false);status(e.message||'Unable to prepare this video.',true);$('#retry').classList.add('show');
   }
