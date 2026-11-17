@@ -207,15 +207,21 @@ async function movieById(ctx, env, movieId) {
 }
 
 async function invalidateContentCaches(ctx, movieId) {
-  const operations = [ctx.exports.PublicCatalogue().invalidate()];
+  // Defer each entrypoint factory call into its own promise. Promise.allSettled()
+  // cannot catch a synchronous throw that happens while building an eager array.
+  // A cache-purge problem must never turn an already-committed movie edit into
+  // an HTTP 500 response.
+  const operations = [() => ctx.exports.PublicCatalogue().invalidate()];
   if (movieId) {
     operations.push(
-      ctx.exports.MovieMetadata({ props: { movieId } }).invalidate(movieId),
-      ctx.exports.VideoChunk().invalidate(movieId),
-      ctx.exports.VideoHeader().invalidate(movieId)
+      () => ctx.exports.MovieMetadata({ props: { movieId } }).invalidate(movieId),
+      () => ctx.exports.VideoChunk().invalidate(movieId),
+      () => ctx.exports.VideoHeader().invalidate(movieId)
     );
   }
-  const results = await Promise.allSettled(operations);
+  const results = await Promise.allSettled(
+    operations.map((operation) => Promise.resolve().then(operation))
+  );
   for (const result of results) {
     if (result.status === 'rejected') console.warn('Workers Cache invalidation failed:', result.reason?.message || result.reason);
   }
