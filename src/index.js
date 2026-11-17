@@ -253,6 +253,10 @@ async function driveFetch(source, method, headers) {
 // Video edge cache: store complete 4 MiB byte chunks as cacheable 200 responses.
 // The public response is reconstructed as a standards-compliant 206 response.
 const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024;
+// Fragmented MP4 keeps its initial moov + first media fragments compact.
+// Fetch a smaller first block so playback does not wait for an unnecessary 4 MiB.
+const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024;
+const VIDEO_HEADER_PROBE_SIZE = 16 * 1024;
 const VIDEO_CACHE_TTL = 24 * 60 * 60;
 
 function parseByteRange(value) {
@@ -300,9 +304,9 @@ function parseContentRange(value) {
   return { start, end, total };
 }
 
-async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, chunkStart) {
+async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, chunkStart, chunkSize = VIDEO_CHUNK_SIZE) {
   const internalUrl = new URL(
-    '/__video_chunk__/' + encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash + '/' + chunkStart,
+    '/__video_chunk__/' + encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash + '/' + chunkStart + '/' + chunkSize,
     'https://moviwatch.internal'
   );
   const videoEntry = ctx.exports.VideoChunk({
@@ -332,7 +336,7 @@ async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSource
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
       !Number.isSafeInteger(total) || start !== chunkStart || end < start ||
-      total <= end || bytes.byteLength !== end - start + 1) {
+      total <= end || end > chunkStart + chunkSize - 1 || bytes.byteLength !== end - start + 1) {
     throw new Error('Cloudflare returned an invalid cached video chunk');
   }
   return { bytes, start, end, total, contentType, container, cacheStatus };
@@ -365,6 +369,7 @@ async function getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourc
     moovEnd: payload.moovEnd,
     container: payload.container || 'unknown',
     contentType: payload.contentType || 'video/mp4',
+    fragmented: payload.fragmented === true,
     cacheStatus: response.headers.get('cf-cache-status') || 'UNKNOWN'
   };
 }
@@ -397,9 +402,64 @@ function mp4MoovEnd(bytes) {
   return null;
 }
 
-async function fetchAndCacheVideoChunk(source, chunkStart) {
-  // Assemble a complete 4 MiB chunk from Drive's contiguous partial 206 responses.
-  const requestedEnd = chunkStart + VIDEO_CHUNK_SIZE - 1;
+function mp4HasMvex(bytes) {
+  // A fragmented MP4 has an mvex box as a direct child of its initial moov.
+  // Return false when the complete moov is not present in the tiny probe.
+  let offset = 0;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let count = 0; count < 16 && offset + 8 <= bytes.byteLength; count++) {
+    let size = view.getUint32(offset);
+    const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
+    let headerSize = 8;
+    if (size === 1) {
+      if (offset + 16 > bytes.byteLength) return false;
+      const largeSize = view.getBigUint64(offset + 8);
+      if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return false;
+      size = Number(largeSize);
+      headerSize = 16;
+    } else if (size === 0) return false;
+    if (size < headerSize || offset + size > bytes.byteLength) return false;
+    if (type === 'moov') {
+      const moovEnd = offset + size;
+      let child = offset + headerSize;
+      while (child + 8 <= moovEnd) {
+        let childSize = view.getUint32(child);
+        const childType = String.fromCharCode(bytes[child + 4], bytes[child + 5], bytes[child + 6], bytes[child + 7]);
+        let childHeader = 8;
+        if (childSize === 1) {
+          if (child + 16 > moovEnd) return false;
+          const largeSize = view.getBigUint64(child + 8);
+          if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return false;
+          childSize = Number(largeSize);
+          childHeader = 16;
+        } else if (childSize === 0) return false;
+        if (childSize < childHeader || child + childSize > moovEnd) return false;
+        if (childType === 'mvex') return true;
+        child += childSize;
+      }
+      return false;
+    }
+    offset += size;
+  }
+  return false;
+}
+
+function videoChunkStartForOffset(offset, fragmented) {
+  if (fragmented) {
+    if (offset < VIDEO_FRAGMENT_START_CHUNK_SIZE) return 0;
+    return VIDEO_FRAGMENT_START_CHUNK_SIZE +
+      Math.floor((offset - VIDEO_FRAGMENT_START_CHUNK_SIZE) / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
+  }
+  return Math.floor(offset / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
+}
+
+function videoChunkSizeAt(chunkStart, fragmented) {
+  return fragmented && chunkStart === 0 ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_CHUNK_SIZE;
+}
+
+async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHUNK_SIZE) {
+  // Assemble a complete cache segment from Drive's contiguous partial 206 responses.
+  const requestedEnd = chunkStart + chunkSize - 1;
   const pieces = [];
   let cursor = chunkStart;
   let total = null;
@@ -489,7 +549,7 @@ export class VideoHeader extends WorkerEntrypoint {
       const expectedHash = hex(new Uint8Array(digest)).slice(0, 32);
       if (expectedHash !== sourceHash) return json({ error: 'Video header cache key did not match its source' }, 400);
       const upstream = await driveFetch(sourceUrl, 'GET', new Headers({
-        Range: 'bytes=0-255',
+        Range: 'bytes=0-' + (VIDEO_HEADER_PROBE_SIZE - 1),
         'Accept-Encoding': 'identity'
       }));
       const range = parseContentRange(upstream.headers.get('content-range'));
@@ -503,13 +563,14 @@ export class VideoHeader extends WorkerEntrypoint {
       if (bytes.byteLength !== range.end + 1) throw new Error('Google Drive returned an incomplete video header');
       const container = sniffVideoContainer(bytes);
       const moovEnd = container === 'mp4' ? mp4MoovEnd(bytes) : null;
+      const fragmented = container === 'mp4' && mp4HasMvex(bytes);
       const upstreamType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
       const contentType = container === 'mp4' ? 'video/mp4' :
         container === 'webm' ? 'video/webm' :
         container === 'mkv' ? 'video/x-matroska' :
         (!upstreamType || upstreamType === 'application/octet-stream' || upstreamType === 'binary/octet-stream')
           ? 'video/mp4' : upstreamType;
-      return json({ total: range.total, moovEnd, container, contentType }, 200, {
+      return json({ total: range.total, moovEnd, container, contentType, fragmented }, 200, {
         'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL,
         'cache-tag': 'video-headers-' + movieId
       });
@@ -528,18 +589,25 @@ export class VideoHeader extends WorkerEntrypoint {
 export class VideoChunk extends WorkerEntrypoint {
   async fetch(request) {
     if (request.method !== 'GET') return new Response(null, { status: 405, headers: { allow: 'GET', 'cache-control': 'no-store' } });
-    const match = /^\/__video_chunk__\/([0-9a-f-]{36})\/(\d+)\/([0-9a-f]{32})\/(\d+)$/.exec(new URL(request.url).pathname);
+    const match = /^\/__video_chunk__\/([0-9a-f-]{36})\/(\d+)\/([0-9a-f]{32})\/(\d+)\/(\d+)$/.exec(new URL(request.url).pathname);
     if (!match) return json({ error: 'Invalid internal video chunk request' }, 404);
     const movieId = match[1];
     const optionIndex = Number(match[2]);
     const sourceHash = match[3];
     const chunkStart = Number(match[4]);
+    const chunkSize = Number(match[5]);
     const props = this.ctx.props || {};
     const sourceUrl = props.sourceUrl;
     const sourceVersion = String(props.sourceVersion || '');
 
+    const alignedStandardChunk = chunkSize === VIDEO_CHUNK_SIZE &&
+      (chunkStart % VIDEO_CHUNK_SIZE === 0 ||
+        (chunkStart >= VIDEO_FRAGMENT_START_CHUNK_SIZE &&
+          (chunkStart - VIDEO_FRAGMENT_START_CHUNK_SIZE) % VIDEO_CHUNK_SIZE === 0));
+    const initialFragmentChunk = chunkStart === 0 && chunkSize === VIDEO_FRAGMENT_START_CHUNK_SIZE;
     if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex > 7 ||
-        !Number.isSafeInteger(chunkStart) || chunkStart < 0 || chunkStart % VIDEO_CHUNK_SIZE !== 0 ||
+        !Number.isSafeInteger(chunkStart) || chunkStart < 0 ||
+        !(alignedStandardChunk || initialFragmentChunk) ||
         typeof sourceUrl !== 'string' || sourceUrl.length > 2048) {
       return json({ error: 'Invalid internal video chunk parameters' }, 400);
     }
@@ -553,7 +621,7 @@ export class VideoChunk extends WorkerEntrypoint {
       const expectedHash = hex(new Uint8Array(digest)).slice(0, 32);
       if (expectedHash !== sourceHash) return json({ error: 'Video cache key did not match its source' }, 400);
 
-      const result = await fetchAndCacheVideoChunk({ url: sourceUrl }, chunkStart);
+      const result = await fetchAndCacheVideoChunk({ url: sourceUrl }, chunkStart, chunkSize);
       if (result.unsatisfiedTotal !== undefined) {
         return new Response(null, {
           status: 416,
@@ -603,61 +671,20 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url + '|' + normalizedSourceVersion));
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
 
+  // The cached header probe identifies fragmented MP4 for every range request,
+  // including seeks. This keeps the short first segment and the 4 MiB segments
+  // after it aligned for both playback and seeking.
+  const header = await getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash);
+  const fragmented = header.fragmented === true;
+  const total = header.total;
+  const container = header.container || 'unknown';
+  const contentType = header.contentType || 'video/mp4';
+  const headerCacheStatus = header.cacheStatus;
   const startupPrefetch = req.method === 'GET' && !parsed.suffix && parsed.start === 0;
   const prefetched = new Map();
-  let headerCacheStatus = 'BYPASS';
   let startupPrefetchCount = 0;
   let startupPrefetchMs = 0;
-  let total = 0;
-  let contentType = 'video/mp4';
-  let container = 'unknown';
   let cacheStatus = 'BYPASS';
-
-  if (startupPrefetch) {
-    // The header probe tells us the MP4 moov boundary. Start all required
-    // chunks concurrently, but do not wait for every chunk before returning
-    // the response: the browser receives chunk zero as soon as it is ready.
-    const prefetchStarted = Date.now();
-    const header = await getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash);
-    headerCacheStatus = header.cacheStatus;
-    total = header.total;
-    contentType = header.contentType;
-    container = header.container;
-
-    const moovEnd = header.moovEnd || VIDEO_CHUNK_SIZE;
-    const lastRequiredStart = Math.floor(Math.max(0, moovEnd - 1) / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
-    const boundedLastStart = Math.min(lastRequiredStart, 7 * VIDEO_CHUNK_SIZE);
-    const starts = [];
-    for (let chunkStart = 0; chunkStart <= boundedLastStart; chunkStart += VIDEO_CHUNK_SIZE) starts.push(chunkStart);
-
-    const chunkPromises = starts.map((chunkStart) =>
-      getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, chunkStart)
-    );
-    for (let i = 0; i < starts.length; i++) prefetched.set(starts[i], chunkPromises[i]);
-
-    // Keep the remaining metadata fills alive if the browser only requests a
-    // small initial range or cancels before reading all of the prefetched data.
-    ctx.waitUntil(Promise.allSettled(chunkPromises));
-    startupPrefetchCount = starts.length;
-    startupPrefetchMs = Date.now() - prefetchStarted;
-    cacheStatus = 'PREFETCH';
-  } else {
-    const firstStart = parsed.suffix ? 0 : Math.floor(parsed.start / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
-    const firstChunk = await getVideoChunk(
-      ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, firstStart
-    );
-    if (firstChunk.unsatisfiedTotal !== undefined) {
-      return new Response(null, {
-        status: 416,
-        headers: { 'content-range': 'bytes */' + firstChunk.unsatisfiedTotal, 'accept-ranges': 'bytes' }
-      });
-    }
-    total = firstChunk.total;
-    contentType = firstChunk.contentType;
-    container = firstChunk.container || 'unknown';
-    cacheStatus = firstChunk.cacheStatus;
-    prefetched.set(firstStart, Promise.resolve(firstChunk));
-  }
 
   let start, end;
   if (parsed.suffix) {
@@ -671,10 +698,54 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + total, 'accept-ranges': 'bytes' } });
   }
 
+  if (startupPrefetch) {
+    const prefetchStarted = Date.now();
+    // Load the compact fMP4 first segment and the following 4 MiB media
+    // segment concurrently. For conventional MP4, retain 4 MiB-aligned chunks
+    // and prefetch every chunk required to reach the moov index.
+    const starts = [];
+    let nextStart = 0;
+    const moovEnd = header.moovEnd || VIDEO_CHUNK_SIZE;
+    while (nextStart < moovEnd && starts.length < 8) {
+      starts.push(nextStart);
+      nextStart += videoChunkSizeAt(nextStart, fragmented);
+    }
+    if (!starts.length) starts.push(0);
+    if (fragmented && starts.length < 9 && VIDEO_FRAGMENT_START_CHUNK_SIZE < total) {
+      starts.push(VIDEO_FRAGMENT_START_CHUNK_SIZE);
+    }
+
+    const chunkPromises = starts.map((chunkStart) =>
+      getVideoChunk(
+        ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
+        chunkStart, videoChunkSizeAt(chunkStart, fragmented)
+      )
+    );
+    for (let i = 0; i < starts.length; i++) prefetched.set(starts[i], chunkPromises[i]);
+    ctx.waitUntil(Promise.allSettled(chunkPromises));
+    startupPrefetchCount = starts.length;
+    startupPrefetchMs = Date.now() - prefetchStarted;
+    cacheStatus = 'PREFETCH';
+  } else {
+    const firstStart = videoChunkStartForOffset(start, fragmented);
+    const firstChunk = await getVideoChunk(
+      ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
+      firstStart, videoChunkSizeAt(firstStart, fragmented)
+    );
+    if (firstChunk.unsatisfiedTotal !== undefined) {
+      return new Response(null, {
+        status: 416,
+        headers: { 'content-range': 'bytes */' + firstChunk.unsatisfiedTotal, 'accept-ranges': 'bytes' }
+      });
+    }
+    if (firstChunk.total !== total) throw new Error('Google Drive video size changed during streaming');
+    cacheStatus = firstChunk.cacheStatus;
+    prefetched.set(firstStart, Promise.resolve(firstChunk));
+  }
+
   const responseStart = start;
   const responseEnd = end;
   const contentLength = responseEnd - responseStart + 1;
-
   let cursor = responseStart;
   let chunk = null;
   const body = new ReadableStream({
@@ -684,12 +755,15 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
           controller.close();
           return;
         }
-        const expectedChunkStart = Math.floor(cursor / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
+        const expectedChunkStart = videoChunkStartForOffset(cursor, fragmented);
         if (!chunk || chunk.start !== expectedChunkStart) {
           const pending = prefetched.get(expectedChunkStart);
           chunk = pending
             ? await pending
-            : await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, expectedChunkStart);
+            : await getVideoChunk(
+                ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
+                expectedChunkStart, videoChunkSizeAt(expectedChunkStart, fragmented)
+              );
           if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total) {
             throw new Error('Google Drive video size changed during streaming');
           }
@@ -715,6 +789,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
     headers: {
       'content-type': contentType,
       'x-moviwatch-container': container,
+      'x-moviwatch-fragmented': String(fragmented),
       'content-length': String(contentLength),
       'content-range': 'bytes ' + responseStart + '-' + responseEnd + '/' + total,
       'accept-ranges': 'bytes',
@@ -725,6 +800,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
       'vary': 'Range',
       'x-moviwatch-cache': cacheStatus,
       'x-moviwatch-chunk-size': String(VIDEO_CHUNK_SIZE),
+      'x-moviwatch-startup-chunk-size': String(videoChunkSizeAt(0, fragmented)),
       'x-moviwatch-header-cache': headerCacheStatus,
       'x-moviwatch-startup-prefetch-chunks': String(startupPrefetchCount),
       'x-moviwatch-startup-prefetch-ms': String(startupPrefetchMs)
