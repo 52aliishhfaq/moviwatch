@@ -47,6 +47,12 @@
       "cache": {
         "enabled": true
       }
+    },
+    "VideoHeader": {
+      "type": "worker",
+      "cache": {
+        "enabled": true
+      }
     }
   }
 }
