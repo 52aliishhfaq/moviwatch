@@ -28,6 +28,12 @@ assert(worker.includes('Promise.all(starts.map((chunkStart)') &&
   'MP4 metadata chunks must be prefetched concurrently before playback');
 assert(worker.includes("ctx.exports.VideoHeader().invalidate(movieId)"),
   'Video header cache must be purged when a movie is edited or deleted');
+const invalidationBody = worker.slice(
+  worker.indexOf('async function invalidateContentCaches('),
+  worker.indexOf('\nfunction allowedDriveHost', worker.indexOf('async function invalidateContentCaches('))
+);
+assert(invalidationBody.includes('operations.map((operation) => Promise.resolve().then(operation))'),
+  'Cache invalidation must capture synchronous entrypoint-factory errors so committed movie edits do not return HTTP 500');
 assert(worker.includes('ctx.exports.VideoChunk({') && worker.includes('await videoEntry.fetch('),
   'Video chunks must be fetched through the tiered cached entrypoint');
 const videoFetchBody = worker.slice(worker.indexOf('async function getVideoChunk('), worker.indexOf('async function fetchAndCacheVideoChunk('));
