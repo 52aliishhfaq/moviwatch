@@ -21,21 +21,34 @@ for (const name of ['PublicCatalogue', 'MovieMetadata', 'VideoChunk', 'VideoHead
 }
 assert(worker.includes('ctx.exports.VideoHeader({') && worker.includes('await headerEntry.fetch('),
   'MP4 headers must be fetched through the tiered cached VideoHeader entrypoint');
-assert(worker.includes("Range: 'bytes=0-255'") && worker.includes('mp4MoovEnd(bytes)'),
-  'Startup metadata discovery must use a small byte-range header probe');
-assert(worker.includes('Promise.allSettled(chunkPromises)') &&
-  worker.includes('prefetched.set(starts[i], chunkPromises[i])') &&
-  worker.includes('ctx.waitUntil(Promise.allSettled(chunkPromises))'),
-  'MP4 metadata chunks must be prefetched concurrently and continue filling the cache after early stream completion');
-assert(worker.includes("cacheStatus = 'PREFETCH'") && worker.includes("await pending"),
-  'The initial response must stream the first ready chunk without waiting for every metadata chunk');
+assert(worker.includes("Range: 'bytes=0-' + (VIDEO_HEADER_PROBE_SIZE - 1)") &&
+  worker.includes('VIDEO_HEADER_PROBE_SIZE = 16 * 1024') &&
+  worker.includes('mp4MoovEnd(bytes)') && worker.includes('mp4HasMvex(bytes)'),
+  'The header probe must detect moov size and fragmented MP4 metadata');
+assert(worker.includes('VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024') &&
+  worker.includes('videoChunkStartForOffset(offset, fragmented)') &&
+  worker.includes('videoChunkSizeAt(chunkStart, fragmented)'),
+  'Fragmented MP4 must use a small first segment and 4 MiB follow-up segments');
+assert(worker.includes('prefetched.set(starts[i], chunkPromises[i])') &&
+  worker.includes('ctx.waitUntil(Promise.allSettled(chunkPromises))') &&
+  worker.includes("cacheStatus = 'PREFETCH'"),
+  'Startup and next-segment cache fills must run concurrently in the background');
+assert(worker.includes('const pending = prefetched.get(expectedChunkStart)') &&
+  worker.includes('? await pending'),
+  'The stream must await only the chunk currently needed by the browser');
+assert(worker.includes("'x-moviwatch-fragmented': String(fragmented)") &&
+  worker.includes("'x-moviwatch-startup-chunk-size': String(videoChunkSizeAt(0, fragmented))"),
+  'Streaming diagnostics must disclose the detected format and startup segment size');
 assert(worker.includes("ctx.exports.VideoHeader().invalidate(movieId)"),
   'Video header cache must be purged when a movie is edited or deleted');
 assert(worker.includes('ctx.exports.VideoChunk({') && worker.includes('await videoEntry.fetch('),
   'Video chunks must be fetched through the tiered cached entrypoint');
-const videoFetchBody = worker.slice(worker.indexOf('async function getVideoChunk('), worker.indexOf('async function fetchAndCacheVideoChunk('));
-assert(videoFetchBody.includes('sourceVersion: normalizedSourceVersion') && !videoFetchBody.includes('String(sourceVersion'),
-  'Video cache entrypoint must receive the normalized source version without an undefined variable');
+const videoFetchBody = worker.slice(worker.indexOf('async function getVideoChunk('), worker.indexOf('async function getVideoHeader('));
+assert(videoFetchBody.includes('sourceVersion: normalizedSourceVersion') &&
+  videoFetchBody.includes("chunkStart + '/' + chunkSize"),
+  'Video cache entrypoint must receive normalized source metadata and chunk-size-aware cache keys');
+assert(worker.includes('fetchAndCacheVideoChunk({ url: sourceUrl }, chunkStart, chunkSize)'),
+  'Chunk fill must use the requested adaptive segment size');
 assert(worker.includes('ctx.exports.MovieMetadata({ props: { movieId } })') &&
   worker.includes('ctx.exports.PublicCatalogue({ props: { category, query } })'),
   'Loopback entrypoints must receive props using the documented binding factory');
@@ -51,8 +64,9 @@ assert(worker.includes("host === 'accounts.google.com'") &&
   'Private Google Drive redirects must return a clear sharing-permission error');
 assert(worker.includes('sourceVersion instanceof Date') && worker.includes('normalizedSourceVersion'),
   'Source version must be normalized before it crosses the entrypoint boundary');
-assert(/getVideoChunk\(\s*ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, firstChunkStart/.test(worker),
-  'Suffix ranges must fetch their second chunk with the correct cache context');
+assert(worker.includes("const expectedChunkStart = videoChunkStartForOffset(cursor, fragmented)") &&
+  worker.includes("videoChunkSizeAt(expectedChunkStart, fragmented)"),
+  'Every byte range, including a seek or suffix range, must map to the correct adaptive segment');
 assert(!worker.includes('const response = await cachedVideoRange(req, source, watch[3]'),
   'Unreachable duplicate watch streaming code must be removed');
 assert(worker.includes("'cache-tag': 'video-chunks-' + movieId"),
@@ -61,7 +75,7 @@ assert(!worker.includes('caches.default') && !worker.includes('inflightVideoChun
   'The old local-only Cache API chunk cache must be removed');
 assert(!/method\s*:\s*['"]HEAD['"]/.test(watch),
   'Watch page must not make eager HEAD requests on page load');
-assert(!watch.includes("Range:'bytes=0-1'") && watch.includes('preload="metadata"'),
-  'Watch page must avoid a redundant 2-byte preflight and let the browser request metadata');
+assert(!watch.includes("Range:'bytes=0-1'") && watch.includes('preload="auto"'),
+  'The player must use browser-managed eager preload without a redundant probe');
 
-console.log('Validated tiered cache entrypoints, cache purging, and lazy download metadata.');
+console.log('Validated adaptive fMP4 startup, 4 MiB continuation, range-seek mapping, and cache entrypoints.');
