@@ -52,7 +52,7 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 <a class="back" href="/">← Back to catalogue</a>
 <div class="heading"><div><h1 id="title">Loading movie…</h1><p class="meta" id="category"></p></div></div>
 <section class="player-shell" aria-label="Movie player">
-  <movi-player id="video" controls playsinline preload="metadata" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
+  <movi-player id="video" controls playsinline preload="auto" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
   <div id="loading" class="loading"><span class="spinner"></span><span>Preparing video for quick playback…</span></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <button id="retry" class="retry" type="button">Retry stream</button>
@@ -122,11 +122,11 @@ async function prepare(){
       downloadList.append(link);
     });
     $('#downloads').hidden=false;
-    // Let the browser request real media metadata directly. The Worker detects
-    // the first byte-range read, fetches the MP4 index chunks concurrently, and
-    // serves them from the tiered cache. Avoid a separate 2-byte probe here.
-    status('Preparing video metadata…');
-    video.preload='metadata';
+    // Let the browser begin filling its buffer immediately. The Worker detects
+    // fragmented MP4 files, serves a compact 512 KiB first segment, and primes
+    // the following 4 MiB media segment through Cloudflare's cache.
+    status('Preparing video for fast playback…');
+    video.preload='auto';
     video.src=streamUrl;
     video.load();
     loading(false);
@@ -137,6 +137,9 @@ async function prepare(){
 }
 video.addEventListener('error',mediaError);
 video.addEventListener('loadedmetadata',()=>{loading(false);status('')});
+video.addEventListener('canplay',()=>{loading(false);status('')});
+video.addEventListener('waiting',()=>{if(!video.paused)status('Buffering the next video segment…')});
+video.addEventListener('playing',()=>status(''));
 $('#retry').addEventListener('click',prepare);
 prepare();
 </script>
