@@ -53,7 +53,7 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 <div class="heading"><div><h1 id="title">Loading movie…</h1><p class="meta" id="category"></p></div></div>
 <section class="player-shell" aria-label="Movie player">
   <movi-player id="video" controls playsinline preload="none" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
-  <div id="loading" class="loading"><span class="spinner"></span><span>Checking video stream…</span></div>
+  <div id="loading" class="loading"><span class="spinner"></span><span>Preparing video for quick playback…</span></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <button id="retry" class="retry" type="button">Retry stream</button>
 </section>
@@ -122,7 +122,7 @@ async function prepare(){
       downloadList.append(link);
     });
     $('#downloads').hidden=false;
-    status('Checking video source…');
+    status('Preparing video metadata…');
     const probe=await fetch(streamUrl,{headers:{Range:'bytes=0-1'},cache:'no-store'});
     if(!probe.ok){
       let detail='Video server returned HTTP '+probe.status+'.';
@@ -138,7 +138,7 @@ async function prepare(){
     video.src=streamUrl;
     video.load();
     loading(false);
-    status('Stream ready · '+mediaContainer.toUpperCase()+' · '+mediaType+' · Press play');
+    status('Ready to play · '+mediaContainer.toUpperCase()+' · '+mediaType);
   }catch(e){
     loading(false);status(e.message||'Unable to prepare this video.',true);$('#retry').classList.add('show');
   }
