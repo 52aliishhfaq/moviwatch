@@ -58,7 +58,7 @@ assert(!worker.includes('caches.default') && !worker.includes('inflightVideoChun
   'The old local-only Cache API chunk cache must be removed');
 assert(!/method\s*:\s*['"]HEAD['"]/.test(watch),
   'Watch page must not make eager HEAD requests on page load');
-assert(watch.includes("Range:'bytes=0-1'"),
-  'Watch page must retain the small stream readiness probe');
+assert(!watch.includes("Range:'bytes=0-1'") && watch.includes('preload="metadata"'),
+  'Watch page must avoid a redundant 2-byte preflight and let the browser request metadata');
 
 console.log('Validated tiered cache entrypoints, cache purging, and lazy download metadata.');
