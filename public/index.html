@@ -120,21 +120,6 @@ main{width:min(calc(100% - 44px),var(--content));margin:0 auto;padding:24px 0 80
   </div>
 </div>
 <main>
-  <section id="featured" class="featured" aria-label="Featured movie" hidden>
-    <img id="featuredPoster" class="featured-poster" alt="" aria-hidden="true">
-    <div class="featured-content">
-      <p class="eyebrow"><span class="eyebrow-dot"></span><span id="featuredEyebrow">Featured movie</span></p>
-      <h1 id="featuredTitle" class="featured-title"></h1>
-      <p id="featuredMeta" class="featured-meta"></p>
-      <div class="featured-actions">
-        <a id="featuredWatch" class="primary-cta" href="#">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
-          Watch now
-        </a>
-        <a class="secondary-cta" href="#catalogue">Explore movies</a>
-      </div>
-    </div>
-  </section>
   <section id="catalogue" aria-labelledby="catalogueTitle">
     <div class="section-heading">
       <div>
@@ -190,19 +175,7 @@ function filteredMovies(){
   const query=searchInput.value.trim().toLocaleLowerCase();
   return allMovies.filter(movie=>(activeCategory==='All'||movie.category===activeCategory)&&(!query||(movie.title||'').toLocaleLowerCase().includes(query)));
 }
-function setFeatured(movie){
-  const section=$('#featured');
-  if(!movie){section.hidden=true;return}
-  section.hidden=false;
-  const image=$('#featuredPoster');
-  image.onerror=()=>{image.style.display='none'};
-  image.onload=()=>{image.style.display='block'};
-  image.src=movie.poster_url||'';
-  $('#featuredEyebrow').textContent=activeCategory==='All'?'Featured movie':'Featured in '+activeCategory;
-  $('#featuredTitle').textContent=movie.title||'Untitled movie';
-  $('#featuredMeta').textContent=(movie.category||'Movie')+' · Now available on Moviwatch';
-  $('#featuredWatch').href=watchPath(movie.id);
-}
+function setFeatured(){ /* The catalogue now opens directly; no oversized hero banner. */ }
 function renderCatalogue(){
   const rows=filteredMovies();
   const query=searchInput.value.trim();
@@ -241,7 +214,6 @@ async function loadMovies(){
     buildCategories();renderCatalogue();
   }catch(error){
     setState('Could not load movies',error.message||'Please check your connection and try again.',{label:'Try again',run:loadMovies});
-    $('#featured').hidden=true;
     $('#catalogueSubtitle').textContent='Your movie catalogue is temporarily unavailable.';
     $('#movieCount').textContent='';
   }
