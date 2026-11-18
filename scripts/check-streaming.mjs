@@ -84,7 +84,8 @@ assert(worker.includes('function sourceProvider(input)') && worker.includes("pro
 assert(admin.includes('id="archiveUrl"') &&
   admin.includes('Primary video URL — Archive.org link powers both streaming and download') &&
   admin.includes('stores this URL once and uses the same file for playback and Download Now') &&
-  admin.includes("$('#archiveUrl').value=allSources[0]?.url||''") &&
+  admin.includes('const archiveSource=allSources.find(isArchive)') &&
+  admin.includes("$('#archiveUrl').value=archiveSource?.url||''") &&
   admin.includes("const videoSources=[{label:'Primary',url:primaryUrl},...extraSources]"),
   'Admin must save one primary Archive.org URL as the shared streaming and download source');
 assert(admin.includes('Doodstream / PlayMogo embeds play directly') &&
