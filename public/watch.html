@@ -89,10 +89,10 @@ function playSource(index,resume=false){
     const frame=document.createElement('iframe');
     frame.src=source.embed_url;
     frame.title='Doodstream hosted video';
-    frame.allow='autoplay; fullscreen; picture-in-picture; encrypted-media';
+    frame.allow='autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write';
     frame.allowFullscreen=true;
     frame.referrerPolicy='strict-origin-when-cross-origin';
-    frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-presentation allow-forms');
+    // Do not sandbox hosted video providers: their player scripts, popups, and media APIs may be required.
     frame.addEventListener('load',()=>{
       clearStartupTimer();loading(false);status('Doodstream player loaded. Use its playback controls.');
       $('#retry').classList.remove('show');
