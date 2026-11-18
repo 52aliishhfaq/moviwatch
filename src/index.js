@@ -201,7 +201,7 @@ export class PublicCatalogue extends WorkerEntrypoint {
           label: source.label || 'Play',
           provider: source.provider || 'google-drive',
           // Only hosted-player URLs are public; direct Drive/Archive URLs stay server-side.
-          embed_url: source.provider === 'doodstream' ? source.url : null
+          embed_url: source.provider === 'doodstream' ? source.embed_url : null
         }))
       }))
     };
