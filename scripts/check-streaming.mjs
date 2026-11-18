@@ -113,13 +113,21 @@ assert(watch.includes('id="doodstreamStage"') && watch.includes("source?.provide
 assert(watch.includes('Connecting to the V6 stream and loading the first media fragment…') &&
   watch.includes('},30000);') && watch.includes('supports byte ranges'),
   'The player must use metadata-first V6 playback and a bounded startup watchdog');
+assert(worker.includes('function playMogoDownloadUrl(input)') &&
+  worker.includes("return url.origin + '/d/' + match[1]") &&
+  worker.includes("download_url: source.provider === 'doodstream' ? playMogoDownloadUrl(source.embed_url) : null"),
+  'A validated PlayMogo /e/ embed URL must generate the matching /d/ URL for the same video ID');
 assert(watch.includes('id="downloadNowPanel"') && watch.includes('id="downloadNow"') &&
-  watch.includes("'/api/download/'+encodeURIComponent(movieId)+'/'+index") &&
-  watch.includes("['google-drive','archive.org'].includes(source.provider)") &&
-  watch.includes("unavailable.hidden=false") &&
+  watch.includes("source.download_url") &&
+  watch.includes("source.provider==='doodstream'") &&
+  watch.includes("source.download_url") &&
+  watch.includes("link.target='_blank'") &&
   watch.includes("Download Dual Audio Movie English + Hindi") &&
-  watch.includes("This source is a hosted PlayMogo/Doodstream player, not a downloadable video file."),
-  'The single Download Now action must use the selected authorized direct-file source and must not pretend a hosted embed is downloadable');
+  watch.includes("Opens PlayMogo’s download page for this exact video."),
+  'Download Now must open the matching PlayMogo download route when a validated PlayMogo embed is selected');
+assert(watch.includes("'/api/download/'+encodeURIComponent(movieId)+'/'+index") &&
+  watch.includes("['google-drive','archive.org'].includes(source.provider)"),
+  'Google Drive and Archive.org must keep their existing download route');
 assert(!watch.includes('id="doodstreamFallback"') && !watch.includes('id="playerToolbar"') &&
   !watch.includes('id="sourceSelect"') && !watch.includes('id="downloads"') &&
   !watch.includes('Open hosted player directly') && !watch.includes('Choose playback quality'),
