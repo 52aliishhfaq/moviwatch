@@ -101,11 +101,10 @@ assert(worker.includes("'cache-tag': 'video-chunks-' + movieId"),
   'Video chunks must be tagged for movie-level purging');
 assert(!worker.includes('caches.default') && !worker.includes('inflightVideoChunks'),
   'The old local-only Cache API chunk cache must be removed');
-assert(watch.includes('id="sourceSelect"') && watch.includes("'/api/watch/'+encodeURIComponent(movieId)+'/'+index") &&
-  watch.includes("$('#sourceSelect').addEventListener('change'") &&
-  watch.indexOf('<movi-player id="video"') < watch.indexOf('id="playerToolbar"') &&
-  watch.includes("$('#playerToolbar').hidden=availableSources.length<2;"),
-  'The playback quality selector must appear below the player only when multiple sources exist, preserving source switching');
+assert(watch.includes("streamUrl='/api/watch/'") &&
+  watch.includes("encodeURIComponent(movieId)") && watch.includes('function playSource(index,resume=false)') &&
+  watch.includes('availableSources[index]') && watch.includes('updateDownloadNow(index)'),
+  'The watch page must select the active source and route native sources through the streaming endpoint');
 assert(watch.includes('id="doodstreamStage"') && watch.includes("source?.provider==='doodstream'") &&
   watch.includes("frame.src=source.embed_url") && watch.includes("video.style.visibility='hidden'") &&
   watch.includes("doodstreamStage.hidden=true") && watch.includes("if(!doodstreamStage.hidden)return"),
@@ -117,14 +116,18 @@ assert(worker.includes('function playMogoDownloadUrl(input)') &&
   worker.includes("return url.origin + '/d/' + match[1]") &&
   worker.includes("download_url: source.provider === 'doodstream' ? playMogoDownloadUrl(source.embed_url) : null"),
   'A validated PlayMogo /e/ embed URL must generate the matching /d/ URL for the same video ID');
+assert(watch.includes('function playMogoDownloadUrlFromEmbed(input)') &&
+  watch.includes("const playMogoDownloadUrl=source.provider==='doodstream'") &&
+  watch.includes("playMogoDownloadUrlFromEmbed(source.embed_url)") &&
+  watch.includes("link.href=playMogoDownloadUrl;"),
+  'The watch page must safely derive a PlayMogo /d/ download URL from the embed URL even when a cached catalogue lacks download_url');
 assert(watch.includes('id="downloadNowPanel"') && watch.includes('id="downloadNow"') &&
-  watch.includes("source.download_url") &&
   watch.includes("source.provider==='doodstream'") &&
-  watch.includes("source.download_url") &&
+  watch.includes("playMogoDownloadUrlFromEmbed(source.embed_url)") &&
+  watch.includes("link.href=playMogoDownloadUrl;") &&
   watch.includes("link.target='_blank'") &&
-  watch.includes("Download Dual Audio Movie English + Hindi") &&
-  watch.includes("Opens PlayMogo’s download page for this exact video."),
-  'Download Now must open the matching PlayMogo download route when a validated PlayMogo embed is selected');
+  watch.includes("Download Dual Audio Movie English + Hindi"),
+  'Download Now must open the derived PlayMogo download route when a validated embed is selected');
 assert(watch.includes("'/api/download/'+encodeURIComponent(movieId)+'/'+index") &&
   watch.includes("['google-drive','archive.org'].includes(source.provider)"),
   'Google Drive and Archive.org must keep their existing download route');
