@@ -88,7 +88,7 @@ assert(worker.includes("'embed_url', CASE WHEN item.value->>'provider'='doodstre
   worker.includes("source.provider === 'doodstream'"),
   'Only Doodstream embed URLs may be exposed publicly, and Doodstream must bypass MP4 range/download proxying');
 assert(worker.includes("provider: source.provider || 'google-drive'") &&
-  worker.includes("embed_url: source.provider === 'doodstream' ? source.url : null"),
+  worker.includes("embed_url: source.provider === 'doodstream' ? source.embed_url : null"),
   'The public catalogue must retain provider metadata and only expose hosted-player embed URLs, otherwise the watch page misroutes embeds to /api/watch');
 assert(worker.includes('sourceVersion instanceof Date') && worker.includes('normalizedSourceVersion'),
   'Source version must be normalized before it crosses the entrypoint boundary');
