@@ -770,6 +770,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
                 ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
                 expectedChunkStart, videoChunkSizeAt(expectedChunkStart, fragmented)
               );
+          prefetched.delete(expectedChunkStart);
           if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total) {
             throw new Error('Google Drive video size changed during streaming');
           }
