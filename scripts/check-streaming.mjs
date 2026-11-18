@@ -117,6 +117,11 @@ assert(worker.includes('function playMogoDownloadUrl(input)') &&
   worker.includes("return url.origin + '/d/' + match[1]") &&
   worker.includes("download_url: source.provider === 'doodstream' ? playMogoDownloadUrl(source.embed_url) : null"),
   'A validated PlayMogo /e/ embed URL must generate the matching /d/ URL for the same video ID');
+assert(watch.includes('function playMogoDownloadUrlFromEmbed(input)') &&
+  watch.includes("const playMogoDownloadUrl=source.provider==='doodstream'") &&
+  watch.includes("playMogoDownloadUrlFromEmbed(source.embed_url)") &&
+  watch.includes("link.href=playMogoDownloadUrl;"),
+  'The watch page must safely derive a PlayMogo /d/ download URL from the embed URL even when a cached catalogue lacks download_url');
 assert(watch.includes('id="downloadNowPanel"') && watch.includes('id="downloadNow"') &&
   watch.includes("source.download_url") &&
   watch.includes("source.provider==='doodstream'") &&
