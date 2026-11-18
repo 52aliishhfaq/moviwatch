@@ -27,7 +27,7 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 .meta{color:var(--muted);margin:8px 0 0;font-size:14px}
 .player-shell{padding:12px;background:#0b1220;border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 80px #0006}
 .player-shell movi-player{display:block;width:100%;aspect-ratio:16/9;min-height:220px;border-radius:10px;overflow:hidden;background:#05080e;--movi-accent:var(--accent);--movi-background:#05080e;--movi-panel:#111a2b;--movi-text:#f4f6fc}
-.status{min-height:24px;margin:12px 4px 2px;color:var(--muted);font-size:13px}
+.player-toolbar{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:0 4px 10px}.player-toolbar label{color:var(--muted);font-size:13px}.player-toolbar select{max-width:min(70vw,280px);border:1px solid #3a4a6a;border-radius:9px;background:#182640;color:#f5f7ff;padding:9px 32px 9px 12px;font:inherit}.status{min-height:24px;margin:12px 4px 2px;color:var(--muted);font-size:13px}
 .status.error{color:#ff9d9d}
 .status:empty{display:none}
 .loading{display:flex;align-items:center;gap:10px;color:#c7d1e5;padding:26px 4px}.loading[hidden]{display:none!important}
@@ -52,6 +52,7 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 <a class="back" href="/">← Back to catalogue</a>
 <div class="heading"><div><h1 id="title">Loading movie…</h1><p class="meta" id="category"></p></div></div>
 <section class="player-shell" aria-label="Movie player">
+  <div class="player-toolbar" id="playerToolbar" hidden><label for="sourceSelect">Video source</label><select id="sourceSelect" aria-label="Choose video source"></select></div>
   <movi-player id="video" controls playsinline preload="auto" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
   <div id="loading" class="loading"><span class="spinner"></span><span>Preparing video for quick playback…</span></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
@@ -68,7 +69,7 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 const $=s=>document.querySelector(s);
 const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||new URLSearchParams(location.search).get('id')||'');
 const video=$('#video');
-let streamUrl='',mediaContainer='unknown',mediaType='';
+let streamUrl='',mediaContainer='unknown',mediaType='',activeOptionIndex=0,availableSources=[];
 let startupTimer=null,prepareGeneration=0;
 function status(message,error=false){$('#status').textContent=message;$('#status').classList.toggle('error',error)}
 function loading(on){$('#loading').hidden=!on}
@@ -104,8 +105,19 @@ async function prepare(){
     $('#title').textContent=movie.title;
     $('#category').textContent=movie.category||'';
     if(movie.poster_url)video.poster=movie.poster_url;
-    streamUrl='/api/watch/'+encodeURIComponent(movieId)+'/0';
     if(!Array.isArray(movie.video_sources)||!movie.video_sources.length)throw new Error('No video source is configured for this movie.');
+    availableSources=movie.video_sources;
+    activeOptionIndex=0;
+    const sourceSelect=$('#sourceSelect');
+    sourceSelect.replaceChildren();
+    availableSources.forEach((source,index)=>{
+      const option=document.createElement('option');
+      option.value=String(index);
+      option.textContent=source.label||('Video '+(index+1));
+      sourceSelect.append(option);
+    });
+    $('#playerToolbar').hidden=availableSources.length<2;
+    sourceSelect.value='0';
     const downloadList=$('#downloadList');
     downloadList.replaceChildren();
     movie.video_sources.forEach((source,index)=>{
@@ -128,23 +140,39 @@ async function prepare(){
       downloadList.append(link);
     });
     $('#downloads').hidden=false;
-    // The converter must produce a progressive MP4 with a complete front-loaded
-    // moov index. An empty_moov fragmented file can leave duration unknown and
-    // force the player to scan a very large part of the source before first frame.
-    status('Reading video index and preparing playback…');
+    // Filmio V6 output is a single-file fragmented MP4: front-loaded moov + SIDX + moof/mdat.
+    // The Worker probes the compact header and serves aligned byte ranges from its edge cache.
+    status('Connecting to the V6 stream and loading the first media fragment…');
     video.preload='auto';
+    streamUrl='/api/watch/'+encodeURIComponent(movieId)+'/'+activeOptionIndex;
     video.src=streamUrl;
     video.load();
     startupTimer=setTimeout(()=>{
       if(generation!==prepareGeneration)return;
       if(!(Number(video.duration)>0)&&video.readyState<1){
-        showPlayerError('Video startup is still waiting for its duration/index. This can happen with an older empty_moov fragmented MP4. Re-convert it with Filmio Smart MP4 Converter V3 (progressive MP4 + faststart), upload the new file to Google Drive, and replace this movie source in Admin.');
+        showPlayerError('The V6 stream has not delivered browser metadata within 30 seconds. Check that the uploaded file is a validated Filmio V6 single-file fMP4, and that the Drive link is public and supports byte ranges.');
       }
-    },45000);
+    },30000);
   }catch(e){
     clearStartupTimer();loading(false);status(e.message||'Unable to prepare this video.',true);$('#retry').classList.add('show');
   }
 }
+$('#sourceSelect').addEventListener('change',()=>{
+  const next=Number($('#sourceSelect').value);
+  if(!Number.isInteger(next)||next<0||next>=availableSources.length||next===activeOptionIndex)return;
+  const resume=!video.paused;
+  activeOptionIndex=next;
+  clearStartupTimer();
+  loading(true);
+  status('Switching video source and warming its first cached fragments…');
+  $('#retry').classList.remove('show');
+  streamUrl='/api/watch/'+encodeURIComponent(movieId)+'/'+activeOptionIndex;
+  video.src=streamUrl;
+  video.load();
+  const generation=++prepareGeneration;
+  startupTimer=setTimeout(()=>{if(generation===prepareGeneration&&video.readyState<1)showPlayerError('This video option is taking too long to start. Check its Drive sharing and V6 conversion.');},30000);
+  if(resume)video.addEventListener('canplay',()=>video.play().catch(()=>{}),{once:true});
+});
 video.addEventListener('error',mediaError);
 video.addEventListener('loadedmetadata',playbackReady);
 video.addEventListener('canplay',playbackReady);
