@@ -88,13 +88,17 @@ function playSource(index,resume=false){
     video.style.visibility='hidden';
     const frame=document.createElement('iframe');
     frame.src=source.embed_url;
-    frame.title='Doodstream hosted video';
+    frame.title=source.embed_url.includes('playmogo.com')?'PlayMogo hosted video':'Doodstream hosted video';
+    // Delegate autoplay to the cross-origin player. This grants permission but
+    // does not override browser policies that require a user gesture for sound.
     frame.allow='autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write';
     frame.allowFullscreen=true;
+    frame.loading='eager';
     frame.referrerPolicy='strict-origin-when-cross-origin';
     // Do not sandbox hosted video providers: their player scripts, popups, and media APIs may be required.
     frame.addEventListener('load',()=>{
-      clearStartupTimer();loading(false);status('Doodstream player loaded. Use its playback controls.');
+      clearStartupTimer();loading(false);
+      status('Hosted player is ready. Press Play inside the player if playback does not start automatically.');
       $('#retry').classList.remove('show');
     },{once:true});
     doodstreamStage.replaceChildren(frame);
