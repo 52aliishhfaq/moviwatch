@@ -123,7 +123,6 @@ assert(watch.includes('function playMogoDownloadUrlFromEmbed(input)') &&
   watch.includes("link.href=playMogoDownloadUrl;"),
   'The watch page must safely derive a PlayMogo /d/ download URL from the embed URL even when a cached catalogue lacks download_url');
 assert(watch.includes('id="downloadNowPanel"') && watch.includes('id="downloadNow"') &&
-  watch.includes("source.download_url") &&
   watch.includes("source.provider==='doodstream'") &&
   watch.includes("source.download_url") &&
   watch.includes("link.target='_blank'") &&
