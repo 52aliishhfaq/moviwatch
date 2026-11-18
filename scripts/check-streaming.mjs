@@ -26,10 +26,10 @@ assert(worker.includes("Range: 'bytes=0-' + (VIDEO_HEADER_PROBE_SIZE - 1)") &&
   worker.includes('mp4MoovEnd(bytes)') && worker.includes('mp4HasMvex(bytes)'),
   'The header probe must detect moov size and fragmented MP4 metadata');
 assert(worker.includes('VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024') &&
-  worker.includes('VIDEO_CHUNK_SIZE = 1 * 1024 * 1024') &&
+  worker.includes('VIDEO_CHUNK_SIZE = 4 * 1024 * 1024') &&
   worker.includes('videoChunkStartForOffset(offset, fragmented)') &&
   worker.includes('videoChunkSizeAt(chunkStart, fragmented)'),
-  'Fragmented MP4 must use a small first segment and 1 MiB follow-up segments');
+  'Fragmented MP4 must use a small first segment and 4 MiB follow-up segments');
 assert(worker.includes('prefetched.set(starts[i], chunkPromises[i])') &&
   worker.includes('ctx.waitUntil(Promise.allSettled(chunkPromises))') &&
   worker.includes("cacheStatus = 'PREFETCH'"),
@@ -95,4 +95,4 @@ assert(!/method\s*:\s*['"]HEAD['"]/.test(watch),
 assert(!watch.includes("Range:'bytes=0-1'") && watch.includes('preload="auto"'),
   'The player must use browser-managed eager preload without a redundant probe');
 
-console.log('Validated adaptive fMP4 startup, 1 MiB continuation, next-segment prefetch, range-seek mapping, and cache entrypoints.');
+console.log('Validated adaptive fMP4 startup, 4 MiB continuation, seek-range diagnostics, next-segment prefetch, range-seek mapping, and cache entrypoints.');

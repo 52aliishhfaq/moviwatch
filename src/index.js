@@ -258,7 +258,7 @@ async function driveFetch(source, method, headers) {
 
 // Video edge cache: store complete 1 MiB continuation chunks as cacheable 200 responses.
 // The public response is reconstructed as a standards-compliant 206 response.
-const VIDEO_CHUNK_SIZE = 1 * 1024 * 1024;
+const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024;
 // Fragmented MP4 keeps its initial moov + first media fragments compact.
 // Fetch a smaller first block so playback does not wait for a large initial transfer.
 const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024;
@@ -678,7 +678,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
 
   // The cached header probe identifies fragmented MP4 for every range request,
-  // including seeks. Keep a compact first segment and 1 MiB continuation chunks
+  // including seeks. Keep a compact first segment and 4 MiB continuation chunks
   // so cold seeks do not have to wait for a 4 MiB Drive transfer.
   const header = await getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash);
   const fragmented = header.fragmented === true;
@@ -706,8 +706,8 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
 
   if (startupPrefetch) {
     const prefetchStarted = Date.now();
-    // Load the compact fMP4 first segment and the following 1 MiB media
-    // segment concurrently. For conventional MP4, retain 1 MiB-aligned chunks
+    // Load the compact fMP4 first segment and the following 4 MiB media
+    // segment concurrently. For conventional MP4, retain 4 MiB-aligned chunks
     // and prefetch every chunk required to reach the moov index.
     const starts = [];
     let nextStart = 0;
@@ -821,6 +821,10 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
       'surrogate-control': 'no-store',
       'vary': 'Range',
       'x-moviwatch-cache': cacheStatus,
+      'x-moviwatch-seek-range-start': String(responseStart),
+      'x-moviwatch-seek-range-end': String(responseEnd),
+      'x-moviwatch-seek-first-chunk-start': String(videoChunkStartForOffset(responseStart, fragmented)),
+      'x-moviwatch-seek-first-chunk-size': String(videoChunkSizeAt(videoChunkStartForOffset(responseStart, fragmented), fragmented)),
       'x-moviwatch-chunk-size': String(VIDEO_CHUNK_SIZE),
       'x-moviwatch-startup-chunk-size': String(videoChunkSizeAt(0, fragmented)),
       'x-moviwatch-header-cache': headerCacheStatus,
