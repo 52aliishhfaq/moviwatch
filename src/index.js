@@ -100,11 +100,11 @@ async function loginLimit(req, env) {
   if (count === 1) await r.expire(key, 600);
   return count <= 10;
 }
-const DOODSTREAM_HOSTS = new Set(['doodstream.com', 'dood.to', 'dood.la', 'dood.so', 'dood.watch']);
+const DOODSTREAM_HOSTS = new Set(['doodstream.com', 'dood.to', 'dood.la', 'dood.so', 'dood.watch', 'playmogo.com']);
 function isDoodstreamHost(host) {
   host = host.toLowerCase();
   return DOODSTREAM_HOSTS.has(host) ||
-    ['doodstream.com', 'dood.to', 'dood.la', 'dood.so', 'dood.watch'].some(domain => host.endsWith('.' + domain));
+    ['doodstream.com', 'dood.to', 'dood.la', 'dood.so', 'dood.watch', 'playmogo.com'].some(domain => host.endsWith('.' + domain));
 }
 function videoSourceUrl(input) {
   if (typeof input !== 'string' || !input.trim() || input.length > 2048) {
