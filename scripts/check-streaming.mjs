@@ -113,6 +113,15 @@ assert(watch.includes('id="doodstreamStage"') && watch.includes("source?.provide
 assert(watch.includes('Connecting to the V6 stream and loading the first media fragment…') &&
   watch.includes('},30000);') && watch.includes('supports byte ranges'),
   'The player must use metadata-first V6 playback and a bounded startup watchdog');
+assert(watch.includes('id="downloadNowPanel"') && watch.includes('id="downloadNow"') &&
+  watch.includes("'/api/download/'+encodeURIComponent(movieId)+'/'+index") &&
+  watch.includes("['google-drive','archive.org'].includes(source.provider)") &&
+  watch.includes("unavailable.hidden=false") &&
+  watch.includes('English + Hindi audio is included only if both tracks are present in this source.'),
+  'The primary Download Now action must download only authorized direct-file providers, preserve original audio tracks, and explain hosted-player limitations');
+assert(watch.includes("source.provider==='doodstream'") &&
+  watch.includes("This PlayMogo/Doodstream link is a hosted player, not a direct video file."),
+  'Hosted player embeds must never be presented as direct downloadable video files');
 assert(!/method\s*:\s*['"]HEAD['"]/.test(watch),
   'Watch page must not make eager HEAD requests on page load');
 assert(!watch.includes("Range:'bytes=0-1'") && watch.includes('preload="metadata"') &&
