@@ -95,4 +95,30 @@ assert(!/method\s*:\s*['"]HEAD['"]/.test(watch),
 assert(!watch.includes("Range:'bytes=0-1'") && watch.includes('preload="auto"'),
   'The player must use browser-managed eager preload without a redundant probe');
 
-console.log('Validated adaptive fMP4 startup, 4 MiB continuation, seek-range diagnostics, next-segment prefetch, range-seek mapping, and cache entrypoints.');
+// Download route must validate the complete byte span before returning 200,
+// while preserving standards-compliant 206 responses for resumable downloads.
+const downloadBody = worker.slice(
+  worker.indexOf("const download = path.split('/');"),
+  worker.indexOf("const watch = path.split('/');")
+);
+assert(downloadBody.includes("(method === 'GET' || method === 'HEAD')") &&
+  downloadBody.includes("requestedRange || 'bytes=0-'"),
+  'Download endpoint must support HEAD and default full-file GET');
+assert(downloadBody.includes('const contentRange = parseContentRange(response.headers.get(\'content-range\'))') &&
+  downloadBody.includes('advertisedLength !== expectedRangeLength') &&
+  downloadBody.includes('contentRange.end !== contentRange.total - 1') &&
+  downloadBody.includes('Refusing an incomplete or inconsistent video download response'),
+  'Full downloads must be rejected unless the returned byte range covers the complete source with an exact Content-Length');
+assert(downloadBody.includes("requestedRange ? response.status : 200") &&
+  downloadBody.includes("if (!requestedRange) headers.delete('content-range')") &&
+  downloadBody.includes("headers.set('accept-ranges', 'bytes')"),
+  'Full downloads must return 200 while explicit resumable ranges retain 206 and Content-Range');
+assert(downloadBody.includes("'x-moviwatch-download-total-bytes'") &&
+  downloadBody.includes("'x-moviwatch-download-mode'") &&
+  downloadBody.includes("'x-moviwatch-download-chunk-size'"),
+  'Download responses must expose total size, full/range mode, and cache segment size for verification');
+assert(downloadBody.includes("headers.set('content-disposition'") &&
+  downloadBody.includes("filename*=UTF-8"),
+  'Downloads must retain a safe attachment filename including UTF-8 support');
+
+console.log('Validated adaptive fMP4 streaming, seek diagnostics, cache entrypoints, and complete/resumable download integrity guards.');
