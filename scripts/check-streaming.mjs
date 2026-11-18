@@ -79,6 +79,12 @@ assert(worker.includes("'cache-tag': 'video-chunks-' + movieId"),
   'Video chunks must be tagged for movie-level purging');
 assert(!worker.includes('caches.default') && !worker.includes('inflightVideoChunks'),
   'The old local-only Cache API chunk cache must be removed');
+assert(watch.includes('id="sourceSelect"') && watch.includes("'/api/watch/'+encodeURIComponent(movieId)+'/'+activeOptionIndex") &&
+  watch.includes("sourceSelect.addEventListener") === false && watch.includes("$('#sourceSelect').addEventListener('change'"),
+  'The V6 player must expose video source selection and request the selected Worker stream');
+assert(watch.includes('Filmio V6 output is a single-file fragmented MP4') &&
+  watch.includes('},30000);') && watch.includes('validated Filmio V6 single-file fMP4'),
+  'The player must identify V6 fMP4 and use a bounded startup watchdog');
 assert(!/method\s*:\s*['"]HEAD['"]/.test(watch),
   'Watch page must not make eager HEAD requests on page load');
 assert(!watch.includes("Range:'bytes=0-1'") && watch.includes('preload="auto"'),
