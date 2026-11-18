@@ -113,7 +113,8 @@ function videoSourceUrl(input) {
     if (id && (host === 'drive.google.com' || host === 'drive.usercontent.google.com')) return 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(id) + '&export=download&confirm=t';
     return url.toString();
   }
-  if ((host === 'archive.org' || host.endsWith('.archive.org')) && /^\\/download\\/[^/]+\\/[^/]+/.test(url.pathname)) return url.toString();
+  const archivePathParts = url.pathname.split('/').filter(Boolean);
+  if ((host === 'archive.org' || host.endsWith('.archive.org')) && archivePathParts[0] === 'download' && archivePathParts.length >= 3) return url.toString();
   throw new Error('Use a public Google Drive link or a direct Archive.org /download/identifier/filename link');
 }
 function sourceProvider(input) {
