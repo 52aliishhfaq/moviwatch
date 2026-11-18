@@ -88,7 +88,7 @@ function playSource(index,resume=false){
     const frame=document.createElement('iframe');
     frame.src=source.embed_url;
     frame.title='Doodstream hosted video';
-    frame.allow='autoplay; fullscreen; picture-in-picture';
+    frame.allow='autoplay; fullscreen; picture-in-picture; encrypted-media';
     frame.allowFullscreen=true;
     frame.referrerPolicy='strict-origin-when-cross-origin';
     frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-presentation allow-forms');
