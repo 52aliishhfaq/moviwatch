@@ -93,8 +93,10 @@ assert(worker.includes("'cache-tag': 'video-chunks-' + movieId"),
 assert(!worker.includes('caches.default') && !worker.includes('inflightVideoChunks'),
   'The old local-only Cache API chunk cache must be removed');
 assert(watch.includes('id="sourceSelect"') && watch.includes("'/api/watch/'+encodeURIComponent(movieId)+'/'+activeOptionIndex") &&
-  watch.includes("$('#sourceSelect').addEventListener('change'") && watch.includes("$('#playerToolbar').hidden=true;"),
-  'The player must keep source labels hidden while retaining the source-switching handler for future UI use');
+  watch.includes("$('#sourceSelect').addEventListener('change'") &&
+  watch.indexOf('<movi-player id="video"') < watch.indexOf('id="playerToolbar"') &&
+  watch.includes("$('#playerToolbar').hidden=availableSources.length<2;"),
+  'The playback quality selector must appear below the player only when multiple sources exist, preserving source switching');
 assert(watch.includes('Filmio V6 output is a single-file fragmented MP4') &&
   watch.includes('},30000);') && watch.includes('validated Filmio V6 single-file fMP4'),
   'The player must identify V6 fMP4 and use a bounded startup watchdog');

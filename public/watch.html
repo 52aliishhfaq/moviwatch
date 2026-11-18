@@ -52,8 +52,8 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 <a class="back" href="/">← Back to catalogue</a>
 <div class="heading"><div><h1 id="title">Loading movie…</h1><p class="meta" id="category"></p></div></div>
 <section class="player-shell" aria-label="Movie player">
-  <div class="player-toolbar" id="playerToolbar" hidden aria-hidden="true"><label for="sourceSelect">Video source</label><select id="sourceSelect" aria-label="Choose video source" tabindex="-1"></select></div>
   <movi-player id="video" controls playsinline preload="metadata" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
+  <div class="player-toolbar" id="playerToolbar" hidden><label for="sourceSelect">Quality</label><select id="sourceSelect" aria-label="Choose playback quality"></select></div>
   <div id="loading" class="loading"><span class="spinner"></span><span>Preparing video for quick playback…</span></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <button id="retry" class="retry" type="button">Retry stream</button>
@@ -116,9 +116,8 @@ async function prepare(){
       option.textContent=source.label||('Video '+(index+1));
       sourceSelect.append(option);
     });
-    // Keep source labels such as “Video source / Option 1” out of the player UI.
-    // The first configured source is used for playback; all options remain available below as downloads.
-    $('#playerToolbar').hidden=true;
+    // Keep the playback quality picker below the video, never above it.
+    $('#playerToolbar').hidden=availableSources.length<2;
     sourceSelect.value='0';
     const downloadList=$('#downloadList');
     downloadList.replaceChildren();
