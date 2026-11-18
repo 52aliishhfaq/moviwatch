@@ -149,6 +149,18 @@ function sourceProvider(input) {
   if (isDoodstreamHost(host)) return 'doodstream';
   return host === 'archive.org' || host.endsWith('.archive.org') ? 'archive.org' : 'google-drive';
 }
+function playMogoDownloadUrl(input) {
+  try {
+    const url = new URL(input);
+    const host = url.hostname.toLowerCase();
+    if (host !== 'playmogo.com' && !host.endsWith('.playmogo.com')) return null;
+    const match = /^\/e\/([A-Za-z0-9_-]{3,100})$/.exec(url.pathname);
+    if (!match) return null;
+    return url.origin + '/d/' + match[1];
+  } catch {
+    return null;
+  }
+}
 function movieInput(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Movie details are required');
   const title = typeof body.title === 'string' ? body.title.trim() : '';
@@ -200,8 +212,10 @@ export class PublicCatalogue extends WorkerEntrypoint {
         video_sources: (video_sources || []).map((source) => ({
           label: source.label || 'Play',
           provider: source.provider || 'google-drive',
-          // Only hosted-player URLs are public; direct Drive/Archive URLs stay server-side.
-          embed_url: source.provider === 'doodstream' ? source.embed_url : null
+          // Hosted-player URLs and the paired PlayMogo download page are public;
+          // direct Drive/Archive URLs stay server-side behind our own download endpoint.
+          embed_url: source.provider === 'doodstream' ? source.embed_url : null,
+          download_url: source.provider === 'doodstream' ? playMogoDownloadUrl(source.embed_url) : null
         }))
       }))
     };
