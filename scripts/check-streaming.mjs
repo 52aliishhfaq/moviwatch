@@ -77,10 +77,15 @@ assert(worker.includes("host === 'accounts.google.com'") &&
 assert(worker.includes("host === 'archive.org' || host.endsWith('.archive.org')") &&
   worker.includes('function videoSourceFetch') && worker.includes('sourceKind(host)'),
   'Public Archive.org direct-download URLs and redirects must use the same range-streaming proxy');
-assert(worker.includes('function sourceProvider(input)') && worker.includes("provider: sourceProvider(sourceUrl)"),
-  'Admin source URLs must be classified as Google Drive or Archive.org');
-assert(admin.includes('Archive.org direct download URL') && admin.includes('archiveCount'),
-  'Admin must document Archive.org links and show source counts');
+assert(worker.includes('function sourceProvider(input)') && worker.includes("provider: sourceProvider(sourceUrl)") &&
+  worker.includes("return 'doodstream'") && worker.includes("url.pathname = '/e/' + parts[1]"),
+  'Doodstream /e/ embed links and /d/ share links must be validated and normalized');
+assert(admin.includes('Archive.org direct download') && admin.includes('Doodstream embed URL') &&
+  admin.includes('doodCount') && admin.includes('Doodstream)'),
+  'Admin must document Doodstream embed links and show source counts');
+assert(worker.includes("'embed_url', CASE WHEN item.value->>'provider'='doodstream' THEN item.value->>'url' ELSE NULL END") &&
+  worker.includes("source.provider === 'doodstream'"),
+  'Only Doodstream embed URLs may be exposed publicly, and Doodstream must bypass MP4 range/download proxying');
 assert(worker.includes('sourceVersion instanceof Date') && worker.includes('normalizedSourceVersion'),
   'Source version must be normalized before it crosses the entrypoint boundary');
 assert(worker.includes("const expectedChunkStart = videoChunkStartForOffset(cursor, fragmented)") &&
@@ -92,14 +97,18 @@ assert(worker.includes("'cache-tag': 'video-chunks-' + movieId"),
   'Video chunks must be tagged for movie-level purging');
 assert(!worker.includes('caches.default') && !worker.includes('inflightVideoChunks'),
   'The old local-only Cache API chunk cache must be removed');
-assert(watch.includes('id="sourceSelect"') && watch.includes("'/api/watch/'+encodeURIComponent(movieId)+'/'+activeOptionIndex") &&
+assert(watch.includes('id="sourceSelect"') && watch.includes("'/api/watch/'+encodeURIComponent(movieId)+'/'+index") &&
   watch.includes("$('#sourceSelect').addEventListener('change'") &&
   watch.indexOf('<movi-player id="video"') < watch.indexOf('id="playerToolbar"') &&
   watch.includes("$('#playerToolbar').hidden=availableSources.length<2;"),
   'The playback quality selector must appear below the player only when multiple sources exist, preserving source switching');
-assert(watch.includes('Filmio V6 output is a single-file fragmented MP4') &&
-  watch.includes('},30000);') && watch.includes('validated Filmio V6 single-file fMP4'),
-  'The player must identify V6 fMP4 and use a bounded startup watchdog');
+assert(watch.includes('id="doodstreamStage"') && watch.includes("source?.provider==='doodstream'") &&
+  watch.includes("frame.src=source.embed_url") && watch.includes("video.style.visibility='hidden'") &&
+  watch.includes("doodstreamStage.hidden=true") && watch.includes("if(!doodstreamStage.hidden)return"),
+  'Doodstream must render as an overlay inside the existing Movi Player stage and switch cleanly back to native playback');
+assert(watch.includes('Connecting to the V6 stream and loading the first media fragment…') &&
+  watch.includes('},30000);') && watch.includes('supports byte ranges'),
+  'The player must use metadata-first V6 playback and a bounded startup watchdog');
 assert(!/method\s*:\s*['"]HEAD['"]/.test(watch),
   'Watch page must not make eager HEAD requests on page load');
 assert(!watch.includes("Range:'bytes=0-1'") && watch.includes('preload="metadata"') &&
