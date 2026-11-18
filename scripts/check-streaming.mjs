@@ -106,9 +106,9 @@ assert(watch.includes('id="doodstreamStage"') && watch.includes("source?.provide
   watch.includes("frame.src=source.embed_url") && watch.includes("video.style.visibility='hidden'") &&
   watch.includes("doodstreamStage.hidden=true") && watch.includes("if(!doodstreamStage.hidden)return"),
   'Doodstream must render as an overlay inside the existing Movi Player stage and switch cleanly back to native playback');
-assert(watch.includes('Filmio V6 output is a single-file fragmented MP4') &&
-  watch.includes('},30000);') && watch.includes('validated Filmio V6 single-file fMP4'),
-  'The player must identify V6 fMP4 and use a bounded startup watchdog');
+assert(watch.includes('Connecting to the V6 stream and loading the first media fragment…') &&
+  watch.includes('},30000);') && watch.includes('supports byte ranges'),
+  'The player must use metadata-first V6 playback and a bounded startup watchdog');
 assert(!/method\s*:\s*['"]HEAD['"]/.test(watch),
   'Watch page must not make eager HEAD requests on page load');
 assert(!watch.includes("Range:'bytes=0-1'") && watch.includes('preload="metadata"') &&
