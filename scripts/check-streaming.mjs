@@ -93,14 +93,19 @@ assert(worker.includes("'cache-tag': 'video-chunks-' + movieId"),
 assert(!worker.includes('caches.default') && !worker.includes('inflightVideoChunks'),
   'The old local-only Cache API chunk cache must be removed');
 assert(watch.includes('id="sourceSelect"') && watch.includes("'/api/watch/'+encodeURIComponent(movieId)+'/'+activeOptionIndex") &&
-  watch.includes("sourceSelect.addEventListener") === false && watch.includes("$('#sourceSelect').addEventListener('change'"),
-  'The V6 player must expose video source selection and request the selected Worker stream');
+  watch.includes("$('#sourceSelect').addEventListener('change'") && watch.includes("$('#playerToolbar').hidden=true;"),
+  'The player must keep source labels hidden while retaining the source-switching handler for future UI use');
 assert(watch.includes('Filmio V6 output is a single-file fragmented MP4') &&
   watch.includes('},30000);') && watch.includes('validated Filmio V6 single-file fMP4'),
   'The player must identify V6 fMP4 and use a bounded startup watchdog');
 assert(!/method\s*:\s*['"]HEAD['"]/.test(watch),
   'Watch page must not make eager HEAD requests on page load');
-assert(!watch.includes("Range:'bytes=0-1'") && watch.includes('preload="auto"'),
-  'The player must use browser-managed eager preload without a redundant probe');
+assert(!watch.includes("Range:'bytes=0-1'") && watch.includes('preload="metadata"') &&
+  watch.includes("video.preload='metadata'") && watch.includes('byte-range request for the target offset'),
+  'The player must use metadata-only startup and native byte-range seeking without a redundant probe');
+assert(worker.includes('const startupPrefetch = req.method === \'GET\' && !parsed.suffix && parsed.start === 0') &&
+  worker.includes('const firstStart = videoChunkStartForOffset(start, fragmented)') &&
+  worker.includes('const nextChunkStart = chunk.end + 1'),
+  'Startup prefetch must be limited to initial playback; seeks must fetch the target segment and warm only its immediate successor');
 
 console.log('Validated adaptive fMP4 startup, 4 MiB continuation, seek-range diagnostics, next-segment prefetch, range-seek mapping, and cache entrypoints.');
