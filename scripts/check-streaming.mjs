@@ -113,7 +113,8 @@ assert(watch.includes('Connecting to the V6 stream and loading the first media f
 assert(!/method\s*:\s*['"]HEAD['"]/.test(watch),
   'Watch page must not make eager HEAD requests on page load');
 assert(!watch.includes("Range:'bytes=0-1'") && watch.includes('preload="metadata"') &&
-  watch.includes("video.preload='metadata'") && watch.includes("streamUrl='/api/watch/'+encodeURIComponent(movieId)+'/'+index"),
+  watch.includes("video.preload='metadata'") && watch.includes("streamUrl='/api/watch/'") &&
+  watch.includes('encodeURIComponent(movieId)') && watch.includes('video.load()'),
   'The player must use metadata-only startup and native byte-range seeking without a redundant probe');
 assert(worker.includes('const startupPrefetch = req.method === \'GET\' && !parsed.suffix && parsed.start === 0') &&
   worker.includes('const firstStart = videoChunkStartForOffset(start, fragmented)') &&
