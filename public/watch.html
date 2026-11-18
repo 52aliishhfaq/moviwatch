@@ -70,7 +70,8 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 const $=s=>document.querySelector(s);
 const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||new URLSearchParams(location.search).get('id')||'');
 const video=$('#video');
-let streamUrl='',mediaContainer='unknown',mediaType='',activeOptionIndex=0,availableSources=[];\nconst doodstreamStage=$('#doodstreamStage');
+let streamUrl='',mediaContainer='unknown',mediaType='',activeOptionIndex=0,availableSources=[];
+const doodstreamStage=$('#doodstreamStage');
 let startupTimer=null,prepareGeneration=0;
 function status(message,error=false){$('#status').textContent=message;$('#status').classList.toggle('error',error)}
 function loading(on){$('#loading').hidden=!on}
