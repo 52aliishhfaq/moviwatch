@@ -87,18 +87,31 @@ function updateDownloadNow(index){
   if(!source)return;
 
   $('#downloadNowHeading').textContent='Download Dual Audio Movie English + Hindi';
-  const supportsDownload=['google-drive','archive.org'].includes(source.provider);
+  const isPlayMogoDownload=source.provider==='doodstream' &&
+    typeof source.download_url==='string' && /^https:\/\/(?:[a-z0-9-]+\.)*playmogo\.com\/d\/[A-Za-z0-9_-]{3,100}$/.test(source.download_url);
+  const supportsProxyDownload=['google-drive','archive.org'].includes(source.provider);
 
-  if(supportsDownload){
-    link.href='/api/download/'+encodeURIComponent(movieId)+'/'+index;
+  if(isPlayMogoDownload){
+    link.href=source.download_url;
+    link.target='_blank';
+    link.rel='noopener noreferrer';
     link.hidden=false;
     unavailable.hidden=true;
-    $('#downloadNowNote').textContent='The selected original file will download unchanged. English and Hindi audio are included only when both tracks exist in that source.';
+    $('#downloadNowNote').textContent='Opens PlayMogo’s download page for this exact video. Follow any download prompt shown by PlayMogo.';
+  }else if(supportsProxyDownload){
+    link.href='/api/download/'+encodeURIComponent(movieId)+'/'+index;
+    link.removeAttribute('target');
+    link.removeAttribute('rel');
+    link.hidden=false;
+    unavailable.hidden=true;
+    $('#downloadNowNote').textContent='Downloads the selected original video file. English + Hindi audio are included only when both tracks are present in that source.';
   }else{
     link.hidden=true;
     link.removeAttribute('href');
+    link.removeAttribute('target');
+    link.removeAttribute('rel');
     unavailable.hidden=false;
-    $('#downloadNowNote').textContent='This source is a hosted PlayMogo/Doodstream player, not a downloadable video file. Add an authorized direct Google Drive or Archive.org video-file URL to enable Download Now.';
+    $('#downloadNowNote').textContent='No supported download URL is available for this hosted player source.';
   }
 }
 function playSource(index,resume=false){
