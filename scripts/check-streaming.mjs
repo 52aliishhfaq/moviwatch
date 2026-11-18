@@ -97,7 +97,7 @@ assert(worker.includes("'cache-tag': 'video-chunks-' + movieId"),
   'Video chunks must be tagged for movie-level purging');
 assert(!worker.includes('caches.default') && !worker.includes('inflightVideoChunks'),
   'The old local-only Cache API chunk cache must be removed');
-assert(watch.includes('id="sourceSelect"') && watch.includes("'/api/watch/'+encodeURIComponent(movieId)+'/'+activeOptionIndex") &&
+assert(watch.includes('id="sourceSelect"') && watch.includes("'/api/watch/'+encodeURIComponent(movieId)+'/'+index") &&
   watch.includes("$('#sourceSelect').addEventListener('change'") &&
   watch.indexOf('<movi-player id="video"') < watch.indexOf('id="playerToolbar"') &&
   watch.includes("$('#playerToolbar').hidden=availableSources.length<2;"),
