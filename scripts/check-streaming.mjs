@@ -36,6 +36,8 @@ assert(worker.includes('prefetched.set(starts[i], chunkPromises[i])') &&
 assert(worker.includes('const pending = prefetched.get(expectedChunkStart)') &&
   worker.includes('? await pending'),
   'The stream must await only the chunk currently needed by the browser');
+assert(worker.includes("'x-moviwatch-stream-profile': fragmented ? 'single-file-fmp4' : 'range-stream'"),
+  'The Worker must expose whether the served source is a V6 single-file fMP4');
 assert(worker.includes("'x-moviwatch-fragmented': String(fragmented)") &&
   worker.includes("'x-moviwatch-startup-chunk-size': String(videoChunkSizeAt(0, fragmented))"),
   'Streaming diagnostics must disclose the detected format and startup segment size');
