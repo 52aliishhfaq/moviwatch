@@ -26,7 +26,7 @@ main{width:min(1160px,calc(100% - 40px));margin:30px auto 64px}
 h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px}
 .meta{color:var(--muted);margin:8px 0 0;font-size:14px}
 .player-shell{padding:12px;background:#0b1220;border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 80px #0006}
-.player-shell{position:relative}.player-shell movi-player{display:block;width:100%;aspect-ratio:16/9;min-height:220px;border-radius:10px;overflow:hidden;background:#05080e;--movi-accent:var(--accent);--movi-background:#05080e;--movi-panel:#111a2b;--movi-text:#f4f6fc}.doodstream-stage{position:absolute;inset:12px;z-index:4;overflow:hidden;border-radius:10px;background:#05080e}.doodstream-stage[hidden]{display:none}.doodstream-stage iframe{display:block;width:100%;height:100%;min-height:220px;border:0;background:#05080e}
+.player-shell{position:relative;overflow:hidden}.player-shell movi-player{display:block;width:100%;aspect-ratio:16/9;min-height:0;height:auto;border-radius:10px;overflow:hidden;background:#05080e;--movi-accent:var(--accent);--movi-background:#05080e;--movi-panel:#111a2b;--movi-text:#f4f6fc}.doodstream-stage{position:absolute;inset:12px;z-index:4;overflow:hidden;border-radius:10px;background:#05080e;aspect-ratio:16/9}.doodstream-stage[hidden]{display:none}.doodstream-stage iframe{display:block;width:100%;height:100%;min-height:0;border:0;background:#05080e;touch-action:pan-y}
 .player-toolbar{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:0 4px 10px}.player-toolbar label{color:var(--muted);font-size:13px}.player-toolbar select{max-width:min(70vw,280px);border:1px solid #3a4a6a;border-radius:9px;background:#182640;color:#f5f7ff;padding:9px 32px 9px 12px;font:inherit}.status{min-height:24px;margin:12px 4px 2px;color:var(--muted);font-size:13px}
 .status.error{color:#ff9d9d}
 .status:empty{display:none}
@@ -43,7 +43,7 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 .download-link small{display:block;color:#b9c6e1;font-size:11px;font-weight:450}
 .download-link .download-icon{font-size:19px}
 @media(max-width:650px){.downloads{padding:14px}.download-list{grid-template-columns:1fr}}
-@media(max-width:650px){header{height:58px}main{width:calc(100% - 24px);margin:20px auto 40px}.player-shell{padding:6px;border-radius:12px}.heading{display:block}h1{font-size:25px}}
+@media(max-width:650px){header{height:58px}main{width:calc(100% - 24px);margin:20px auto 40px}.player-shell{padding:0;border-radius:12px}.player-shell movi-player{border-radius:11px}.doodstream-stage{inset:0;border-radius:11px}.heading{display:block}h1{font-size:25px}}
 </style>
 </head>
 <body>
