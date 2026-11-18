@@ -101,11 +101,10 @@ assert(worker.includes("'cache-tag': 'video-chunks-' + movieId"),
   'Video chunks must be tagged for movie-level purging');
 assert(!worker.includes('caches.default') && !worker.includes('inflightVideoChunks'),
   'The old local-only Cache API chunk cache must be removed');
-assert(watch.includes('id="sourceSelect"') && watch.includes("'/api/watch/'+encodeURIComponent(movieId)+'/'+index") &&
-  watch.includes("$('#sourceSelect').addEventListener('change'") &&
-  watch.indexOf('<movi-player id="video"') < watch.indexOf('id="playerToolbar"') &&
-  watch.includes("$('#playerToolbar').hidden=availableSources.length<2;"),
-  'The playback quality selector must appear below the player only when multiple sources exist, preserving source switching');
+assert(watch.includes("streamUrl='/api/watch/'") &&
+  watch.includes("encodeURIComponent(movieId)") && watch.includes('function playSource(index,resume=false)') &&
+  watch.includes('availableSources[index]') && watch.includes('updateDownloadNow(index)'),
+  'The watch page must select the active source and route native sources through the streaming endpoint');
 assert(watch.includes('id="doodstreamStage"') && watch.includes("source?.provider==='doodstream'") &&
   watch.includes("frame.src=source.embed_url") && watch.includes("video.style.visibility='hidden'") &&
   watch.includes("doodstreamStage.hidden=true") && watch.includes("if(!doodstreamStage.hidden)return"),
