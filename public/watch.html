@@ -26,7 +26,7 @@ main{width:min(1160px,calc(100% - 40px));margin:30px auto 64px}
 h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px}
 .meta{color:var(--muted);margin:8px 0 0;font-size:14px}
 .player-shell{padding:12px;background:#0b1220;border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 80px #0006}
-.player-shell{position:relative;overflow:hidden}.player-shell movi-player{display:block;width:100%;aspect-ratio:16/9;min-height:0;height:auto;border-radius:10px;overflow:hidden;background:#05080e;--movi-accent:var(--accent);--movi-background:#05080e;--movi-panel:#111a2b;--movi-text:#f4f6fc}.doodstream-stage{position:absolute;inset:12px;z-index:4;overflow:hidden;border-radius:10px;background:#05080e;aspect-ratio:16/9}.doodstream-stage[hidden]{display:none}.doodstream-stage iframe{display:block;width:100%;height:100%;min-height:0;border:0;background:#05080e;touch-action:pan-y}
+.player-shell{position:relative;overflow:hidden}.player-shell movi-player{display:block;width:100%;aspect-ratio:16/9;min-height:0;height:auto;border-radius:10px;overflow:hidden;background:#05080e;--movi-accent:var(--accent);--movi-background:#05080e;--movi-panel:#111a2b;--movi-text:#f4f6fc}.doodstream-stage{position:absolute;inset:12px 12px auto;width:auto;height:auto;z-index:4;overflow:hidden;border-radius:10px;background:#05080e;aspect-ratio:16/9}.doodstream-stage[hidden]{display:none}.doodstream-stage iframe{display:block;width:100%;height:100%;min-height:0;border:0;background:#05080e;touch-action:pan-y}.doodstream-fallback{position:relative;z-index:5;display:inline-flex;margin:8px 4px;padding:8px 12px;border:1px solid #53658a;border-radius:8px;color:#dce4ff;background:#182640;text-decoration:none;font-size:13px}.doodstream-fallback[hidden]{display:none}
 .player-toolbar{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:0 4px 10px}.player-toolbar label{color:var(--muted);font-size:13px}.player-toolbar select{max-width:min(70vw,280px);border:1px solid #3a4a6a;border-radius:9px;background:#182640;color:#f5f7ff;padding:9px 32px 9px 12px;font:inherit}.status{min-height:24px;margin:12px 4px 2px;color:var(--muted);font-size:13px}
 .status.error{color:#ff9d9d}
 .status:empty{display:none}
@@ -43,7 +43,7 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 .download-link small{display:block;color:#b9c6e1;font-size:11px;font-weight:450}
 .download-link .download-icon{font-size:19px}
 @media(max-width:650px){.downloads{padding:14px}.download-list{grid-template-columns:1fr}}
-@media(max-width:650px){header{height:58px}main{width:calc(100% - 24px);margin:20px auto 40px}.player-shell{padding:0;border-radius:12px}.player-shell movi-player{border-radius:11px}.doodstream-stage{inset:0;border-radius:11px}.heading{display:block}h1{font-size:25px}}
+@media(max-width:650px){header{height:58px}main{width:calc(100% - 24px);margin:20px auto 40px}.player-shell{padding:0;border-radius:12px}.player-shell movi-player{border-radius:11px}.doodstream-stage{inset:0 0 auto;width:auto;height:auto;border-radius:11px}.heading{display:block}h1{font-size:25px}}
 </style>
 </head>
 <body>
@@ -54,6 +54,7 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 <section class="player-shell" aria-label="Movie player">
   <movi-player id="video" controls playsinline preload="metadata" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
   <div id="doodstreamStage" class="doodstream-stage" hidden aria-label="Doodstream hosted player"></div>
+  <a id="doodstreamFallback" class="doodstream-fallback" target="_blank" rel="noopener noreferrer" hidden>Open hosted player directly ↗</a>
   <div class="player-toolbar" id="playerToolbar" hidden><label for="sourceSelect">Quality</label><select id="sourceSelect" aria-label="Choose playback quality"></select></div>
   <div id="loading" class="loading"><span class="spinner"></span><span>Preparing video for quick playback…</span></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
@@ -72,6 +73,7 @@ const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).po
 const video=$('#video');
 let streamUrl='',mediaContainer='unknown',mediaType='',activeOptionIndex=0,availableSources=[];
 const doodstreamStage=$('#doodstreamStage');
+const doodstreamFallback=$('#doodstreamFallback');
 let startupTimer=null,prepareGeneration=0;
 function status(message,error=false){$('#status').textContent=message;$('#status').classList.toggle('error',error)}
 function loading(on){$('#loading').hidden=!on}
@@ -86,7 +88,10 @@ function playSource(index,resume=false){
     video.removeAttribute('src');
     video.load();
     video.style.visibility='hidden';
+    doodstreamFallback.href=source.embed_url;
+    doodstreamFallback.hidden=false;
     const frame=document.createElement('iframe');
+    frame.loading='eager';
     frame.src=source.embed_url;
     frame.title='Doodstream hosted video';
     frame.allow='autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write';
@@ -94,7 +99,7 @@ function playSource(index,resume=false){
     frame.referrerPolicy='strict-origin-when-cross-origin';
     // Do not sandbox hosted video providers: their player scripts, popups, and media APIs may be required.
     frame.addEventListener('load',()=>{
-      clearStartupTimer();loading(false);status('Doodstream player loaded. Use its playback controls.');
+      clearStartupTimer();loading(false);status('Hosted player page loaded. Press Play inside it. The browser cannot confirm playback inside this cross-site player.');
       $('#retry').classList.remove('show');
     },{once:true});
     doodstreamStage.replaceChildren(frame);
@@ -111,6 +116,8 @@ function playSource(index,resume=false){
   }
   doodstreamStage.replaceChildren();
   doodstreamStage.hidden=true;
+  doodstreamFallback.hidden=true;
+  doodstreamFallback.removeAttribute('href');
   video.style.visibility='visible';
   video.preload='metadata';
   streamUrl='/api/watch/'+encodeURIComponent(movieId)+'/'+index;
