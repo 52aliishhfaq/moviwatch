@@ -81,9 +81,15 @@ assert(worker.includes('function sourceProvider(input)') && worker.includes("pro
   worker.includes("return 'doodstream'") && worker.includes("url.pathname = '/e/' + parts[1]") &&
   worker.includes("'playmogo.com'"),
   'Doodstream /e/, /d/, and PlayMogo embed links must be validated and normalized');
-assert(admin.includes('Archive.org direct download') && admin.includes('Doodstream embed URL') &&
+assert(admin.includes('id="archiveUrl"') &&
+  admin.includes('Primary video URL — Archive.org link powers both streaming and download') &&
+  admin.includes('stores this URL once and uses the same file for playback and Download Now') &&
+  admin.includes("$('#archiveUrl').value=allSources[0]?.url||''") &&
+  admin.includes("const videoSources=[{label:'Primary',url:primaryUrl},...extraSources]"),
+  'Admin must save one primary Archive.org URL as the shared streaming and download source');
+assert(admin.includes('Doodstream / PlayMogo embeds play directly') &&
   admin.includes('doodCount') && admin.includes('Doodstream)'),
-  'Admin must document Doodstream embed links and show source counts');
+  'Admin must preserve optional hosted-player sources and show source counts');
 assert(worker.includes("'embed_url', CASE WHEN item.value->>'provider'='doodstream' THEN item.value->>'url' ELSE NULL END") &&
   worker.includes("source.provider === 'doodstream'"),
   'Only Doodstream embed URLs may be exposed publicly, and Doodstream must bypass MP4 range/download proxying');
