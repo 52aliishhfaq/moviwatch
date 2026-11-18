@@ -796,6 +796,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
       'content-type': contentType,
       'x-moviwatch-container': container,
       'x-moviwatch-fragmented': String(fragmented),
+      'x-moviwatch-stream-profile': fragmented ? 'single-file-fmp4' : 'range-stream',
       'content-length': String(contentLength),
       'content-range': 'bytes ' + responseStart + '-' + responseEnd + '/' + total,
       'accept-ranges': 'bytes',
