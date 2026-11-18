@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 const config = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
 const worker = readFileSync('src/index.js', 'utf8');
 const watch = readFileSync('public/watch.html', 'utf8');
+const admin = readFileSync('public/admin.html', 'utf8');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -48,7 +49,7 @@ assert(worker.includes("ctx.exports.VideoHeader().invalidate(movieId)"),
   'Video header cache must be purged when a movie is edited or deleted');
 const invalidationBody = worker.slice(
   worker.indexOf('async function invalidateContentCaches('),
-  worker.indexOf('\nfunction allowedDriveHost', worker.indexOf('async function invalidateContentCaches('))
+  worker.indexOf('\nfunction allowedSourceHost', worker.indexOf('async function invalidateContentCaches('))
 );
 assert(invalidationBody.includes('operations.map((operation) => Promise.resolve().then(operation))'),
   'Cache invalidation must capture synchronous entrypoint-factory errors so committed movie edits do not return HTTP 500');
@@ -73,6 +74,13 @@ assert(catalogueGateway.includes("'cache-control': 'private, no-store, max-age=0
 assert(worker.includes("host === 'accounts.google.com'") &&
   worker.includes('Google Drive file requires sign-in'),
   'Private Google Drive redirects must return a clear sharing-permission error');
+assert(worker.includes("host === 'archive.org' || host.endsWith('.archive.org')") &&
+  worker.includes('function videoSourceFetch') && worker.includes('sourceKind(host)'),
+  'Public Archive.org direct-download URLs and redirects must use the same range-streaming proxy');
+assert(worker.includes('function sourceProvider(input)') && worker.includes("provider: sourceProvider(sourceUrl)"),
+  'Admin source URLs must be classified as Google Drive or Archive.org');
+assert(admin.includes('Archive.org direct download URL') && admin.includes('archiveCount'),
+  'Admin must document Archive.org links and show source counts');
 assert(worker.includes('sourceVersion instanceof Date') && worker.includes('normalizedSourceVersion'),
   'Source version must be normalized before it crosses the entrypoint boundary');
 assert(worker.includes("const expectedChunkStart = videoChunkStartForOffset(cursor, fragmented)") &&

@@ -100,18 +100,26 @@ async function loginLimit(req, env) {
   if (count === 1) await r.expire(key, 600);
   return count <= 10;
 }
-function driveUrl(input) {
-  if (typeof input !== 'string' || !input.trim() || input.length > 2048) throw new Error('A valid Google Drive video link is required');
+function videoSourceUrl(input) {
+  if (typeof input !== 'string' || !input.trim() || input.length > 2048) throw new Error('A valid Google Drive or Archive.org video link is required');
   const value = input.trim();
   if (/^[\w-]{10,200}$/.test(value)) return 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(value) + '&export=download&confirm=t';
   let url;
   try { url = new URL(value); } catch { throw new Error('Invalid video URL'); }
   if (url.protocol !== 'https:') throw new Error('Video URL must use HTTPS');
   const host = url.hostname.toLowerCase();
-  if (host !== 'drive.google.com' && host !== 'drive.usercontent.google.com' && !host.endsWith('.googleusercontent.com')) throw new Error('Only public Google Drive links are accepted');
-  const id = url.pathname.split('/file/d/')[1]?.split('/')[0] || url.searchParams.get('id');
-  if (id && (host === 'drive.google.com' || host === 'drive.usercontent.google.com')) return 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(id) + '&export=download&confirm=t';
-  return url.toString();
+  if (host === 'drive.google.com' || host === 'drive.usercontent.google.com' || host.endsWith('.googleusercontent.com')) {
+    const id = url.pathname.split('/file/d/')[1]?.split('/')[0] || url.searchParams.get('id');
+    if (id && (host === 'drive.google.com' || host === 'drive.usercontent.google.com')) return 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(id) + '&export=download&confirm=t';
+    return url.toString();
+  }
+  const archivePathParts = url.pathname.split('/').filter(Boolean);
+  if ((host === 'archive.org' || host.endsWith('.archive.org')) && archivePathParts[0] === 'download' && archivePathParts.length >= 3) return url.toString();
+  throw new Error('Use a public Google Drive link or a direct Archive.org /download/identifier/filename link');
+}
+function sourceProvider(input) {
+  const host = new URL(input).hostname.toLowerCase();
+  return host === 'archive.org' || host.endsWith('.archive.org') ? 'archive.org' : 'google-drive';
 }
 function movieInput(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Movie details are required');
@@ -124,7 +132,7 @@ function movieInput(body) {
   if (!Array.isArray(body.videoSources) || body.videoSources.length < 1 || body.videoSources.length > 8) throw new Error('Add between 1 and 8 video options');
   return {
     title, poster: poster.href, category: body.category,
-    sources: body.videoSources.map((v, i) => ({ label: (typeof v?.label === 'string' && v.label.trim() ? v.label.trim() : 'Option ' + (i + 1)).slice(0, 60), url: driveUrl(v?.url) })),
+    sources: body.videoSources.map((v, i) => { const sourceUrl = videoSourceUrl(v?.url); return { label: (typeof v?.label === 'string' && v.label.trim() ? v.label.trim() : 'Option ' + (i + 1)).slice(0, 60), url: sourceUrl, provider: sourceProvider(sourceUrl) }; }),
     published: body.isPublished !== false
   };
 }
@@ -227,11 +235,15 @@ async function invalidateContentCaches(ctx, movieId) {
   }
 }
 
-function allowedDriveHost(host) {
+function allowedSourceHost(host) {
   host = host.toLowerCase();
-  return host === 'drive.google.com' || host === 'drive.usercontent.google.com' || host.endsWith('.googleusercontent.com');
+  return host === 'drive.google.com' || host === 'drive.usercontent.google.com' || host.endsWith('.googleusercontent.com') || host === 'archive.org' || host.endsWith('.archive.org');
 }
-async function driveFetch(source, method, headers) {
+function sourceKind(host) {
+  host = host.toLowerCase();
+  return host === 'archive.org' || host.endsWith('.archive.org') ? 'Archive.org' : 'Google Drive';
+}
+async function videoSourceFetch(source, method, headers) {
   let url = new URL(source);
   // Normalize legacy database URLs to Google's direct download endpoint.
   if (url.hostname.toLowerCase() === 'drive.google.com' && url.pathname === '/uc') {
@@ -240,20 +252,20 @@ async function driveFetch(source, method, headers) {
   }
   let currentMethod = method;
   for (let hop = 0; hop <= 5; hop++) {
-    if (url.protocol !== 'https:') throw new Error('Google Drive redirect must use HTTPS');
+    if (url.protocol !== 'https:') throw new Error('Video-source redirect must use HTTPS');
     const host = url.hostname.toLowerCase();
-    if (host === 'accounts.google.com' || host.endsWith('.accounts.google.com')) {
+    if ((host === 'accounts.google.com' || host.endsWith('.accounts.google.com')) && sourceKind(new URL(source).hostname) === 'Google Drive') {
       throw new Error('Google Drive file requires sign-in. In Google Drive, set General access to Anyone with the link (Viewer), save, and try again.');
     }
-    if (!allowedDriveHost(host)) throw new Error('Unsupported Google Drive redirect');
+    if (!allowedSourceHost(host)) throw new Error('Unsupported video-source redirect');
     const res = await fetch(url.toString(), { method: currentMethod, headers, redirect: 'manual' });
     if (![301, 302, 303, 307, 308].includes(res.status)) return res;
     const location = res.headers.get('Location');
-    if (!location || hop === 5) throw new Error('Drive redirect limit reached');
+    if (!location || hop === 5) throw new Error('Video-source redirect limit reached');
     url = new URL(location, url);
     if (res.status === 303 || ((res.status === 301 || res.status === 302) && currentMethod !== 'HEAD')) currentMethod = 'GET';
   }
-  throw new Error('Drive redirect limit reached');
+  throw new Error('Video-source redirect limit reached');
 }
 
 // Video edge cache: store complete 1 MiB continuation chunks as cacheable 200 responses.
@@ -368,7 +380,7 @@ async function getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourc
   const payload = await response.json();
   if (!Number.isSafeInteger(payload.total) || payload.total < 1 ||
       (payload.moovEnd !== null && (!Number.isSafeInteger(payload.moovEnd) || payload.moovEnd < 0))) {
-    throw new Error('Google Drive returned invalid MP4 metadata');
+    throw new Error('Video source returned invalid MP4 metadata');
   }
   return {
     total: payload.total,
@@ -474,8 +486,8 @@ async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHU
   let requests = 0;
 
   while (cursor <= expectedEnd) {
-    if (++requests > 128) throw new Error('Google Drive returned too many small video ranges');
-    const upstream = await driveFetch(source.url, 'GET', new Headers({
+    if (++requests > 128) throw new Error('Video source returned too many small video ranges');
+    const upstream = await videoSourceFetch(source.url, 'GET', new Headers({
       Range: 'bytes=' + cursor + '-' + requestedEnd,
       'Accept-Encoding': 'identity'
     }));
@@ -493,9 +505,9 @@ async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHU
       const status = upstream.status;
       const contentRange = upstream.headers.get('content-range') || 'none';
       try { await upstream.body?.cancel(); } catch {}
-      if (type.includes('text/html')) throw new Error('Google Drive returned an HTML confirmation, permission, or quota page (HTTP ' + status + '). Check Anyone with the link access and Drive download quota.');
-      if (status === 200) throw new Error('Google Drive ignored the byte-range request (HTTP 200, ' + type + '). The file endpoint is not supporting seekable streaming.');
-      throw new Error('Google Drive byte-range response was invalid (HTTP ' + status + ', Content-Range: ' + contentRange + ', type: ' + type + ').');
+      if (type.includes('text/html')) throw new Error('Video source returned an HTML confirmation, permission, or quota page (HTTP ' + status + '). Check that the source is public and available.');
+      if (status === 200) throw new Error('Video source ignored the byte-range request (HTTP 200, ' + type + '). The file endpoint is not supporting seekable streaming.');
+      throw new Error('Video source byte-range response was invalid (HTTP ' + status + ', Content-Range: ' + contentRange + ', type: ' + type + ').');
     }
 
     total = range.total;
@@ -505,13 +517,13 @@ async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHU
       break;
     }
     const bytes = new Uint8Array(await upstream.arrayBuffer());
-    if (bytes.byteLength !== range.end - range.start + 1) throw new Error('Google Drive returned an incomplete video range');
+    if (bytes.byteLength !== range.end - range.start + 1) throw new Error('Video source returned an incomplete video range');
     if (!upstreamType) upstreamType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     pieces.push(bytes);
     cursor = range.end + 1;
   }
 
-  if (total === null || cursor !== expectedEnd + 1) throw new Error('Google Drive did not provide a complete contiguous video chunk');
+  if (total === null || cursor !== expectedEnd + 1) throw new Error('Video source did not provide a complete contiguous video chunk');
   const expectedLength = expectedEnd - chunkStart + 1;
   const bytes = new Uint8Array(expectedLength);
   let offset = 0;
@@ -519,7 +531,7 @@ async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHU
     bytes.set(piece, offset);
     offset += piece.byteLength;
   }
-  if (offset !== expectedLength) throw new Error('Assembled Google Drive video chunk has an invalid length');
+  if (offset !== expectedLength) throw new Error('Assembled video chunk has an invalid length');
 
   const container = sniffVideoContainer(bytes);
   const contentType = container === 'mp4' ? 'video/mp4' :
@@ -548,13 +560,13 @@ export class VideoHeader extends WorkerEntrypoint {
     }
     try {
       const parsedSource = new URL(sourceUrl);
-      if (parsedSource.protocol !== 'https:' || !allowedDriveHost(parsedSource.hostname)) {
-        return json({ error: 'Unsupported Google Drive video source' }, 400);
+      if (parsedSource.protocol !== 'https:' || !allowedSourceHost(parsedSource.hostname)) {
+        return json({ error: 'Unsupported video source' }, 400);
       }
       const digest = await crypto.subtle.digest('SHA-256', enc.encode(sourceUrl + '|' + sourceVersion));
       const expectedHash = hex(new Uint8Array(digest)).slice(0, 32);
       if (expectedHash !== sourceHash) return json({ error: 'Video header cache key did not match its source' }, 400);
-      const upstream = await driveFetch(sourceUrl, 'GET', new Headers({
+      const upstream = await videoSourceFetch(sourceUrl, 'GET', new Headers({
         Range: 'bytes=0-' + (VIDEO_HEADER_PROBE_SIZE - 1),
         'Accept-Encoding': 'identity'
       }));
@@ -562,11 +574,11 @@ export class VideoHeader extends WorkerEntrypoint {
       if (upstream.status !== 206 || !range || range.start !== 0 || range.end < 39) {
         const type = (upstream.headers.get('content-type') || 'unknown').split(';')[0];
         try { await upstream.body?.cancel(); } catch {}
-        if (type.includes('text/html')) throw new Error('Google Drive returned an HTML permission or quota page instead of video metadata');
-        throw new Error('Google Drive did not return a valid video header (HTTP ' + upstream.status + ')');
+        if (type.includes('text/html')) throw new Error('Video source returned an HTML permission or quota page instead of video metadata');
+        throw new Error('Video source did not return a valid video header (HTTP ' + upstream.status + ')');
       }
       const bytes = new Uint8Array(await upstream.arrayBuffer());
-      if (bytes.byteLength !== range.end + 1) throw new Error('Google Drive returned an incomplete video header');
+      if (bytes.byteLength !== range.end + 1) throw new Error('Video source returned an incomplete video header');
       const container = sniffVideoContainer(bytes);
       const moovEnd = container === 'mp4' ? mp4MoovEnd(bytes) : null;
       const fragmented = container === 'mp4' && mp4HasMvex(bytes);
@@ -620,8 +632,8 @@ export class VideoChunk extends WorkerEntrypoint {
 
     try {
       const parsedSource = new URL(sourceUrl);
-      if (parsedSource.protocol !== 'https:' || !allowedDriveHost(parsedSource.hostname)) {
-        return json({ error: 'Unsupported Google Drive video source' }, 400);
+      if (parsedSource.protocol !== 'https:' || !allowedSourceHost(parsedSource.hostname)) {
+        return json({ error: 'Unsupported video source' }, 400);
       }
       const digest = await crypto.subtle.digest('SHA-256', enc.encode(sourceUrl + '|' + sourceVersion));
       const expectedHash = hex(new Uint8Array(digest)).slice(0, 32);
@@ -744,7 +756,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
         headers: { 'content-range': 'bytes */' + firstChunk.unsatisfiedTotal, 'accept-ranges': 'bytes' }
       });
     }
-    if (firstChunk.total !== total) throw new Error('Google Drive video size changed during streaming');
+    if (firstChunk.total !== total) throw new Error('Video source size changed during streaming');
     cacheStatus = firstChunk.cacheStatus;
     prefetched.set(firstStart, Promise.resolve(firstChunk));
   }
@@ -772,7 +784,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
               );
           prefetched.delete(expectedChunkStart);
           if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total) {
-            throw new Error('Google Drive video size changed during streaming');
+            throw new Error('Video source size changed during streaming');
           }
         }
 
@@ -1025,11 +1037,11 @@ async function api(req, env, ctx) {
         if (value) headers.set(name, value);
       }
       let upstream;
-      try { upstream = await driveFetch(source.url, method, headers); }
-      catch { return json({ error: 'Google Drive could not be reached' }, 502); }
+      try { upstream = await videoSourceFetch(source.url, method, headers); }
+      catch { return json({ error: 'Video source could not be reached' }, 502); }
       if (![200, 206, 416].includes(upstream.status) ||
           (upstream.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
-        return json({ error: 'Drive did not return a playable video. Check public sharing and quota.' }, 502);
+        return json({ error: 'Drive did not return a playable video. Check that the source is public and available.' }, 502);
       }
       const out = new Headers({
         'cache-control': 'private, no-store',
@@ -1068,7 +1080,7 @@ async function api(req, env, ctx) {
         req.headers.get('Range') || 'bytes=0-', movie.updated_at
       );
       if ((response.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
-        return json({ error: 'Drive returned an HTML page instead of video. Check public sharing and quota.' }, 502);
+        return json({ error: 'Drive returned an HTML page instead of video. Check that the source is public and available.' }, 502);
       }
       const responseHeaders = new Headers(response.headers);
       responseHeaders.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
@@ -1141,7 +1153,7 @@ export default {
     } catch (error) {
       console.error('Request failed:', error?.stack || error?.message || error);
       const message = error instanceof Error ? error.message : 'Internal server error';
-      const client = /required|invalid|must |between |only |unknown category|too large|HTTPS|Google Drive/i.test(message);
+      const client = /required|invalid|must |between |only |unknown category|too large|HTTPS|Google Drive|Archive\.org|video link/i.test(message);
       return json({ error: client ? message : 'Internal server error' }, client ? 400 : 500);
     }
   }
