@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 const config = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
 const worker = readFileSync('src/index.js', 'utf8');
 const watch = readFileSync('public/watch.html', 'utf8');
+const admin = readFileSync('public/admin.html', 'utf8');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
