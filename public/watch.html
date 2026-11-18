@@ -26,7 +26,7 @@ main{width:min(1160px,calc(100% - 40px));margin:30px auto 64px}
 h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px}
 .meta{color:var(--muted);margin:8px 0 0;font-size:14px}
 .player-shell{padding:12px;background:#0b1220;border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 80px #0006}
-.player-shell movi-player{display:block;width:100%;aspect-ratio:16/9;min-height:220px;border-radius:10px;overflow:hidden;background:#05080e;--movi-accent:var(--accent);--movi-background:#05080e;--movi-panel:#111a2b;--movi-text:#f4f6fc}
+.player-shell{position:relative}.player-shell movi-player{display:block;width:100%;aspect-ratio:16/9;min-height:220px;border-radius:10px;overflow:hidden;background:#05080e;--movi-accent:var(--accent);--movi-background:#05080e;--movi-panel:#111a2b;--movi-text:#f4f6fc}.doodstream-stage{position:absolute;inset:12px;z-index:4;overflow:hidden;border-radius:10px;background:#05080e}.doodstream-stage[hidden]{display:none}.doodstream-stage iframe{display:block;width:100%;height:100%;min-height:220px;border:0;background:#05080e}
 .player-toolbar{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:0 4px 10px}.player-toolbar label{color:var(--muted);font-size:13px}.player-toolbar select{max-width:min(70vw,280px);border:1px solid #3a4a6a;border-radius:9px;background:#182640;color:#f5f7ff;padding:9px 32px 9px 12px;font:inherit}.status{min-height:24px;margin:12px 4px 2px;color:var(--muted);font-size:13px}
 .status.error{color:#ff9d9d}
 .status:empty{display:none}
@@ -53,6 +53,7 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 <div class="heading"><div><h1 id="title">Loading movie…</h1><p class="meta" id="category"></p></div></div>
 <section class="player-shell" aria-label="Movie player">
   <movi-player id="video" controls playsinline preload="metadata" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
+  <div id="doodstreamStage" class="doodstream-stage" hidden aria-label="Doodstream hosted player"></div>
   <div class="player-toolbar" id="playerToolbar" hidden><label for="sourceSelect">Quality</label><select id="sourceSelect" aria-label="Choose playback quality"></select></div>
   <div id="loading" class="loading"><span class="spinner"></span><span>Preparing video for quick playback…</span></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
@@ -69,13 +70,61 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 const $=s=>document.querySelector(s);
 const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||new URLSearchParams(location.search).get('id')||'');
 const video=$('#video');
-let streamUrl='',mediaContainer='unknown',mediaType='',activeOptionIndex=0,availableSources=[];
+let streamUrl='',mediaContainer='unknown',mediaType='',activeOptionIndex=0,availableSources=[];\nconst doodstreamStage=$('#doodstreamStage');
 let startupTimer=null,prepareGeneration=0;
 function status(message,error=false){$('#status').textContent=message;$('#status').classList.toggle('error',error)}
 function loading(on){$('#loading').hidden=!on}
 function clearStartupTimer(){if(startupTimer!==null){clearTimeout(startupTimer);startupTimer=null}}
 function showPlayerError(message){clearStartupTimer();loading(false);status(message,true);$('#retry').classList.add('show')}
 function playbackReady(){clearStartupTimer();loading(false);status('');$('#retry').classList.remove('show')}
+function playSource(index,resume=false){
+  const source=availableSources[index];
+  clearStartupTimer();
+  if(source?.provider==='doodstream'){
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    video.style.visibility='hidden';
+    const frame=document.createElement('iframe');
+    frame.src=source.embed_url;
+    frame.title='Doodstream hosted video';
+    frame.allow='autoplay; fullscreen; picture-in-picture';
+    frame.allowFullscreen=true;
+    frame.referrerPolicy='strict-origin-when-cross-origin';
+    frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-presentation allow-forms');
+    frame.addEventListener('load',()=>{
+      clearStartupTimer();loading(false);status('Doodstream player loaded. Use its playback controls.');
+      $('#retry').classList.remove('show');
+    },{once:true});
+    doodstreamStage.replaceChildren(frame);
+    doodstreamStage.hidden=false;
+    loading(true);status('Loading Doodstream inside Movi Player…');
+    startupTimer=setTimeout(()=>{
+      if(doodstreamStage.contains(frame)){
+        loading(false);
+        status('Doodstream embed did not respond. Check that this video allows embedding.',true);
+        $('#retry').classList.add('show');
+      }
+    },30000);
+    return;
+  }
+  doodstreamStage.replaceChildren();
+  doodstreamStage.hidden=true;
+  video.style.visibility='visible';
+  video.preload='metadata';
+  streamUrl='/api/watch/'+encodeURIComponent(movieId)+'/'+index;
+  video.src=streamUrl;
+  video.load();
+  loading(true);
+  status('Connecting to the V6 stream and loading the first media fragment…');
+  const generation=++prepareGeneration;
+  startupTimer=setTimeout(()=>{
+    if(generation===prepareGeneration&&!(Number(video.duration)>0)&&video.readyState<1){
+      showPlayerError('The V6 stream has not delivered browser metadata within 30 seconds. Check that the source is public and supports byte ranges.');
+    }
+  },30000);
+  if(resume)video.addEventListener('canplay',()=>video.play().catch(()=>{}),{once:true});
+}
 function mediaError(){
   const e=video.error;
   let message='Video playback failed.';
@@ -122,6 +171,7 @@ async function prepare(){
     const downloadList=$('#downloadList');
     downloadList.replaceChildren();
     movie.video_sources.forEach((source,index)=>{
+      if(source.provider==='doodstream')return;
       const link=document.createElement('a');
       link.className='download-link';
       link.href='/api/download/'+encodeURIComponent(movieId)+'/'+index;
@@ -140,16 +190,8 @@ async function prepare(){
       link.append(text,icon);
       downloadList.append(link);
     });
-    $('#downloads').hidden=false;
-    // Filmio V6 output is a single-file fragmented MP4: front-loaded moov + SIDX + moof/mdat.
-    // Native media seeking sends a fresh byte-range request for the target offset.
-    // Metadata preload avoids eagerly filling the browser buffer before playback starts;
-    // the Worker fetches only the requested cache segment plus one segment ahead.
-    status('Connecting to the V6 stream and loading the first media fragment…');
-    video.preload='metadata';
-    streamUrl='/api/watch/'+encodeURIComponent(movieId)+'/'+activeOptionIndex;
-    video.src=streamUrl;
-    video.load();
+    $('#downloads').hidden=downloadList.children.length===0;
+    playSource(activeOptionIndex);
     startupTimer=setTimeout(()=>{
       if(generation!==prepareGeneration)return;
       if(!(Number(video.duration)>0)&&video.readyState<1){
@@ -165,16 +207,8 @@ $('#sourceSelect').addEventListener('change',()=>{
   if(!Number.isInteger(next)||next<0||next>=availableSources.length||next===activeOptionIndex)return;
   const resume=!video.paused;
   activeOptionIndex=next;
-  clearStartupTimer();
-  loading(true);
-  status('Switching video source and warming its first cached fragments…');
   $('#retry').classList.remove('show');
-  streamUrl='/api/watch/'+encodeURIComponent(movieId)+'/'+activeOptionIndex;
-  video.src=streamUrl;
-  video.load();
-  const generation=++prepareGeneration;
-  startupTimer=setTimeout(()=>{if(generation===prepareGeneration&&video.readyState<1)showPlayerError('This video option is taking too long to start. Check its Drive sharing and V6 conversion.');},30000);
-  if(resume)video.addEventListener('canplay',()=>video.play().catch(()=>{}),{once:true});
+  playSource(activeOptionIndex,resume);
 });
 video.addEventListener('error',mediaError);
 video.addEventListener('loadedmetadata',playbackReady);
@@ -186,7 +220,7 @@ video.addEventListener('errordisplay',event=>{
 });
 video.addEventListener('waiting',()=>{if(!video.paused)status('Buffering the next video segment…')});
 video.addEventListener('playing',()=>status(''));
-$('#retry').addEventListener('click',prepare);
+$('#retry').addEventListener('click',()=>{if(availableSources[activeOptionIndex]?.provider==='doodstream')playSource(activeOptionIndex);else prepare()});
 prepare();
 </script>
 <link rel="stylesheet" href="/pwa-install.css"><script src="/pwa-install.js" defer></script>
