@@ -970,6 +970,26 @@ async function api(req, env, ctx) {
       );
       if (response.status === 416) return response;
 
+      // Do not advertise a successful full-file download unless the upstream
+      // range pipeline describes the entire object and its exact byte length.
+      // This catches accidental first-chunk/partial responses before headers
+      // are committed to the browser.
+      const contentRange = parseContentRange(response.headers.get('content-range'));
+      const advertisedLength = Number(response.headers.get('content-length'));
+      const expectedRangeLength = contentRange
+        ? contentRange.end - contentRange.start + 1
+        : NaN;
+      if (!contentRange || !Number.isSafeInteger(advertisedLength) ||
+          advertisedLength !== expectedRangeLength ||
+          (requestedRange
+            ? response.status !== 206
+            : contentRange.start !== 0 ||
+              contentRange.end !== contentRange.total - 1 ||
+              advertisedLength !== contentRange.total)) {
+        try { await response.body?.cancel(); } catch {}
+        throw new Error('Refusing an incomplete or inconsistent video download response');
+      }
+
       const container = response.headers.get('x-moviwatch-container') || 'mp4';
       const extension = ({
         mp4: 'mp4', webm: 'webm', mkv: 'mkv', avi: 'avi',
@@ -991,6 +1011,9 @@ async function api(req, env, ctx) {
       headers.set('cache-control', 'private, no-store, max-age=0');
       headers.set('x-content-type-options', 'nosniff');
       headers.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
+      headers.set('x-moviwatch-download-total-bytes', String(contentRange.total));
+      headers.set('x-moviwatch-download-mode', requestedRange ? 'range' : 'full');
+      headers.set('x-moviwatch-download-chunk-size', String(VIDEO_CHUNK_SIZE));
       if (!requestedRange) headers.delete('content-range');
 
       return new Response(response.body, {
