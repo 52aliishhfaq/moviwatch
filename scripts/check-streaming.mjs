@@ -104,7 +104,7 @@ assert(watch.includes('id="sourceSelect"') && watch.includes("'/api/watch/'+enco
   'The playback quality selector must appear below the player only when multiple sources exist, preserving source switching');
 assert(watch.includes('id="doodstreamStage"') && watch.includes("source?.provider==='doodstream'") &&
   watch.includes("frame.src=source.embed_url") && watch.includes("video.style.visibility='hidden'") &&
-  watch.includes("doodstreamStage.hidden=true") && watch.includes("if(!$('#doodstreamStage').hidden)return"),
+  watch.includes("doodstreamStage.hidden=true") && watch.includes("if(!doodstreamStage.hidden)return"),
   'Doodstream must render as an overlay inside the existing Movi Player stage and switch cleanly back to native playback');
 assert(watch.includes('Filmio V6 output is a single-file fragmented MP4') &&
   watch.includes('},30000);') && watch.includes('validated Filmio V6 single-file fMP4'),
