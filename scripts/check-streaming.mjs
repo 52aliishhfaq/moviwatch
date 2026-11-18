@@ -78,8 +78,9 @@ assert(worker.includes("host === 'archive.org' || host.endsWith('.archive.org')"
   worker.includes('function videoSourceFetch') && worker.includes('sourceKind(host)'),
   'Public Archive.org direct-download URLs and redirects must use the same range-streaming proxy');
 assert(worker.includes('function sourceProvider(input)') && worker.includes("provider: sourceProvider(sourceUrl)") &&
-  worker.includes("return 'doodstream'") && worker.includes("url.pathname = '/e/' + parts[1]"),
-  'Doodstream /e/ embed links and /d/ share links must be validated and normalized');
+  worker.includes("return 'doodstream'") && worker.includes("url.pathname = '/e/' + parts[1]") &&
+  worker.includes("'playmogo.com'"),
+  'Doodstream /e/, /d/, and PlayMogo embed links must be validated and normalized');
 assert(admin.includes('Archive.org direct download') && admin.includes('Doodstream embed URL') &&
   admin.includes('doodCount') && admin.includes('Doodstream)'),
   'Admin must document Doodstream embed links and show source counts');
