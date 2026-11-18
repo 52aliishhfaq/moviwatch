@@ -126,6 +126,7 @@ function playSource(index,resume=false){
   if(resume)video.addEventListener('canplay',()=>video.play().catch(()=>{}),{once:true});
 }
 function mediaError(){
+  if(!doodstreamStage.hidden)return;
   const e=video.error;
   let message='Video playback failed.';
   if(e?.code===4){
@@ -192,12 +193,6 @@ async function prepare(){
     });
     $('#downloads').hidden=downloadList.children.length===0;
     playSource(activeOptionIndex);
-    startupTimer=setTimeout(()=>{
-      if(generation!==prepareGeneration)return;
-      if(!(Number(video.duration)>0)&&video.readyState<1){
-        showPlayerError('The V6 stream has not delivered browser metadata within 30 seconds. Check that the uploaded file is a validated Filmio V6 single-file fMP4, and that the Drive link is public and supports byte ranges.');
-      }
-    },30000);
   }catch(e){
     clearStartupTimer();loading(false);status(e.message||'Unable to prepare this video.',true);$('#retry').classList.add('show');
   }
