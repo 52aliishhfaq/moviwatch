@@ -123,11 +123,11 @@ assert(watch.includes('function playMogoDownloadUrlFromEmbed(input)') &&
   'The watch page must safely derive a PlayMogo /d/ download URL from the embed URL even when a cached catalogue lacks download_url');
 assert(watch.includes('id="downloadNowPanel"') && watch.includes('id="downloadNow"') &&
   watch.includes("source.provider==='doodstream'") &&
-  watch.includes("source.download_url") &&
+  watch.includes("playMogoDownloadUrlFromEmbed(source.embed_url)") &&
+  watch.includes("link.href=playMogoDownloadUrl;") &&
   watch.includes("link.target='_blank'") &&
-  watch.includes("Download Dual Audio Movie English + Hindi") &&
-  watch.includes("Opens PlayMogo’s download page for this exact video."),
-  'Download Now must open the matching PlayMogo download route when a validated PlayMogo embed is selected');
+  watch.includes("Download Dual Audio Movie English + Hindi"),
+  'Download Now must open the derived PlayMogo download route when a validated embed is selected');
 assert(watch.includes("'/api/download/'+encodeURIComponent(movieId)+'/'+index") &&
   watch.includes("['google-drive','archive.org'].includes(source.provider)"),
   'Google Drive and Archive.org must keep their existing download route');
