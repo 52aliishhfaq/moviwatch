@@ -42,6 +42,17 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 .download-link:hover,.download-link:focus-visible{background:#263a60;border-color:#8294ff;outline:none}
 .download-link small{display:block;color:#b9c6e1;font-size:11px;font-weight:450}
 .download-link .download-icon{font-size:19px}
+.download-now-panel{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:16px 0 12px;padding:18px;background:linear-gradient(145deg,#172642,#101a2d);border:1px solid #3a4a6a;border-radius:14px}
+.download-now-panel[hidden]{display:none}
+.download-now-copy{min-width:0}
+.download-now-eyebrow{margin:0 0 4px;color:#aebdff;font-size:11px;font-weight:750;letter-spacing:.09em;text-transform:uppercase}
+.download-now-heading{margin:0;font-size:18px;line-height:1.25}
+.download-now-note{margin:6px 0 0;color:var(--muted);font-size:12px;max-width:620px}
+.download-now{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;gap:9px;min-width:170px;padding:13px 18px;border:1px solid #8294ff;border-radius:10px;background:#6578f5;color:#fff;text-decoration:none;text-align:center;font:700 14px/1.2 system-ui,-apple-system,Segoe UI,sans-serif;cursor:pointer}
+.download-now:hover,.download-now:focus-visible{background:#7a8aff;outline:2px solid #aab7ff;outline-offset:2px}
+.download-now:disabled{border-color:#46516a;background:#263249;color:#9eabc4;cursor:not-allowed;outline:none}
+.download-now[hidden]{display:none}
+@media(max-width:650px){.download-now-panel{align-items:stretch;flex-direction:column;padding:14px}.download-now{width:100%}}
 @media(max-width:650px){.downloads{padding:14px}.download-list{grid-template-columns:1fr}}
 @media(max-width:650px){header{height:58px}main{width:calc(100% - 24px);margin:20px auto 40px}.player-shell{padding:0;border-radius:12px}.player-shell movi-player{border-radius:11px}.doodstream-stage{inset:0 0 auto;width:auto;height:auto;border-radius:11px}.heading{display:block}h1{font-size:25px}}
 </style>
@@ -59,6 +70,15 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
   <div id="loading" class="loading"><span class="spinner"></span><span>Preparing video for quick playback…</span></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <button id="retry" class="retry" type="button">Retry stream</button>
+</section>
+<section id="downloadNowPanel" class="download-now-panel" aria-label="Download the selected movie source" hidden>
+  <div class="download-now-copy">
+    <p class="download-now-eyebrow">Offline viewing</p>
+    <h2 id="downloadNowHeading" class="download-now-heading">Download selected movie</h2>
+    <p id="downloadNowNote" class="download-now-note">The original source file is downloaded unchanged.</p>
+  </div>
+  <a id="downloadNow" class="download-now" href="#" hidden><span id="downloadNowText">Download Now</span><span aria-hidden="true">↓</span></a>
+  <button id="downloadUnavailable" class="download-now" type="button" disabled hidden>Download Now</button>
 </section>
 <section id="downloads" class="downloads" aria-labelledby="downloadHeading" hidden>
   <h2 id="downloadHeading">Download this video</h2>
@@ -80,8 +100,45 @@ function loading(on){$('#loading').hidden=!on}
 function clearStartupTimer(){if(startupTimer!==null){clearTimeout(startupTimer);startupTimer=null}}
 function showPlayerError(message){clearStartupTimer();loading(false);status(message,true);$('#retry').classList.add('show')}
 function playbackReady(){clearStartupTimer();loading(false);status('');$('#retry').classList.remove('show')}
+function updateDownloadNow(index){
+  const source=availableSources[index];
+  const panel=$('#downloadNowPanel');
+  const link=$('#downloadNow');
+  const unavailable=$('#downloadUnavailable');
+  panel.hidden=!source;
+  if(!source)return;
+
+  const supportsDownload=['google-drive','archive.org'].includes(source.provider);
+  const sourceLabel=(source.label||'').trim();
+  const dualAudio=/\bdual[\s-]?audio\b/i.test(sourceLabel) ||
+    (/\benglish\b/i.test(sourceLabel)&&/\bhindi\b/i.test(sourceLabel));
+
+  $('#downloadNowHeading').textContent=dualAudio
+    ? 'Dual Audio Movie · English + Hindi'
+    : 'Download selected movie';
+
+  if(supportsDownload){
+    link.href='/api/download/'+encodeURIComponent(movieId)+'/'+index;
+    link.setAttribute('download','');
+    link.hidden=false;
+    unavailable.hidden=true;
+    $('#downloadNowText').textContent=dualAudio
+      ? 'Dual Audio · Download Now'
+      : 'Download Now';
+    $('#downloadNowNote').textContent=dualAudio
+      ? 'Downloads this selected dual-audio source unchanged, preserving the English and Hindi tracks supplied in the file.'
+      : 'Downloads the selected original file unchanged. English + Hindi audio is included only if both tracks are present in this source.';
+  }else{
+    link.hidden=true;
+    link.removeAttribute('href');
+    link.removeAttribute('download');
+    unavailable.hidden=false;
+    $('#downloadNowNote').textContent='This PlayMogo/Doodstream link is a hosted player, not a direct video file. Add an authorized Google Drive or Archive.org download URL as a source to enable downloading.';
+  }
+}
 function playSource(index,resume=false){
   const source=availableSources[index];
+  updateDownloadNow(index);
   clearStartupTimer();
   if(source?.provider==='doodstream'){
     video.pause();
