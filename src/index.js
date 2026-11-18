@@ -197,7 +197,12 @@ export class PublicCatalogue extends WorkerEntrypoint {
     const payload = {
       movies: rows.map(({ video_sources, ...movie }) => ({
         ...movie,
-        video_sources: (video_sources || []).map((source) => ({ label: source.label || 'Play' }))
+        video_sources: (video_sources || []).map((source) => ({
+          label: source.label || 'Play',
+          provider: source.provider || 'google-drive',
+          // Only hosted-player URLs are public; direct Drive/Archive URLs stay server-side.
+          embed_url: source.provider === 'doodstream' ? source.url : null
+        }))
       }))
     };
     return json(payload, 200, {

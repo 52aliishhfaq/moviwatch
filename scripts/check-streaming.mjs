@@ -87,6 +87,9 @@ assert(admin.includes('Archive.org direct download') && admin.includes('Doodstre
 assert(worker.includes("'embed_url', CASE WHEN item.value->>'provider'='doodstream' THEN item.value->>'url' ELSE NULL END") &&
   worker.includes("source.provider === 'doodstream'"),
   'Only Doodstream embed URLs may be exposed publicly, and Doodstream must bypass MP4 range/download proxying');
+assert(worker.includes("provider: source.provider || 'google-drive'") &&
+  worker.includes("embed_url: source.provider === 'doodstream' ? source.url : null"),
+  'The public catalogue must retain provider metadata and only expose hosted-player embed URLs, otherwise the watch page misroutes embeds to /api/watch');
 assert(worker.includes('sourceVersion instanceof Date') && worker.includes('normalizedSourceVersion'),
   'Source version must be normalized before it crosses the entrypoint boundary');
 assert(worker.includes("const expectedChunkStart = videoChunkStartForOffset(cursor, fragmented)") &&
