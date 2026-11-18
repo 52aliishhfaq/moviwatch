@@ -256,11 +256,11 @@ async function driveFetch(source, method, headers) {
   throw new Error('Drive redirect limit reached');
 }
 
-// Video edge cache: store complete 4 MiB byte chunks as cacheable 200 responses.
+// Video edge cache: store complete 1 MiB continuation chunks as cacheable 200 responses.
 // The public response is reconstructed as a standards-compliant 206 response.
-const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024;
+const VIDEO_CHUNK_SIZE = 1 * 1024 * 1024;
 // Fragmented MP4 keeps its initial moov + first media fragments compact.
-// Fetch a smaller first block so playback does not wait for an unnecessary 4 MiB.
+// Fetch a smaller first block so playback does not wait for a large initial transfer.
 const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024;
 const VIDEO_HEADER_PROBE_SIZE = 16 * 1024;
 const VIDEO_CACHE_TTL = 24 * 60 * 60;
@@ -678,8 +678,8 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
 
   // The cached header probe identifies fragmented MP4 for every range request,
-  // including seeks. This keeps the short first segment and the 4 MiB segments
-  // after it aligned for both playback and seeking.
+  // including seeks. Keep a compact first segment and 1 MiB continuation chunks
+  // so cold seeks do not have to wait for a 4 MiB Drive transfer.
   const header = await getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash);
   const fragmented = header.fragmented === true;
   const total = header.total;
@@ -706,8 +706,8 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
 
   if (startupPrefetch) {
     const prefetchStarted = Date.now();
-    // Load the compact fMP4 first segment and the following 4 MiB media
-    // segment concurrently. For conventional MP4, retain 4 MiB-aligned chunks
+    // Load the compact fMP4 first segment and the following 1 MiB media
+    // segment concurrently. For conventional MP4, retain 1 MiB-aligned chunks
     // and prefetch every chunk required to reach the moov index.
     const starts = [];
     let nextStart = 0;
@@ -770,10 +770,25 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
                 ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
                 expectedChunkStart, videoChunkSizeAt(expectedChunkStart, fragmented)
               );
+          prefetched.delete(expectedChunkStart);
           if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total) {
             throw new Error('Google Drive video size changed during streaming');
           }
         }
+
+        // Keep one segment ahead warm while the browser consumes the current
+        // range. This is especially useful after a seek: the target segment is
+        // fetched immediately, and its successor starts filling in parallel.
+        const nextChunkStart = chunk.end + 1;
+        if (nextChunkStart < total && !prefetched.has(nextChunkStart)) {
+          const nextPromise = getVideoChunk(
+            ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
+            nextChunkStart, videoChunkSizeAt(nextChunkStart, fragmented)
+          );
+          prefetched.set(nextChunkStart, nextPromise);
+          ctx.waitUntil(Promise.allSettled([nextPromise]));
+        }
+
         const from = cursor - chunk.start;
         const through = Math.min(responseEnd, chunk.end) - chunk.start + 1;
         if (through <= from) throw new Error('Invalid cached video chunk boundary');

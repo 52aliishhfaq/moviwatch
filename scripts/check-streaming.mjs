@@ -26,16 +26,19 @@ assert(worker.includes("Range: 'bytes=0-' + (VIDEO_HEADER_PROBE_SIZE - 1)") &&
   worker.includes('mp4MoovEnd(bytes)') && worker.includes('mp4HasMvex(bytes)'),
   'The header probe must detect moov size and fragmented MP4 metadata');
 assert(worker.includes('VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024') &&
+  worker.includes('VIDEO_CHUNK_SIZE = 1 * 1024 * 1024') &&
   worker.includes('videoChunkStartForOffset(offset, fragmented)') &&
   worker.includes('videoChunkSizeAt(chunkStart, fragmented)'),
-  'Fragmented MP4 must use a small first segment and 4 MiB follow-up segments');
+  'Fragmented MP4 must use a small first segment and 1 MiB follow-up segments');
 assert(worker.includes('prefetched.set(starts[i], chunkPromises[i])') &&
   worker.includes('ctx.waitUntil(Promise.allSettled(chunkPromises))') &&
   worker.includes("cacheStatus = 'PREFETCH'"),
   'Startup and next-segment cache fills must run concurrently in the background');
 assert(worker.includes('const pending = prefetched.get(expectedChunkStart)') &&
-  worker.includes('? await pending'),
-  'The stream must await only the chunk currently needed by the browser');
+  worker.includes('? await pending') && worker.includes('prefetched.delete(expectedChunkStart)') &&
+  worker.includes('const nextChunkStart = chunk.end + 1') &&
+  worker.includes('ctx.waitUntil(Promise.allSettled([nextPromise]))'),
+  'The stream must await only the needed chunk, release consumed buffers, and warm the next segment in the background');
 assert(worker.includes("'x-moviwatch-stream-profile': fragmented ? 'single-file-fmp4' : 'range-stream'"),
   'The Worker must expose whether the served source is a V6 single-file fMP4');
 assert(worker.includes("'x-moviwatch-fragmented': String(fragmented)") &&
@@ -92,4 +95,4 @@ assert(!/method\s*:\s*['"]HEAD['"]/.test(watch),
 assert(!watch.includes("Range:'bytes=0-1'") && watch.includes('preload="auto"'),
   'The player must use browser-managed eager preload without a redundant probe');
 
-console.log('Validated adaptive fMP4 startup, 4 MiB continuation, range-seek mapping, and cache entrypoints.');
+console.log('Validated adaptive fMP4 startup, 1 MiB continuation, next-segment prefetch, range-seek mapping, and cache entrypoints.');
