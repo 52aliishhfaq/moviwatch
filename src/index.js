@@ -251,7 +251,7 @@ async function videoSourceFetch(source, method, headers) {
   }
   let currentMethod = method;
   for (let hop = 0; hop <= 5; hop++) {
-    if (url.protocol !== 'https:') throw new Error('Google Drive redirect must use HTTPS');
+    if (url.protocol !== 'https:') throw new Error('Video-source redirect must use HTTPS');
     const host = url.hostname.toLowerCase();
     if ((host === 'accounts.google.com' || host.endsWith('.accounts.google.com')) && sourceKind(new URL(source).hostname) === 'Google Drive') {
       throw new Error('Google Drive file requires sign-in. In Google Drive, set General access to Anyone with the link (Viewer), save, and try again.');
@@ -260,11 +260,11 @@ async function videoSourceFetch(source, method, headers) {
     const res = await fetch(url.toString(), { method: currentMethod, headers, redirect: 'manual' });
     if (![301, 302, 303, 307, 308].includes(res.status)) return res;
     const location = res.headers.get('Location');
-    if (!location || hop === 5) throw new Error('Drive redirect limit reached');
+    if (!location || hop === 5) throw new Error('Video-source redirect limit reached');
     url = new URL(location, url);
     if (res.status === 303 || ((res.status === 301 || res.status === 302) && currentMethod !== 'HEAD')) currentMethod = 'GET';
   }
-  throw new Error('Drive redirect limit reached');
+  throw new Error('Video-source redirect limit reached');
 }
 
 // Video edge cache: store complete 1 MiB continuation chunks as cacheable 200 responses.
@@ -1152,7 +1152,7 @@ export default {
     } catch (error) {
       console.error('Request failed:', error?.stack || error?.message || error);
       const message = error instanceof Error ? error.message : 'Internal server error';
-      const client = /required|invalid|must |between |only |unknown category|too large|HTTPS|Google Drive/i.test(message);
+      const client = /required|invalid|must |between |only |unknown category|too large|HTTPS|Google Drive|Archive\.org|video link/i.test(message);
       return json({ error: client ? message : 'Internal server error' }, client ? 400 : 500);
     }
   }
