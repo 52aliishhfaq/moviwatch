@@ -100,25 +100,53 @@ async function loginLimit(req, env) {
   if (count === 1) await r.expire(key, 600);
   return count <= 10;
 }
+const DOODSTREAM_HOSTS = new Set(['doodstream.com', 'dood.to', 'dood.la', 'dood.so', 'dood.watch']);
+function isDoodstreamHost(host) {
+  host = host.toLowerCase();
+  return DOODSTREAM_HOSTS.has(host) ||
+    ['doodstream.com', 'dood.to', 'dood.la', 'dood.so', 'dood.watch'].some(domain => host.endsWith('.' + domain));
+}
 function videoSourceUrl(input) {
-  if (typeof input !== 'string' || !input.trim() || input.length > 2048) throw new Error('A valid Google Drive or Archive.org video link is required');
+  if (typeof input !== 'string' || !input.trim() || input.length > 2048) {
+    throw new Error('A valid Google Drive, Archive.org, or Doodstream video link is required');
+  }
   const value = input.trim();
-  if (/^[\w-]{10,200}$/.test(value)) return 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(value) + '&export=download&confirm=t';
+  if (/^[\w-]{10,200}$/.test(value)) {
+    return 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(value) + '&export=download&confirm=t';
+  }
   let url;
   try { url = new URL(value); } catch { throw new Error('Invalid video URL'); }
   if (url.protocol !== 'https:') throw new Error('Video URL must use HTTPS');
   const host = url.hostname.toLowerCase();
+
+  // Doodstream supplies an external player iframe, not a regular MP4 byte stream.
+  // Only accept a known Doodstream host and a simple file code; never accept arbitrary iframe URLs.
+  if (isDoodstreamHost(host)) {
+    const parts = url.pathname.split('/').filter(Boolean);
+    if (parts.length !== 2 || !['e', 'd'].includes(parts[0]) || !/^[A-Za-z0-9_-]{3,100}$/.test(parts[1])) {
+      throw new Error('Use a Doodstream Embed URL such as https://doodstream.com/e/VIDEO_CODE');
+    }
+    url.pathname = '/e/' + parts[1];
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  }
+
   if (host === 'drive.google.com' || host === 'drive.usercontent.google.com' || host.endsWith('.googleusercontent.com')) {
     const id = url.pathname.split('/file/d/')[1]?.split('/')[0] || url.searchParams.get('id');
-    if (id && (host === 'drive.google.com' || host === 'drive.usercontent.google.com')) return 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(id) + '&export=download&confirm=t';
+    if (id && (host === 'drive.google.com' || host === 'drive.usercontent.google.com')) {
+      return 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(id) + '&export=download&confirm=t';
+    }
     return url.toString();
   }
   const archivePathParts = url.pathname.split('/').filter(Boolean);
-  if ((host === 'archive.org' || host.endsWith('.archive.org')) && archivePathParts[0] === 'download' && archivePathParts.length >= 3) return url.toString();
-  throw new Error('Use a public Google Drive link or a direct Archive.org /download/identifier/filename link');
+  if ((host === 'archive.org' || host.endsWith('.archive.org')) &&
+      archivePathParts[0] === 'download' && archivePathParts.length >= 3) return url.toString();
+  throw new Error('Use a public Google Drive link, Archive.org /download/ link, or Doodstream /e/ or /d/ Embed URL');
 }
 function sourceProvider(input) {
   const host = new URL(input).hostname.toLowerCase();
+  if (isDoodstreamHost(host)) return 'doodstream';
   return host === 'archive.org' || host.endsWith('.archive.org') ? 'archive.org' : 'google-drive';
 }
 function movieInput(body) {
@@ -145,7 +173,11 @@ async function publicMovies(env, category, query) {
   return await sql`SELECT id,title,poster_url,category,created_at,
     COALESCE((
       SELECT jsonb_agg(
-        jsonb_build_object('label', COALESCE(NULLIF(item.value->>'label',''),'Play'))
+        jsonb_build_object(
+          'label', COALESCE(NULLIF(item.value->>'label',''),'Play'),
+          'provider', COALESCE(item.value->>'provider','google-drive'),
+          'embed_url', CASE WHEN item.value->>'provider'='doodstream' THEN item.value->>'url' ELSE NULL END
+        )
         ORDER BY item.ordinality
       )
       FROM jsonb_array_elements(videos) WITH ORDINALITY AS item(value, ordinality)
@@ -921,6 +953,9 @@ async function api(req, env, ctx) {
         ? new Response(null, { status: 404, headers: { 'cache-control': 'no-store' } })
         : json({ error: 'Video option not found' }, 404);
     }
+    if (source.provider === 'doodstream' || sourceProvider(source.url) === 'doodstream') {
+      return json({ error: 'Doodstream videos use the embedded player and are not downloadable through this endpoint.' }, 400);
+    }
 
     const cleanPart = (value) => String(value || '')
       .normalize('NFKC')
@@ -1027,6 +1062,9 @@ async function api(req, env, ctx) {
     const optionIndex = Number(watch[4]);
     const source = movie.video_sources?.[optionIndex];
     if (!source?.url || !Number.isInteger(optionIndex) || optionIndex < 0) return json({ error: 'Video option not found' }, 404);
+    if (source.provider === 'doodstream' || sourceProvider(source.url) === 'doodstream') {
+      return json({ error: 'Doodstream videos play in their embedded player and do not use the byte-range stream endpoint.' }, 400);
+    }
 
     // Serve HEAD and ordinary full-file GET through the same 4 MiB edge cache.
     // Only If-Range stays on the origin path because it depends on origin validators.
