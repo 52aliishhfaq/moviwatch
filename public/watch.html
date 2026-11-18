@@ -26,8 +26,7 @@ main{width:min(1160px,calc(100% - 40px));margin:30px auto 64px}
 h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px}
 .meta{color:var(--muted);margin:8px 0 0;font-size:14px}
 .player-shell{padding:12px;background:#0b1220;border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 80px #0006}
-.player-shell{position:relative;overflow:hidden}.player-shell movi-player{display:block;width:100%;aspect-ratio:16/9;min-height:0;height:auto;border-radius:10px;overflow:hidden;background:#05080e;--movi-accent:var(--accent);--movi-background:#05080e;--movi-panel:#111a2b;--movi-text:#f4f6fc}.doodstream-stage{position:absolute;inset:12px 12px auto;width:auto;height:auto;z-index:4;overflow:hidden;border-radius:10px;background:#05080e;aspect-ratio:16/9}.doodstream-stage[hidden]{display:none}.doodstream-stage iframe{display:block;width:100%;height:100%;min-height:0;border:0;background:#05080e;touch-action:pan-y}.doodstream-fallback{position:relative;z-index:5;display:inline-flex;margin:8px 4px;padding:8px 12px;border:1px solid #53658a;border-radius:8px;color:#dce4ff;background:#182640;text-decoration:none;font-size:13px}.doodstream-fallback[hidden]{display:none}
-.player-toolbar{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:0 4px 10px}.player-toolbar label{color:var(--muted);font-size:13px}.player-toolbar select{max-width:min(70vw,280px);border:1px solid #3a4a6a;border-radius:9px;background:#182640;color:#f5f7ff;padding:9px 32px 9px 12px;font:inherit}.status{min-height:24px;margin:12px 4px 2px;color:var(--muted);font-size:13px}
+.player-shell{position:relative;overflow:hidden}.player-shell movi-player{display:block;width:100%;aspect-ratio:16/9;min-height:0;height:auto;border-radius:10px;overflow:hidden;background:#05080e;--movi-accent:var(--accent);--movi-background:#05080e;--movi-panel:#111a2b;--movi-text:#f4f6fc}.doodstream-stage{position:absolute;inset:12px 12px auto;width:auto;height:auto;z-index:4;overflow:hidden;border-radius:10px;background:#05080e;aspect-ratio:16/9}.doodstream-stage[hidden]{display:none}.doodstream-stage iframe{display:block;width:100%;height:100%;min-height:0;border:0;background:#05080e;touch-action:pan-y}.status{min-height:24px;margin:12px 4px 2px;color:var(--muted);font-size:13px}
 .status.error{color:#ff9d9d}
 .status:empty{display:none}
 .loading{display:flex;align-items:center;gap:10px;color:#c7d1e5;padding:26px 4px}.loading[hidden]{display:none!important}
@@ -35,25 +34,15 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 @keyframes spin{to{transform:rotate(360deg)}}
 .retry{display:none;margin:8px 4px 2px;border:1px solid #53658a;border-radius:8px;background:#1b2941;color:#fff;padding:9px 14px;font:inherit;cursor:pointer}
 .retry.show{display:inline-flex}
-.downloads{margin:18px 0 28px;padding:18px;background:linear-gradient(145deg,#111a2b,#0d1524);border:1px solid var(--line);border-radius:14px}
-.downloads h2{font-size:17px;margin:0 0 5px}.download-note{color:var(--muted);font-size:13px;margin:0 0 13px}
-.download-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
-.download-link{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid #3a4a6a;border-radius:10px;background:#182640;color:#f5f7ff;text-decoration:none;font-weight:650;transition:background .15s,border-color .15s}
-.download-link:hover,.download-link:focus-visible{background:#263a60;border-color:#8294ff;outline:none}
-.download-link small{display:block;color:#b9c6e1;font-size:11px;font-weight:450}
-.download-link .download-icon{font-size:19px}
-.download-now-panel{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:16px 0 12px;padding:18px;background:linear-gradient(145deg,#172642,#101a2d);border:1px solid #3a4a6a;border-radius:14px}
+.download-now-panel{display:flex;align-items:center;flex-direction:column;gap:12px;margin:16px 0 12px;padding:18px;background:linear-gradient(145deg,#172642,#101a2d);border:1px solid #3a4a6a;border-radius:14px;text-align:center}
 .download-now-panel[hidden]{display:none}
-.download-now-copy{min-width:0}
-.download-now-eyebrow{margin:0 0 4px;color:#aebdff;font-size:11px;font-weight:750;letter-spacing:.09em;text-transform:uppercase}
 .download-now-heading{margin:0;font-size:18px;line-height:1.25}
-.download-now-note{margin:6px 0 0;color:var(--muted);font-size:12px;max-width:620px}
+.download-now-note{margin:0;color:var(--muted);font-size:12px;max-width:620px}
 .download-now{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;gap:9px;min-width:170px;padding:13px 18px;border:1px solid #8294ff;border-radius:10px;background:#6578f5;color:#fff;text-decoration:none;text-align:center;font:700 14px/1.2 system-ui,-apple-system,Segoe UI,sans-serif;cursor:pointer}
 .download-now:hover,.download-now:focus-visible{background:#7a8aff;outline:2px solid #aab7ff;outline-offset:2px}
 .download-now:disabled{border-color:#46516a;background:#263249;color:#9eabc4;cursor:not-allowed;outline:none}
 .download-now[hidden]{display:none}
-@media(max-width:650px){.download-now-panel{align-items:stretch;flex-direction:column;padding:14px}.download-now{width:100%}}
-@media(max-width:650px){.downloads{padding:14px}.download-list{grid-template-columns:1fr}}
+@media(max-width:650px){.download-now-panel{padding:14px}.download-now{width:100%}}
 @media(max-width:650px){header{height:58px}main{width:calc(100% - 24px);margin:20px auto 40px}.player-shell{padding:0;border-radius:12px}.player-shell movi-player{border-radius:11px}.doodstream-stage{inset:0 0 auto;width:auto;height:auto;border-radius:11px}.heading{display:block}h1{font-size:25px}}
 </style>
 </head>
@@ -65,25 +54,15 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 <section class="player-shell" aria-label="Movie player">
   <movi-player id="video" controls playsinline preload="metadata" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
   <div id="doodstreamStage" class="doodstream-stage" hidden aria-label="Doodstream hosted player"></div>
-  <a id="doodstreamFallback" class="doodstream-fallback" target="_blank" rel="noopener noreferrer" hidden>Open hosted player directly ↗</a>
-  <div class="player-toolbar" id="playerToolbar" hidden><label for="sourceSelect">Quality</label><select id="sourceSelect" aria-label="Choose playback quality"></select></div>
   <div id="loading" class="loading"><span class="spinner"></span><span>Preparing video for quick playback…</span></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <button id="retry" class="retry" type="button">Retry stream</button>
 </section>
-<section id="downloadNowPanel" class="download-now-panel" aria-label="Download the selected movie source" hidden>
-  <div class="download-now-copy">
-    <p class="download-now-eyebrow">Offline viewing</p>
-    <h2 id="downloadNowHeading" class="download-now-heading">Download selected movie</h2>
-    <p id="downloadNowNote" class="download-now-note">The original source file is downloaded unchanged.</p>
-  </div>
-  <a id="downloadNow" class="download-now" href="#" hidden><span id="downloadNowText">Download Now</span><span aria-hidden="true">↓</span></a>
+<section id="downloadNowPanel" class="download-now-panel" aria-label="Download dual audio movie" hidden>
+  <h2 id="downloadNowHeading" class="download-now-heading">Download Dual Audio Movie English + Hindi</h2>
+  <a id="downloadNow" class="download-now" href="#" hidden>Download Now <span aria-hidden="true">↓</span></a>
   <button id="downloadUnavailable" class="download-now" type="button" disabled hidden>Download Now</button>
-</section>
-<section id="downloads" class="downloads" aria-labelledby="downloadHeading" hidden>
-  <h2 id="downloadHeading">Download this video</h2>
-  <p class="download-note">Choose the available quality or video option. Each download is separate.</p>
-  <div id="downloadList" class="download-list"></div>
+  <p id="downloadNowNote" class="download-now-note" role="status" aria-live="polite"></p>
 </section>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js"></script>
@@ -93,7 +72,6 @@ const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).po
 const video=$('#video');
 let streamUrl='',mediaContainer='unknown',mediaType='',activeOptionIndex=0,availableSources=[];
 const doodstreamStage=$('#doodstreamStage');
-const doodstreamFallback=$('#doodstreamFallback');
 let startupTimer=null,prepareGeneration=0;
 function status(message,error=false){$('#status').textContent=message;$('#status').classList.toggle('error',error)}
 function loading(on){$('#loading').hidden=!on}
@@ -108,32 +86,19 @@ function updateDownloadNow(index){
   panel.hidden=!source;
   if(!source)return;
 
+  $('#downloadNowHeading').textContent='Download Dual Audio Movie English + Hindi';
   const supportsDownload=['google-drive','archive.org'].includes(source.provider);
-  const sourceLabel=(source.label||'').trim();
-  const dualAudio=/\bdual[\s-]?audio\b/i.test(sourceLabel) ||
-    (/\benglish\b/i.test(sourceLabel)&&/\bhindi\b/i.test(sourceLabel));
-
-  $('#downloadNowHeading').textContent=dualAudio
-    ? 'Dual Audio Movie · English + Hindi'
-    : 'Download selected movie';
 
   if(supportsDownload){
     link.href='/api/download/'+encodeURIComponent(movieId)+'/'+index;
-    link.setAttribute('download','');
     link.hidden=false;
     unavailable.hidden=true;
-    $('#downloadNowText').textContent=dualAudio
-      ? 'Dual Audio · Download Now'
-      : 'Download Now';
-    $('#downloadNowNote').textContent=dualAudio
-      ? 'Downloads this selected dual-audio source unchanged, preserving the English and Hindi tracks supplied in the file.'
-      : 'Downloads the selected original file unchanged. English + Hindi audio is included only if both tracks are present in this source.';
+    $('#downloadNowNote').textContent='The selected original file will download unchanged. English and Hindi audio are included only when both tracks exist in that source.';
   }else{
     link.hidden=true;
     link.removeAttribute('href');
-    link.removeAttribute('download');
     unavailable.hidden=false;
-    $('#downloadNowNote').textContent='This PlayMogo/Doodstream link is a hosted player, not a direct video file. Add an authorized Google Drive or Archive.org download URL as a source to enable downloading.';
+    $('#downloadNowNote').textContent='This source is a hosted PlayMogo/Doodstream player, not a downloadable video file. Add an authorized direct Google Drive or Archive.org video-file URL to enable Download Now.';
   }
 }
 function playSource(index,resume=false){
@@ -145,8 +110,6 @@ function playSource(index,resume=false){
     video.removeAttribute('src');
     video.load();
     video.style.visibility='hidden';
-    doodstreamFallback.href=source.embed_url;
-    doodstreamFallback.hidden=false;
     const frame=document.createElement('iframe');
     frame.loading='eager';
     frame.src=source.embed_url;
@@ -173,8 +136,6 @@ function playSource(index,resume=false){
   }
   doodstreamStage.replaceChildren();
   doodstreamStage.hidden=true;
-  doodstreamFallback.hidden=true;
-  doodstreamFallback.removeAttribute('href');
   video.style.visibility='visible';
   video.preload='metadata';
   streamUrl='/api/watch/'+encodeURIComponent(movieId)+'/'+index;
@@ -223,53 +184,11 @@ async function prepare(){
     if(!Array.isArray(movie.video_sources)||!movie.video_sources.length)throw new Error('No video source is configured for this movie.');
     availableSources=movie.video_sources;
     activeOptionIndex=0;
-    const sourceSelect=$('#sourceSelect');
-    sourceSelect.replaceChildren();
-    availableSources.forEach((source,index)=>{
-      const option=document.createElement('option');
-      option.value=String(index);
-      option.textContent=source.label||('Video '+(index+1));
-      sourceSelect.append(option);
-    });
-    // Keep the playback quality picker below the video, never above it.
-    $('#playerToolbar').hidden=availableSources.length<2;
-    sourceSelect.value='0';
-    const downloadList=$('#downloadList');
-    downloadList.replaceChildren();
-    movie.video_sources.forEach((source,index)=>{
-      if(source.provider==='doodstream')return;
-      const link=document.createElement('a');
-      link.className='download-link';
-      link.href='/api/download/'+encodeURIComponent(movieId)+'/'+index;
-      link.setAttribute('download','');
-      link.dataset.downloadIndex=String(index);
-      const text=document.createElement('span');
-      const name=document.createElement('span');
-      name.textContent=source.label||('Video '+(index+1));
-      const hint=document.createElement('small');
-      hint.textContent='Download video file';
-      text.append(name,hint);
-      const icon=document.createElement('span');
-      icon.className='download-icon';
-      icon.textContent='↓';
-      icon.setAttribute('aria-hidden','true');
-      link.append(text,icon);
-      downloadList.append(link);
-    });
-    $('#downloads').hidden=downloadList.children.length===0;
     playSource(activeOptionIndex);
   }catch(e){
     clearStartupTimer();loading(false);status(e.message||'Unable to prepare this video.',true);$('#retry').classList.add('show');
   }
 }
-$('#sourceSelect').addEventListener('change',()=>{
-  const next=Number($('#sourceSelect').value);
-  if(!Number.isInteger(next)||next<0||next>=availableSources.length||next===activeOptionIndex)return;
-  const resume=!video.paused;
-  activeOptionIndex=next;
-  $('#retry').classList.remove('show');
-  playSource(activeOptionIndex,resume);
-});
 video.addEventListener('error',mediaError);
 video.addEventListener('loadedmetadata',playbackReady);
 video.addEventListener('canplay',playbackReady);

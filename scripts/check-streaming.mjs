@@ -117,11 +117,13 @@ assert(watch.includes('id="downloadNowPanel"') && watch.includes('id="downloadNo
   watch.includes("'/api/download/'+encodeURIComponent(movieId)+'/'+index") &&
   watch.includes("['google-drive','archive.org'].includes(source.provider)") &&
   watch.includes("unavailable.hidden=false") &&
-  watch.includes('English + Hindi audio is included only if both tracks are present in this source.'),
-  'The primary Download Now action must download only authorized direct-file providers, preserve original audio tracks, and explain hosted-player limitations');
-assert(watch.includes("source.provider==='doodstream'") &&
-  watch.includes("This PlayMogo/Doodstream link is a hosted player, not a direct video file."),
-  'Hosted player embeds must never be presented as direct downloadable video files');
+  watch.includes("Download Dual Audio Movie English + Hindi") &&
+  watch.includes("This source is a hosted PlayMogo/Doodstream player, not a downloadable video file."),
+  'The single Download Now action must use the selected authorized direct-file source and must not pretend a hosted embed is downloadable');
+assert(!watch.includes('id="doodstreamFallback"') && !watch.includes('id="playerToolbar"') &&
+  !watch.includes('id="sourceSelect"') && !watch.includes('id="downloads"') &&
+  !watch.includes('Open hosted player directly') && !watch.includes('Choose playback quality'),
+  'The watch page must hide the hosted-player shortcut, quality picker, and legacy download list');
 assert(!/method\s*:\s*['"]HEAD['"]/.test(watch),
   'Watch page must not make eager HEAD requests on page load');
 assert(!watch.includes("Range:'bytes=0-1'") && watch.includes('preload="metadata"') &&
