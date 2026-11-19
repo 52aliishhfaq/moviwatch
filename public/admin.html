@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#0a0e19">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/svg+xml" href="/assets/moviwatch-app-icon.svg">
 <title>Moviwatch Admin</title>
 <style>
 *{box-sizing:border-box}
@@ -13,7 +15,8 @@ a{color:#aabaff}
 h1{font-size:26px}
 .panel{background:#151e30;border:1px solid #303b54;border-radius:14px;padding:20px;margin:16px 0}
 label{display:block;margin:12px 0 6px;color:#b8c2d7}
-input,select,button{width:100%;background:#0e1627;color:white;border:1px solid #3a4661;border-radius:9px;padding:11px;font:inherit}
+input,select,textarea,button{width:100%;background:#0e1627;color:white;border:1px solid #3a4661;border-radius:9px;padding:11px;font:inherit}
+textarea{min-height:132px;resize:vertical}
 button{background:#6b7cff;border-color:#6b7cff;font-weight:650;cursor:pointer;margin-top:12px}
 button.secondary{background:#27334b;border-color:#3a4661}
 button.danger{background:#9c3847;border-color:#9c3847;width:auto;padding:7px 10px;margin:0}
@@ -26,6 +29,7 @@ button.danger{background:#9c3847;border-color:#9c3847;width:auto;padding:7px 10p
 .actions{display:flex;gap:6px}
 .actions button{width:auto}
 .notice{color:#c5d0e5;min-height:22px}
+.source-help{font-size:12px;color:#9ba8c1;margin:8px 0 0}
 @media(max-width:600px){main{margin:20px auto}.panel{padding:15px}.movie{align-items:flex-start}.actions{flex-direction:column}}
 </style>
 </head>
@@ -62,9 +66,10 @@ button.danger{background:#9c3847;border-color:#9c3847;width:auto;padding:7px 10p
         <input id="poster" type="url" required placeholder="https://…">
         <label for="category">Category</label>
         <select id="category"><option>Action</option><option>Romantic</option></select>
-        <label for="voeUrl">VOE embed URL</label>
-        <input id="voeUrl" type="url" inputmode="url" autocomplete="url" required value="https://voe.sx/e/af7mpped9rwa">
-        <p class="muted">Add one official VOE embed link for this movie. Playback stays on VOE. The button on the watch page opens VOE's own page, where download availability follows VOE's account and file rules.</p>
+        <label for="sources">Google Drive / Archive.org video links</label>
+        <textarea id="sources" required placeholder="Google Drive 1080p | https://drive.google.com/file/d/FILE_ID/view
+Archive.org 720p | https://archive.org/download/IDENTIFIER/video.mp4"></textarea>
+        <p class="source-help">One source per line. Format: Label | URL. Google Drive: use a file link and set General access to Anyone with the link (Viewer). Archive.org: use the direct /download/ file URL. Up to 8 sources per movie; first source plays by default.</p>
         <label><input id="published" type="checkbox" checked style="width:auto"> Published to visitors</label>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button id="save" style="flex:1">Save movie</button>
@@ -153,8 +158,10 @@ function renderMovies(){
     const title=document.createElement('strong');
     title.textContent=movie.title;
     const small=document.createElement('small');
-    const count=(movie.video_sources||[]).filter(source=>source.provider==='voe.sx').length;
-    small.textContent=movie.category+' · '+(movie.is_published?'Published':'Hidden')+' · '+(count?count+' VOE player':'VOE link required');
+    const sources=Array.isArray(movie.video_sources)?movie.video_sources:[];
+    const drive=sources.filter(source=>source.provider==='google-drive').length;
+    const archive=sources.filter(source=>source.provider==='archive.org').length;
+    small.textContent=movie.category+' · '+(movie.is_published?'Published':'Hidden')+' · '+sources.length+' source(s) ('+drive+' Drive, '+archive+' Archive.org)';
     info.append(title,small);
     const actions=document.createElement('div');
     actions.className='actions';
@@ -171,15 +178,20 @@ function renderMovies(){
     list.append(row);
   }
 }
+function sourceLines(movie){
+  return (movie.video_sources||[])
+    .filter(source=>source&&typeof source.url==='string'&&['google-drive','archive.org'].includes(source.provider))
+    .map(source=>(source.label||source.provider)+' | '+source.url)
+    .join('\n');
+}
 function editMovie(id){
   const movie=movies.find(item=>item.id===id);
   if(!movie)return;
-  const source=(movie.video_sources||[]).find(item=>item.provider==='voe.sx');
   editing=id;
   $('#title').value=movie.title;
   $('#poster').value=movie.poster_url;
   $('#category').value=movie.category;
-  $('#voeUrl').value=source?.url||'';
+  $('#sources').value=sourceLines(movie);
   $('#published').checked=!!movie.is_published;
   $('#formTitle').textContent='Edit movie';
   $('#save').textContent='Update movie';
@@ -191,6 +203,13 @@ async function deleteMovie(id){
   try{await api('/api/admin/movies/'+id,{method:'DELETE'});await refresh();}
   catch(error){alert(error.message);}
 }
+function parseSources(value){
+  return value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean).map((line,index)=>{
+    const separator=line.indexOf('|');
+    if(separator<0)return{label:'Source '+(index+1),url:line};
+    return{label:line.slice(0,separator).trim(),url:line.slice(separator+1).trim()};
+  });
+}
 $('#movieForm').addEventListener('submit',async event=>{
   event.preventDefault();
   $('#formNotice').textContent='Saving…';
@@ -198,7 +217,7 @@ $('#movieForm').addEventListener('submit',async event=>{
     title:$('#title').value,
     posterUrl:$('#poster').value,
     category:$('#category').value,
-    videoSources:[{label:'VOE',url:$('#voeUrl').value.trim()}],
+    videoSources:parseSources($('#sources').value),
     isPublished:$('#published').checked
   };
   try{
