@@ -100,67 +100,21 @@ async function loginLimit(req, env) {
   if (count === 1) await r.expire(key, 600);
   return count <= 10;
 }
-const DOODSTREAM_HOSTS = new Set(['doodstream.com', 'dood.to', 'dood.la', 'dood.so', 'dood.watch', 'playmogo.com']);
-function isDoodstreamHost(host) {
-  host = host.toLowerCase();
-  return DOODSTREAM_HOSTS.has(host) ||
-    ['doodstream.com', 'dood.to', 'dood.la', 'dood.so', 'dood.watch', 'playmogo.com'].some(domain => host.endsWith('.' + domain));
-}
 function videoSourceUrl(input) {
   if (typeof input !== 'string' || !input.trim() || input.length > 2048) {
-    throw new Error('A valid Google Drive, Archive.org, or Doodstream video link is required');
-  }
-  const value = input.trim();
-  if (/^[\w-]{10,200}$/.test(value)) {
-    return 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(value) + '&export=download&confirm=t';
+    throw new Error('A valid VOE embed URL is required, for example https://voe.sx/e/VIDEO_CODE');
   }
   let url;
-  try { url = new URL(value); } catch { throw new Error('Invalid video URL'); }
-  if (url.protocol !== 'https:') throw new Error('Video URL must use HTTPS');
-  const host = url.hostname.toLowerCase();
+  try { url = new URL(input.trim()); } catch { throw new Error('Invalid VOE URL'); }
+  if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== 'voe.sx' ||
+      url.username || url.password || url.port) {
+    throw new Error('Only official https://voe.sx embed links are supported');
+  }
+  const match = /^\/e\/([A-Za-z0-9_-]{3,100})\/?$/.exec(url.pathname);
+  if (!match) throw new Error('Use a VOE embed link in the format https://voe.sx/e/VIDEO_CODE');
+  return 'https://voe.sx/e/' + match[1];
+}
 
-  // Doodstream supplies an external player iframe, not a regular MP4 byte stream.
-  // Only accept a known Doodstream host and a simple file code; never accept arbitrary iframe URLs.
-  if (isDoodstreamHost(host)) {
-    const parts = url.pathname.split('/').filter(Boolean);
-    if (parts.length !== 2 || !['e', 'd'].includes(parts[0]) || !/^[A-Za-z0-9_-]{3,100}$/.test(parts[1])) {
-      throw new Error('Use a Doodstream Embed URL such as https://doodstream.com/e/VIDEO_CODE');
-    }
-    url.pathname = '/e/' + parts[1];
-    url.search = '';
-    url.hash = '';
-    return url.toString();
-  }
-
-  if (host === 'drive.google.com' || host === 'drive.usercontent.google.com' || host.endsWith('.googleusercontent.com')) {
-    const id = url.pathname.split('/file/d/')[1]?.split('/')[0] || url.searchParams.get('id');
-    if (id && (host === 'drive.google.com' || host === 'drive.usercontent.google.com')) {
-      return 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(id) + '&export=download&confirm=t';
-    }
-    return url.toString();
-  }
-  const archivePathParts = url.pathname.split('/').filter(Boolean);
-  if ((host === 'archive.org' || host.endsWith('.archive.org')) &&
-      archivePathParts[0] === 'download' && archivePathParts.length >= 3) return url.toString();
-  throw new Error('Use a public Google Drive link, Archive.org /download/ link, or Doodstream /e/ or /d/ Embed URL');
-}
-function sourceProvider(input) {
-  const host = new URL(input).hostname.toLowerCase();
-  if (isDoodstreamHost(host)) return 'doodstream';
-  return host === 'archive.org' || host.endsWith('.archive.org') ? 'archive.org' : 'google-drive';
-}
-function playMogoDownloadUrl(input) {
-  try {
-    const url = new URL(input);
-    const host = url.hostname.toLowerCase();
-    if (host !== 'playmogo.com' && !host.endsWith('.playmogo.com')) return null;
-    const match = /^\/e\/([A-Za-z0-9_-]{3,100})$/.exec(url.pathname);
-    if (!match) return null;
-    return url.origin + '/d/' + match[1];
-  } catch {
-    return null;
-  }
-}
 function movieInput(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Movie details are required');
   const title = typeof body.title === 'string' ? body.title.trim() : '';
@@ -169,33 +123,40 @@ function movieInput(body) {
   let poster;
   try { poster = new URL(body.posterUrl); } catch { throw new Error('Poster must be an HTTPS URL'); }
   if (poster.protocol !== 'https:' || poster.href.length > 2048) throw new Error('Poster must be an HTTPS URL');
-  if (!Array.isArray(body.videoSources) || body.videoSources.length < 1 || body.videoSources.length > 8) throw new Error('Add between 1 and 8 video options');
-  return {
-    title, poster: poster.href, category: body.category,
-    sources: body.videoSources.map((v, i) => { const sourceUrl = videoSourceUrl(v?.url); return { label: (typeof v?.label === 'string' && v.label.trim() ? v.label.trim() : 'Option ' + (i + 1)).slice(0, 60), url: sourceUrl, provider: sourceProvider(sourceUrl) }; }),
-    published: body.isPublished !== false
-  };
+  if (!Array.isArray(body.videoSources) || body.videoSources.length < 1 || body.videoSources.length > 8) {
+    throw new Error('Add at least one VOE embed URL');
+  }
+  const sources = body.videoSources.map((item, index) => ({
+    label: (typeof item?.label === 'string' && item.label.trim() ? item.label.trim() : 'VOE ' + (index + 1)).slice(0, 60),
+    url: videoSourceUrl(item?.url),
+    provider: 'voe.sx'
+  }));
+  return { title, poster: poster.href, category: body.category, sources, published: body.isPublished !== false };
 }
+
 const CATALOGUE_CACHE_TTL = 30;
-const MOVIE_METADATA_CACHE_TTL = 30;
 
 async function publicMovies(env, category, query) {
   const sql = sqlFor(env);
-  // Only option labels are public. Never send stored Google Drive URLs to clients.
   return await sql`SELECT id,title,poster_url,category,created_at,
     COALESCE((
       SELECT jsonb_agg(
         jsonb_build_object(
-          'label', COALESCE(NULLIF(item.value->>'label',''),'Play'),
-          'provider', COALESCE(item.value->>'provider','google-drive'),
-          'embed_url', CASE WHEN item.value->>'provider'='doodstream' THEN item.value->>'url' ELSE NULL END
+          'label', COALESCE(NULLIF(item.value->>'label',''),'VOE'),
+          'provider', 'voe.sx',
+          'embed_url', item.value->>'url'
         )
         ORDER BY item.ordinality
       )
-      FROM jsonb_array_elements(videos) WITH ORDINALITY AS item(value, ordinality)
+      FROM jsonb_array_elements(COALESCE(videos, '[]'::jsonb)) WITH ORDINALITY AS item(value, ordinality)
+      WHERE item.value->>'provider'='voe.sx'
     ), '[]'::jsonb) AS video_sources
     FROM movies
     WHERE is_published=TRUE
+      AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements(COALESCE(videos, '[]'::jsonb)) AS item(value)
+        WHERE item.value->>'provider'='voe.sx'
+      )
       AND (${category || null}::text IS NULL OR category=${category || null})
       AND (${query || null}::text IS NULL OR title ILIKE ${query ? '%' + query + '%' : null})
     ORDER BY created_at DESC LIMIT 100`;
@@ -209,14 +170,19 @@ export class PublicCatalogue extends WorkerEntrypoint {
     const payload = {
       movies: rows.map(({ video_sources, ...movie }) => ({
         ...movie,
-        video_sources: (video_sources || []).map((source) => ({
-          label: source.label || 'Play',
-          provider: source.provider || 'google-drive',
-          // Hosted-player URLs and the paired PlayMogo download page are public;
-          // direct Drive/Archive URLs stay server-side behind our own download endpoint.
-          embed_url: source.provider === 'doodstream' ? source.embed_url : null,
-          download_url: source.provider === 'doodstream' ? playMogoDownloadUrl(source.embed_url) : null
-        }))
+        video_sources: (video_sources || []).flatMap((source) => {
+          try {
+            const embedUrl = videoSourceUrl(source.embed_url);
+            return [{
+              label: source.label || 'VOE',
+              provider: 'voe.sx',
+              embed_url: embedUrl,
+              download_url: embedUrl
+            }];
+          } catch {
+            return [];
+          }
+        })
       }))
     };
     return json(payload, 200, {
@@ -230,671 +196,12 @@ export class PublicCatalogue extends WorkerEntrypoint {
   }
 }
 
-export class MovieMetadata extends WorkerEntrypoint {
-  async fetch(request) {
-    if (request.method !== 'GET') return new Response(null, { status: 405, headers: { allow: 'GET', 'cache-control': 'no-store' } });
-    const movieId = this.ctx.props?.movieId;
-    if (typeof movieId !== 'string' || !/^[0-9a-f-]{36}$/i.test(movieId)) {
-      return json({ movie: null }, 200, { 'cache-control': 'public, max-age=5' });
-    }
-    const rows = await sqlFor(this.env)`SELECT id,title,videos AS video_sources,updated_at
-      FROM movies WHERE id=${movieId} AND is_published=TRUE LIMIT 1`;
-    return json({ movie: rows[0] || null }, 200, {
-      'cache-control': 'public, max-age=' + MOVIE_METADATA_CACHE_TTL + ', stale-while-revalidate=90',
-      'cache-tag': 'movie-meta-' + movieId
-    });
+async function invalidateContentCaches(ctx) {
+  try {
+    await ctx.exports.PublicCatalogue().invalidate();
+  } catch (error) {
+    console.warn('Catalogue cache invalidation failed:', error?.message || error);
   }
-
-  async invalidate(movieId) {
-    if (typeof movieId !== 'string' || !/^[0-9a-f-]{36}$/i.test(movieId)) return { success: false };
-    return this.ctx.cache.purge({ tags: ['movie-meta-' + movieId] });
-  }
-}
-
-async function movieById(ctx, env, movieId) {
-  if (!/^[0-9a-f-]{36}$/i.test(movieId)) return { movie: null, cacheStatus: 'BYPASS' };
-  const metadataEntry = ctx.exports.MovieMetadata({ props: { movieId } });
-  const response = await metadataEntry.fetch(
-    new Request('https://moviwatch.internal/__movie_metadata__v2/' + encodeURIComponent(movieId))
-  );
-  if (!response.ok) throw new Error('Movie metadata lookup failed (HTTP ' + response.status + ')');
-  const payload = await response.json();
-  return {
-    movie: payload.movie || null,
-    cacheStatus: response.headers.get('cf-cache-status') || 'UNKNOWN'
-  };
-}
-
-async function invalidateContentCaches(ctx, movieId) {
-  // Defer each entrypoint factory call into its own promise. Promise.allSettled()
-  // cannot catch a synchronous throw that happens while building an eager array.
-  // A cache-purge problem must never turn an already-committed movie edit into
-  // an HTTP 500 response.
-  const operations = [() => ctx.exports.PublicCatalogue().invalidate()];
-  if (movieId) {
-    operations.push(
-      () => ctx.exports.MovieMetadata({ props: { movieId } }).invalidate(movieId),
-      () => ctx.exports.VideoChunk().invalidate(movieId),
-      () => ctx.exports.VideoHeader().invalidate(movieId)
-    );
-  }
-  const results = await Promise.allSettled(
-    operations.map((operation) => Promise.resolve().then(operation))
-  );
-  for (const result of results) {
-    if (result.status === 'rejected') console.warn('Workers Cache invalidation failed:', result.reason?.message || result.reason);
-  }
-}
-
-function allowedSourceHost(host) {
-  host = host.toLowerCase();
-  return host === 'drive.google.com' || host === 'drive.usercontent.google.com' || host.endsWith('.googleusercontent.com') || host === 'archive.org' || host.endsWith('.archive.org');
-}
-function sourceKind(host) {
-  host = host.toLowerCase();
-  return host === 'archive.org' || host.endsWith('.archive.org') ? 'Archive.org' : 'Google Drive';
-}
-async function videoSourceFetch(source, method, headers) {
-  let url = new URL(source);
-  // Normalize legacy database URLs to Google's direct download endpoint.
-  if (url.hostname.toLowerCase() === 'drive.google.com' && url.pathname === '/uc') {
-    const id = url.searchParams.get('id');
-    if (id) url = new URL('https://drive.usercontent.google.com/download?id=' + encodeURIComponent(id) + '&export=download&confirm=t');
-  }
-  let currentMethod = method;
-  for (let hop = 0; hop <= 5; hop++) {
-    if (url.protocol !== 'https:') throw new Error('Video-source redirect must use HTTPS');
-    const host = url.hostname.toLowerCase();
-    if ((host === 'accounts.google.com' || host.endsWith('.accounts.google.com')) && sourceKind(new URL(source).hostname) === 'Google Drive') {
-      throw new Error('Google Drive file requires sign-in. In Google Drive, set General access to Anyone with the link (Viewer), save, and try again.');
-    }
-    if (!allowedSourceHost(host)) throw new Error('Unsupported video-source redirect');
-    const res = await fetch(url.toString(), { method: currentMethod, headers, redirect: 'manual' });
-    if (![301, 302, 303, 307, 308].includes(res.status)) return res;
-    const location = res.headers.get('Location');
-    if (!location || hop === 5) throw new Error('Video-source redirect limit reached');
-    url = new URL(location, url);
-    if (res.status === 303 || ((res.status === 301 || res.status === 302) && currentMethod !== 'HEAD')) currentMethod = 'GET';
-  }
-  throw new Error('Video-source redirect limit reached');
-}
-
-// Video edge cache: store complete 1 MiB continuation chunks as cacheable 200 responses.
-// The public response is reconstructed as a standards-compliant 206 response.
-const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024;
-// Fragmented MP4 keeps its initial moov + first media fragments compact.
-// Fetch a smaller first block so playback does not wait for a large initial transfer.
-const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024;
-const VIDEO_HEADER_PROBE_SIZE = 16 * 1024;
-const VIDEO_CACHE_TTL = 24 * 60 * 60;
-
-function parseByteRange(value) {
-  if (typeof value !== 'string' || !value.startsWith('bytes=')) return null;
-  const spec = value.slice(6).trim();
-  if (spec.includes(',')) return { invalid: true };
-  const match = /^([0-9]*)-([0-9]*)$/.exec(spec);
-  if (!match || (!match[1] && !match[2])) return { invalid: true };
-  if (!match[1]) {
-    const suffix = Number(match[2]);
-    return Number.isSafeInteger(suffix) && suffix > 0 ? { suffix } : { invalid: true };
-  }
-  const start = Number(match[1]);
-  const end = match[2] ? Number(match[2]) : null;
-  if (!Number.isSafeInteger(start) || start < 0 ||
-      (end !== null && (!Number.isSafeInteger(end) || end < start))) return { invalid: true };
-  return { start, end };
-}
-
-function sniffVideoContainer(bytes) {
-  // ISO-BMFF files can place free/wide boxes before the ftyp signature.
-  const scanLimit = Math.min(bytes.length - 4, 65536);
-  for (let i = 4; i <= scanLimit; i++) {
-    if (bytes[i] === 0x66 && bytes[i + 1] === 0x74 &&
-        bytes[i + 2] === 0x79 && bytes[i + 3] === 0x70) return 'mp4';
-  }
-  if (bytes.length >= 12 && String.fromCharCode(...bytes.subarray(0, 4)) === 'RIFF' &&
-      String.fromCharCode(...bytes.subarray(8, 12)) === 'AVI ') return 'avi';
-  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 &&
-      bytes[2] === 0xdf && bytes[3] === 0xa3) {
-    const header = new TextDecoder('latin1').decode(bytes.subarray(0, Math.min(bytes.length, 65536))).toLowerCase();
-    return header.includes('webm') ? 'webm' : header.includes('matroska') ? 'mkv' : 'ebml';
-  }
-  if (bytes.length >= 4 && String.fromCharCode(...bytes.subarray(0, 4)) === 'OggS') return 'ogg';
-  if (bytes.length >= 3 && String.fromCharCode(...bytes.subarray(0, 3)) === 'FLV') return 'flv';
-  if (bytes.length >= 1 && bytes[0] === 0x47) return 'mpeg-ts-or-unknown';
-  return 'unknown';
-}
-
-function parseContentRange(value) {
-  const match = new RegExp('^bytes ([0-9]+)-([0-9]+)/([0-9]+)$').exec(value || '');
-  if (!match) return null;
-  const start = Number(match[1]), end = Number(match[2]), total = Number(match[3]);
-  if (![start, end, total].every(Number.isSafeInteger) || end < start || total <= end) return null;
-  return { start, end, total };
-}
-
-async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, chunkStart, chunkSize = VIDEO_CHUNK_SIZE) {
-  const internalUrl = new URL(
-    '/__video_chunk__/' + encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash + '/' + chunkStart + '/' + chunkSize,
-    'https://moviwatch.internal'
-  );
-  const videoEntry = ctx.exports.VideoChunk({
-    props: { sourceUrl: source.url, sourceVersion: normalizedSourceVersion }
-  });
-  const response = await videoEntry.fetch(new Request(internalUrl));
-  const cacheStatus = response.headers.get('cf-cache-status') || 'UNKNOWN';
-
-  if (response.status === 416) {
-    const total = Number((response.headers.get('content-range') || '').split('/')[1]);
-    return { unsatisfiedTotal: Number.isSafeInteger(total) ? total : 0, cacheStatus };
-  }
-  if (!response.ok) {
-    let detail = 'Video chunk fetch failed (HTTP ' + response.status + ')';
-    try {
-      const payload = await response.json();
-      if (typeof payload.error === 'string') detail = payload.error;
-    } catch {}
-    throw new Error(detail);
-  }
-
-  const start = Number(response.headers.get('x-moviwatch-start'));
-  const end = Number(response.headers.get('x-moviwatch-end'));
-  const total = Number(response.headers.get('x-moviwatch-total'));
-  const contentType = response.headers.get('content-type') || 'video/mp4';
-  const container = response.headers.get('x-moviwatch-container') || 'unknown';
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
-      !Number.isSafeInteger(total) || start !== chunkStart || end < start ||
-      total <= end || end > chunkStart + chunkSize - 1 || bytes.byteLength !== end - start + 1) {
-    throw new Error('Cloudflare returned an invalid cached video chunk');
-  }
-  return { bytes, start, end, total, contentType, container, cacheStatus };
-}
-
-async function getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash) {
-  const internalUrl = new URL(
-    '/__video_header__/' + encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash,
-    'https://moviwatch.internal'
-  );
-  const headerEntry = ctx.exports.VideoHeader({
-    props: { sourceUrl: source.url, sourceVersion: normalizedSourceVersion }
-  });
-  const response = await headerEntry.fetch(new Request(internalUrl));
-  if (!response.ok) {
-    let detail = 'Video metadata probe failed (HTTP ' + response.status + ')';
-    try {
-      const payload = await response.json();
-      if (typeof payload.error === 'string') detail = payload.error;
-    } catch {}
-    throw new Error(detail);
-  }
-  const payload = await response.json();
-  if (!Number.isSafeInteger(payload.total) || payload.total < 1 ||
-      (payload.moovEnd !== null && (!Number.isSafeInteger(payload.moovEnd) || payload.moovEnd < 0))) {
-    throw new Error('Video source returned invalid MP4 metadata');
-  }
-  return {
-    total: payload.total,
-    moovEnd: payload.moovEnd,
-    container: payload.container || 'unknown',
-    contentType: payload.contentType || 'video/mp4',
-    fragmented: payload.fragmented === true,
-    cacheStatus: response.headers.get('cf-cache-status') || 'UNKNOWN'
-  };
-}
-
-function mp4MoovEnd(bytes) {
-  // Parse top-level ISO-BMFF boxes from the small cached file-header probe.
-  let offset = 0;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  for (let count = 0; count < 16 && offset + 8 <= bytes.byteLength; count++) {
-    let size = view.getUint32(offset);
-    const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
-    let headerSize = 8;
-    if (size === 1) {
-      if (offset + 16 > bytes.byteLength) return null;
-      const largeSize = view.getBigUint64(offset + 8);
-      if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return null;
-      size = Number(largeSize);
-      headerSize = 16;
-    } else if (size === 0) {
-      return null;
-    }
-    if (size < headerSize) return null;
-    if (type === 'moov') {
-      const end = offset + size;
-      return Number.isSafeInteger(end) && end <= 64 * 1024 * 1024 ? end : null;
-    }
-    if (offset + size > bytes.byteLength) return null;
-    offset += size;
-  }
-  return null;
-}
-
-function mp4HasMvex(bytes) {
-  // A fragmented MP4 has an mvex box as a direct child of its initial moov.
-  // Return false when the complete moov is not present in the tiny probe.
-  let offset = 0;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  for (let count = 0; count < 16 && offset + 8 <= bytes.byteLength; count++) {
-    let size = view.getUint32(offset);
-    const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
-    let headerSize = 8;
-    if (size === 1) {
-      if (offset + 16 > bytes.byteLength) return false;
-      const largeSize = view.getBigUint64(offset + 8);
-      if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return false;
-      size = Number(largeSize);
-      headerSize = 16;
-    } else if (size === 0) return false;
-    if (size < headerSize || offset + size > bytes.byteLength) return false;
-    if (type === 'moov') {
-      const moovEnd = offset + size;
-      let child = offset + headerSize;
-      while (child + 8 <= moovEnd) {
-        let childSize = view.getUint32(child);
-        const childType = String.fromCharCode(bytes[child + 4], bytes[child + 5], bytes[child + 6], bytes[child + 7]);
-        let childHeader = 8;
-        if (childSize === 1) {
-          if (child + 16 > moovEnd) return false;
-          const largeSize = view.getBigUint64(child + 8);
-          if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return false;
-          childSize = Number(largeSize);
-          childHeader = 16;
-        } else if (childSize === 0) return false;
-        if (childSize < childHeader || child + childSize > moovEnd) return false;
-        if (childType === 'mvex') return true;
-        child += childSize;
-      }
-      return false;
-    }
-    offset += size;
-  }
-  return false;
-}
-
-function videoChunkStartForOffset(offset, fragmented) {
-  if (fragmented) {
-    if (offset < VIDEO_FRAGMENT_START_CHUNK_SIZE) return 0;
-    return VIDEO_FRAGMENT_START_CHUNK_SIZE +
-      Math.floor((offset - VIDEO_FRAGMENT_START_CHUNK_SIZE) / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
-  }
-  return Math.floor(offset / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
-}
-
-function videoChunkSizeAt(chunkStart, fragmented) {
-  return fragmented && chunkStart === 0 ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_CHUNK_SIZE;
-}
-
-async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHUNK_SIZE) {
-  // Assemble a complete cache segment from Drive's contiguous partial 206 responses.
-  const requestedEnd = chunkStart + chunkSize - 1;
-  const pieces = [];
-  let cursor = chunkStart;
-  let total = null;
-  let upstreamType = '';
-  let expectedEnd = requestedEnd;
-  let requests = 0;
-
-  while (cursor <= expectedEnd) {
-    if (++requests > 128) throw new Error('Video source returned too many small video ranges');
-    const upstream = await videoSourceFetch(source.url, 'GET', new Headers({
-      Range: 'bytes=' + cursor + '-' + requestedEnd,
-      'Accept-Encoding': 'identity'
-    }));
-
-    if (upstream.status === 416) {
-      const unsatisfied = new RegExp('^bytes [*]/([0-9]+)$').exec(upstream.headers.get('content-range') || '');
-      if (unsatisfied && cursor === chunkStart) return { unsatisfiedTotal: Number(unsatisfied[1]) };
-    }
-
-    const range = parseContentRange(upstream.headers.get('content-range'));
-    if (upstream.status !== 206 || !range || range.start !== cursor ||
-        range.end > requestedEnd || range.end < cursor ||
-        (total !== null && range.total !== total)) {
-      const type = (upstream.headers.get('content-type') || 'unknown').split(';')[0];
-      const status = upstream.status;
-      const contentRange = upstream.headers.get('content-range') || 'none';
-      try { await upstream.body?.cancel(); } catch {}
-      if (type.includes('text/html')) throw new Error('Video source returned an HTML confirmation, permission, or quota page (HTTP ' + status + '). Check that the source is public and available.');
-      if (status === 200) throw new Error('Video source ignored the byte-range request (HTTP 200, ' + type + '). The file endpoint is not supporting seekable streaming.');
-      throw new Error('Video source byte-range response was invalid (HTTP ' + status + ', Content-Range: ' + contentRange + ', type: ' + type + ').');
-    }
-
-    total = range.total;
-    expectedEnd = Math.min(requestedEnd, total - 1);
-    if (cursor > expectedEnd) {
-      try { await upstream.body?.cancel(); } catch {}
-      break;
-    }
-    const bytes = new Uint8Array(await upstream.arrayBuffer());
-    if (bytes.byteLength !== range.end - range.start + 1) throw new Error('Video source returned an incomplete video range');
-    if (!upstreamType) upstreamType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    pieces.push(bytes);
-    cursor = range.end + 1;
-  }
-
-  if (total === null || cursor !== expectedEnd + 1) throw new Error('Video source did not provide a complete contiguous video chunk');
-  const expectedLength = expectedEnd - chunkStart + 1;
-  const bytes = new Uint8Array(expectedLength);
-  let offset = 0;
-  for (const piece of pieces) {
-    bytes.set(piece, offset);
-    offset += piece.byteLength;
-  }
-  if (offset !== expectedLength) throw new Error('Assembled video chunk has an invalid length');
-
-  const container = sniffVideoContainer(bytes);
-  const contentType = container === 'mp4' ? 'video/mp4' :
-    container === 'webm' ? 'video/webm' :
-    container === 'mkv' ? 'video/x-matroska' :
-    (!upstreamType || upstreamType === 'application/octet-stream' || upstreamType === 'binary/octet-stream')
-      ? 'video/mp4' : upstreamType;
-
-  return { bytes, start: chunkStart, end: expectedEnd, total, contentType, container };
-}
-
-export class VideoHeader extends WorkerEntrypoint {
-  async fetch(request) {
-    if (request.method !== 'GET') return new Response(null, { status: 405, headers: { allow: 'GET', 'cache-control': 'no-store' } });
-    const match = /^\/__video_header__\/([0-9a-f-]{36})\/(\d+)\/([0-9a-f]{32})$/.exec(new URL(request.url).pathname);
-    if (!match) return json({ error: 'Invalid internal video header request' }, 404);
-    const movieId = match[1];
-    const optionIndex = Number(match[2]);
-    const sourceHash = match[3];
-    const props = this.ctx.props || {};
-    const sourceUrl = props.sourceUrl;
-    const sourceVersion = String(props.sourceVersion || '');
-    if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex > 7 ||
-        typeof sourceUrl !== 'string' || sourceUrl.length > 2048) {
-      return json({ error: 'Invalid internal video header parameters' }, 400);
-    }
-    try {
-      const parsedSource = new URL(sourceUrl);
-      if (parsedSource.protocol !== 'https:' || !allowedSourceHost(parsedSource.hostname)) {
-        return json({ error: 'Unsupported video source' }, 400);
-      }
-      const digest = await crypto.subtle.digest('SHA-256', enc.encode(sourceUrl + '|' + sourceVersion));
-      const expectedHash = hex(new Uint8Array(digest)).slice(0, 32);
-      if (expectedHash !== sourceHash) return json({ error: 'Video header cache key did not match its source' }, 400);
-      const upstream = await videoSourceFetch(sourceUrl, 'GET', new Headers({
-        Range: 'bytes=0-' + (VIDEO_HEADER_PROBE_SIZE - 1),
-        'Accept-Encoding': 'identity'
-      }));
-      const range = parseContentRange(upstream.headers.get('content-range'));
-      if (upstream.status !== 206 || !range || range.start !== 0 || range.end < 39) {
-        const type = (upstream.headers.get('content-type') || 'unknown').split(';')[0];
-        try { await upstream.body?.cancel(); } catch {}
-        if (type.includes('text/html')) throw new Error('Video source returned an HTML permission or quota page instead of video metadata');
-        throw new Error('Video source did not return a valid video header (HTTP ' + upstream.status + ')');
-      }
-      const bytes = new Uint8Array(await upstream.arrayBuffer());
-      if (bytes.byteLength !== range.end + 1) throw new Error('Video source returned an incomplete video header');
-      const container = sniffVideoContainer(bytes);
-      const moovEnd = container === 'mp4' ? mp4MoovEnd(bytes) : null;
-      const fragmented = container === 'mp4' && mp4HasMvex(bytes);
-      const upstreamType = (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-      const contentType = container === 'mp4' ? 'video/mp4' :
-        container === 'webm' ? 'video/webm' :
-        container === 'mkv' ? 'video/x-matroska' :
-        (!upstreamType || upstreamType === 'application/octet-stream' || upstreamType === 'binary/octet-stream')
-          ? 'video/mp4' : upstreamType;
-      return json({ total: range.total, moovEnd, container, contentType, fragmented }, 200, {
-        'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL,
-        'cache-tag': 'video-headers-' + movieId
-      });
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : 'Unknown video header error';
-      console.error('Video header probe failed:', detail);
-      return json({ error: detail.slice(0, 300) }, 502);
-    }
-  }
-  async invalidate(movieId) {
-    if (typeof movieId !== 'string' || !/^[0-9a-f-]{36}$/i.test(movieId)) return { success: false };
-    return this.ctx.cache.purge({ tags: ['video-headers-' + movieId] });
-  }
-}
-
-export class VideoChunk extends WorkerEntrypoint {
-  async fetch(request) {
-    if (request.method !== 'GET') return new Response(null, { status: 405, headers: { allow: 'GET', 'cache-control': 'no-store' } });
-    const match = /^\/__video_chunk__\/([0-9a-f-]{36})\/(\d+)\/([0-9a-f]{32})\/(\d+)\/(\d+)$/.exec(new URL(request.url).pathname);
-    if (!match) return json({ error: 'Invalid internal video chunk request' }, 404);
-    const movieId = match[1];
-    const optionIndex = Number(match[2]);
-    const sourceHash = match[3];
-    const chunkStart = Number(match[4]);
-    const chunkSize = Number(match[5]);
-    const props = this.ctx.props || {};
-    const sourceUrl = props.sourceUrl;
-    const sourceVersion = String(props.sourceVersion || '');
-
-    const alignedStandardChunk = chunkSize === VIDEO_CHUNK_SIZE &&
-      (chunkStart % VIDEO_CHUNK_SIZE === 0 ||
-        (chunkStart >= VIDEO_FRAGMENT_START_CHUNK_SIZE &&
-          (chunkStart - VIDEO_FRAGMENT_START_CHUNK_SIZE) % VIDEO_CHUNK_SIZE === 0));
-    const initialFragmentChunk = chunkStart === 0 && chunkSize === VIDEO_FRAGMENT_START_CHUNK_SIZE;
-    if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex > 7 ||
-        !Number.isSafeInteger(chunkStart) || chunkStart < 0 ||
-        !(alignedStandardChunk || initialFragmentChunk) ||
-        typeof sourceUrl !== 'string' || sourceUrl.length > 2048) {
-      return json({ error: 'Invalid internal video chunk parameters' }, 400);
-    }
-
-    try {
-      const parsedSource = new URL(sourceUrl);
-      if (parsedSource.protocol !== 'https:' || !allowedSourceHost(parsedSource.hostname)) {
-        return json({ error: 'Unsupported video source' }, 400);
-      }
-      const digest = await crypto.subtle.digest('SHA-256', enc.encode(sourceUrl + '|' + sourceVersion));
-      const expectedHash = hex(new Uint8Array(digest)).slice(0, 32);
-      if (expectedHash !== sourceHash) return json({ error: 'Video cache key did not match its source' }, 400);
-
-      const result = await fetchAndCacheVideoChunk({ url: sourceUrl }, chunkStart, chunkSize);
-      if (result.unsatisfiedTotal !== undefined) {
-        return new Response(null, {
-          status: 416,
-          headers: {
-            'content-range': 'bytes */' + result.unsatisfiedTotal,
-            'accept-ranges': 'bytes',
-            'cache-control': 'no-store'
-          }
-        });
-      }
-
-      return new Response(result.bytes, {
-        status: 200,
-        headers: {
-          'content-type': result.contentType,
-          'content-length': String(result.bytes.byteLength),
-          'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600',
-          'cache-tag': 'video-chunks-' + movieId,
-          'x-moviwatch-start': String(result.start),
-          'x-moviwatch-end': String(result.end),
-          'x-moviwatch-total': String(result.total),
-          'x-moviwatch-container': result.container
-        }
-      });
-    } catch (error) {
-      console.error('Tiered video chunk fill failed:', error?.message || error);
-      const detail = error instanceof Error ? error.message : 'Unknown video chunk error';
-      return json({ error: detail.slice(0, 300) }, 502);
-    }
-  }
-
-  async invalidate(movieId) {
-    if (typeof movieId !== 'string' || !/^[0-9a-f-]{36}$/i.test(movieId)) return { success: false };
-    return this.ctx.cache.purge({ tags: ['video-chunks-' + movieId] });
-  }
-}
-
-async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHeader, sourceVersion = '') {
-  const parsed = parseByteRange(rangeHeader);
-  if (!parsed || parsed.invalid) {
-    return new Response(null, { status: 416, headers: { 'content-range': 'bytes */*', 'accept-ranges': 'bytes' } });
-  }
-
-  const normalizedSourceVersion = sourceVersion instanceof Date
-    ? sourceVersion.toISOString()
-    : String(sourceVersion || '');
-  const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url + '|' + normalizedSourceVersion));
-  const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
-
-  // The cached header probe identifies fragmented MP4 for every range request,
-  // including seeks. Keep a compact first segment and 4 MiB continuation chunks
-  // so cold seeks do not have to wait for a 4 MiB Drive transfer.
-  const header = await getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash);
-  const fragmented = header.fragmented === true;
-  const total = header.total;
-  const container = header.container || 'unknown';
-  const contentType = header.contentType || 'video/mp4';
-  const headerCacheStatus = header.cacheStatus;
-  const startupPrefetch = req.method === 'GET' && !parsed.suffix && parsed.start === 0;
-  const prefetched = new Map();
-  let startupPrefetchCount = 0;
-  let startupPrefetchMs = 0;
-  let cacheStatus = 'BYPASS';
-
-  let start, end;
-  if (parsed.suffix) {
-    start = Math.max(0, total - parsed.suffix);
-    end = total - 1;
-  } else {
-    start = parsed.start;
-    end = parsed.end === null ? total - 1 : Math.min(parsed.end, total - 1);
-  }
-  if (start >= total || end < start) {
-    return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + total, 'accept-ranges': 'bytes' } });
-  }
-
-  if (startupPrefetch) {
-    const prefetchStarted = Date.now();
-    // Load the compact fMP4 first segment and the following 4 MiB media
-    // segment concurrently. For conventional MP4, retain 4 MiB-aligned chunks
-    // and prefetch every chunk required to reach the moov index.
-    const starts = [];
-    let nextStart = 0;
-    const moovEnd = header.moovEnd || VIDEO_CHUNK_SIZE;
-    while (nextStart < moovEnd && starts.length < 8) {
-      starts.push(nextStart);
-      nextStart += videoChunkSizeAt(nextStart, fragmented);
-    }
-    if (!starts.length) starts.push(0);
-    if (fragmented && starts.length < 9 && VIDEO_FRAGMENT_START_CHUNK_SIZE < total) {
-      starts.push(VIDEO_FRAGMENT_START_CHUNK_SIZE);
-    }
-
-    const chunkPromises = starts.map((chunkStart) =>
-      getVideoChunk(
-        ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
-        chunkStart, videoChunkSizeAt(chunkStart, fragmented)
-      )
-    );
-    for (let i = 0; i < starts.length; i++) prefetched.set(starts[i], chunkPromises[i]);
-    ctx.waitUntil(Promise.allSettled(chunkPromises));
-    startupPrefetchCount = starts.length;
-    startupPrefetchMs = Date.now() - prefetchStarted;
-    cacheStatus = 'PREFETCH';
-  } else {
-    const firstStart = videoChunkStartForOffset(start, fragmented);
-    const firstChunk = await getVideoChunk(
-      ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
-      firstStart, videoChunkSizeAt(firstStart, fragmented)
-    );
-    if (firstChunk.unsatisfiedTotal !== undefined) {
-      return new Response(null, {
-        status: 416,
-        headers: { 'content-range': 'bytes */' + firstChunk.unsatisfiedTotal, 'accept-ranges': 'bytes' }
-      });
-    }
-    if (firstChunk.total !== total) throw new Error('Video source size changed during streaming');
-    cacheStatus = firstChunk.cacheStatus;
-    prefetched.set(firstStart, Promise.resolve(firstChunk));
-  }
-
-  const responseStart = start;
-  const responseEnd = end;
-  const contentLength = responseEnd - responseStart + 1;
-  let cursor = responseStart;
-  let chunk = null;
-  const body = new ReadableStream({
-    async pull(controller) {
-      try {
-        if (cursor > responseEnd) {
-          controller.close();
-          return;
-        }
-        const expectedChunkStart = videoChunkStartForOffset(cursor, fragmented);
-        if (!chunk || chunk.start !== expectedChunkStart) {
-          const pending = prefetched.get(expectedChunkStart);
-          chunk = pending
-            ? await pending
-            : await getVideoChunk(
-                ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
-                expectedChunkStart, videoChunkSizeAt(expectedChunkStart, fragmented)
-              );
-          prefetched.delete(expectedChunkStart);
-          if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total) {
-            throw new Error('Video source size changed during streaming');
-          }
-        }
-
-        // Keep one segment ahead warm while the browser consumes the current
-        // range. This is especially useful after a seek: the target segment is
-        // fetched immediately, and its successor starts filling in parallel.
-        const nextChunkStart = chunk.end + 1;
-        if (nextChunkStart < total && !prefetched.has(nextChunkStart)) {
-          const nextPromise = getVideoChunk(
-            ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
-            nextChunkStart, videoChunkSizeAt(nextChunkStart, fragmented)
-          );
-          prefetched.set(nextChunkStart, nextPromise);
-          ctx.waitUntil(Promise.allSettled([nextPromise]));
-        }
-
-        const from = cursor - chunk.start;
-        const through = Math.min(responseEnd, chunk.end) - chunk.start + 1;
-        if (through <= from) throw new Error('Invalid cached video chunk boundary');
-        const output = chunk.bytes.subarray(from, through);
-        cursor += output.byteLength;
-        controller.enqueue(output);
-        if (cursor > responseEnd) controller.close();
-      } catch (error) {
-        controller.error(error);
-      }
-    },
-    cancel() {
-      chunk = null;
-    }
-  });
-
-  return new Response(body, {
-    status: 206,
-    headers: {
-      'content-type': contentType,
-      'x-moviwatch-container': container,
-      'x-moviwatch-fragmented': String(fragmented),
-      'x-moviwatch-stream-profile': fragmented ? 'single-file-fmp4' : 'range-stream',
-      'content-length': String(contentLength),
-      'content-range': 'bytes ' + responseStart + '-' + responseEnd + '/' + total,
-      'accept-ranges': 'bytes',
-      'cache-control': 'private, no-store, max-age=0',
-      'cdn-cache-control': 'no-store',
-      'vercel-cdn-cache-control': 'no-store',
-      'surrogate-control': 'no-store',
-      'vary': 'Range',
-      'x-moviwatch-cache': cacheStatus,
-      'x-moviwatch-seek-range-start': String(responseStart),
-      'x-moviwatch-seek-range-end': String(responseEnd),
-      'x-moviwatch-seek-first-chunk-start': String(videoChunkStartForOffset(responseStart, fragmented)),
-      'x-moviwatch-seek-first-chunk-size': String(videoChunkSizeAt(videoChunkStartForOffset(responseStart, fragmented), fragmented)),
-      'x-moviwatch-chunk-size': String(VIDEO_CHUNK_SIZE),
-      'x-moviwatch-startup-chunk-size': String(videoChunkSizeAt(0, fragmented)),
-      'x-moviwatch-header-cache': headerCacheStatus,
-      'x-moviwatch-startup-prefetch-chunks': String(startupPrefetchCount),
-      'x-moviwatch-startup-prefetch-ms': String(startupPrefetchMs)
-    }
-  });
 }
 
 async function api(req, env, ctx) {
@@ -926,17 +233,19 @@ async function api(req, env, ctx) {
     const token = await makeToken(env);
     return json({ ok: true }, 200, { 'set-cookie': COOKIE + '=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=' + SESSION });
   }
+
   if (path === '/api/auth/logout' && method === 'POST') {
     sameOrigin(req, env);
     return json({ ok: true }, 200, { 'set-cookie': COOKIE + '=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0' });
   }
-  if (path === '/api/auth/me' && method === 'GET') return await isAdmin(req, env) ? json({ authenticated: true }) : json({ authenticated: false }, 401);
+  if (path === '/api/auth/me' && method === 'GET') {
+    return await isAdmin(req, env) ? json({ authenticated: true }) : json({ authenticated: false }, 401);
+  }
 
   if (path === '/api/movies' && method === 'GET') {
     const category = url.searchParams.get('category') || '';
     const query = (url.searchParams.get('q') || '').trim().slice(0, 80);
     if (category && !CATEGORIES.has(category)) return json({ error: 'Unknown category' }, 400);
-
     const catalogueUrl = new URL('https://moviwatch.internal/__public_catalogue__');
     if (category) catalogueUrl.searchParams.set('category', category);
     if (query) catalogueUrl.searchParams.set('q', query);
@@ -944,9 +253,6 @@ async function api(req, env, ctx) {
     const cachedCatalogue = await catalogueEntry.fetch(new Request(catalogueUrl));
     if (!cachedCatalogue.ok) return json({ error: 'Could not load the public catalogue' }, 502);
     const payload = await cachedCatalogue.json();
-    // Cloudflare's cached PublicCatalogue entrypoint is the authoritative cache.
-    // Do not let Vercel cache this gateway response: doing so hides the current
-    // Cloudflare HIT/MISS state and can serve stale catalogue data after tag purges.
     return json(payload, 200, {
       'cache-control': 'private, no-store, max-age=0',
       'cdn-cache-control': 'no-store',
@@ -956,241 +262,71 @@ async function api(req, env, ctx) {
     });
   }
 
-  const download = path.split('/');
-  if (download.length === 5 && download[1] === 'api' && download[2] === 'download' &&
+  // Media delivery now stays with the VOE-hosted player. Legacy app-level
+  // proxy routes are deliberately retired.
+  if ((path.startsWith('/api/watch/') || path.startsWith('/api/download/')) &&
       (method === 'GET' || method === 'HEAD')) {
-    const metadata = await movieById(ctx, env, download[3]);
-    const movie = metadata.movie;
-    if (!movie) return method === 'HEAD'
-      ? new Response(null, { status: 404, headers: { 'cache-control': 'no-store' } })
-      : json({ error: 'Movie not found' }, 404);
-
-    const optionIndex = Number(download[4]);
-    const source = movie.video_sources?.[optionIndex];
-    if (!source?.url || !Number.isInteger(optionIndex) || optionIndex < 0) {
-      return method === 'HEAD'
-        ? new Response(null, { status: 404, headers: { 'cache-control': 'no-store' } })
-        : json({ error: 'Video option not found' }, 404);
-    }
-    if (source.provider === 'doodstream' || sourceProvider(source.url) === 'doodstream') {
-      return json({ error: 'Doodstream videos use the embedded player and are not downloadable through this endpoint.' }, 400);
-    }
-
-    const cleanPart = (value) => String(value || '')
-      .normalize('NFKC')
-      .replace(/[\\/:*?"<>|\x00-\x1F]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 90);
-    const baseName = cleanPart(movie.title) || 'Moviwatch';
-    const optionName = cleanPart(source.label || ('Option ' + (optionIndex + 1)));
-
-    try {
-      // HEAD discovers total bytes from one cached byte-range probe. It warms
-      // chunk zero so an immediate GET can reuse it without a second Drive read.
-      if (method === 'HEAD') {
-        const probe = await cachedVideoRange(
-          req, ctx, source, download[3], optionIndex, 'bytes=0-0', movie.updated_at
-        );
-        if (probe.status !== 206) {
-          try { await probe.body?.cancel(); } catch {}
-          return new Response(null, { status: probe.status, headers: probe.headers });
-        }
-
-        const contentRange = probe.headers.get('content-range') || '';
-        const total = Number(contentRange.split('/')[1]);
-        const container = probe.headers.get('x-moviwatch-container') || 'mp4';
-        const extension = ({
-          mp4: 'mp4', webm: 'webm', mkv: 'mkv', avi: 'avi',
-          flv: 'flv', ogg: 'ogg'
-        })[container] || 'mp4';
-        const filename = baseName + (optionName ? ' - ' + optionName : '') + '.' + extension;
-        const fallback = filename.normalize('NFKD')
-          .replace(/[^\x20-\x7E]/g, '')
-          .replace(/[\\/:*?"<>|\x00-\x1F]/g, '')
-          .replace(/[\r\n]/g, '')
-          .trim() || 'Moviwatch-download.' + extension;
-        const encoded = encodeURIComponent(filename).replace(/[!'()*]/g,
-          (char) => '%' + char.charCodeAt(0).toString(16).toUpperCase());
-
-        try { await probe.body?.cancel(); } catch {}
-        const headers = new Headers(probe.headers);
-        headers.delete('content-range');
-        headers.set('content-length', String(Number.isSafeInteger(total) && total >= 0 ? total : 0));
-        headers.set('content-disposition',
-          'attachment; filename="' + fallback + '"; filename*=UTF-8\'\'' + encoded);
-        headers.set('accept-ranges', 'bytes');
-        headers.set('x-moviwatch-file-size', String(total));
-        headers.set('x-moviwatch-file-name', encoded);
-        headers.set('cache-control', 'private, no-store, max-age=0');
-        headers.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
-        return new Response(null, { status: 200, headers });
-      }
-
-      // GET streams the full file by default. Explicit Range requests preserve
-      // resumable downloads and standard HTTP 206 responses.
-      const requestedRange = req.headers.get('Range');
-      const response = await cachedVideoRange(
-        req, ctx, source, download[3], optionIndex,
-        requestedRange || 'bytes=0-', movie.updated_at
-      );
-      if (response.status === 416) return response;
-
-      const container = response.headers.get('x-moviwatch-container') || 'mp4';
-      const extension = ({
-        mp4: 'mp4', webm: 'webm', mkv: 'mkv', avi: 'avi',
-        flv: 'flv', ogg: 'ogg'
-      })[container] || 'mp4';
-      const filename = baseName + (optionName ? ' - ' + optionName : '') + '.' + extension;
-      const fallback = filename.normalize('NFKD')
-        .replace(/[^\x20-\x7E]/g, '')
-        .replace(/[\\/:*?"<>|\x00-\x1F]/g, '')
-        .replace(/[\r\n]/g, '')
-        .trim() || 'Moviwatch-download.' + extension;
-      const encoded = encodeURIComponent(filename).replace(/[!'()*]/g,
-        (char) => '%' + char.charCodeAt(0).toString(16).toUpperCase());
-
-      const headers = new Headers(response.headers);
-      headers.set('content-disposition',
-        'attachment; filename="' + fallback + '"; filename*=UTF-8\'\'' + encoded);
-      headers.set('accept-ranges', 'bytes');
-      headers.set('cache-control', 'private, no-store, max-age=0');
-      headers.set('x-content-type-options', 'nosniff');
-      headers.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
-      if (!requestedRange) headers.delete('content-range');
-
-      return new Response(response.body, {
-        status: requestedRange ? response.status : 200,
-        statusText: requestedRange ? response.statusText : 'OK',
-        headers
-      });
-    } catch (error) {
-      console.error('Video download failed:', error?.message || error);
-      const detail = error instanceof Error ? error.message : 'Unknown download error';
-      return method === 'HEAD'
-        ? new Response(null, { status: 502, headers: { 'cache-control': 'no-store', 'x-moviwatch-error': detail.slice(0, 200) } })
-        : json({ error: detail.slice(0, 300) }, 502);
-    }
-  }
-
-    const watch = path.split('/');
-  if (watch.length === 5 && watch[1] === 'api' && watch[2] === 'watch' && (method === 'GET' || method === 'HEAD')) {
-    const metadata = await movieById(ctx, env, watch[3]);
-    const movie = metadata.movie;
-    if (!movie) return json({ error: 'Movie not found' }, 404);
-    const optionIndex = Number(watch[4]);
-    const source = movie.video_sources?.[optionIndex];
-    if (!source?.url || !Number.isInteger(optionIndex) || optionIndex < 0) return json({ error: 'Video option not found' }, 404);
-    if (source.provider === 'doodstream' || sourceProvider(source.url) === 'doodstream') {
-      return json({ error: 'Doodstream videos play in their embedded player and do not use the byte-range stream endpoint.' }, 400);
-    }
-
-    // Serve HEAD and ordinary full-file GET through the same 4 MiB edge cache.
-    // Only If-Range stays on the origin path because it depends on origin validators.
-    if (req.headers.has('If-Range')) {
-      const headers = new Headers();
-      for (const name of ['Range', 'If-Range']) {
-        const value = req.headers.get(name);
-        if (value) headers.set(name, value);
-      }
-      let upstream;
-      try { upstream = await videoSourceFetch(source.url, method, headers); }
-      catch { return json({ error: 'Video source could not be reached' }, 502); }
-      if (![200, 206, 416].includes(upstream.status) ||
-          (upstream.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
-        return json({ error: 'Drive did not return a playable video. Check that the source is public and available.' }, 502);
-      }
-      const out = new Headers({
-        'cache-control': 'private, no-store',
-        'x-content-type-options': 'nosniff',
-        'accept-ranges': 'bytes'
-      });
-      for (const name of ['content-type', 'content-length', 'content-range', 'etag', 'last-modified']) {
-        const value = upstream.headers.get(name);
-        if (value) out.set(name, value);
-      }
-      out.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
-      return new Response(method === 'HEAD' ? null : upstream.body, { status: upstream.status, headers: out });
-    }
-
-    try {
-      if (method === 'HEAD') {
-        const probe = await cachedVideoRange(
-          req, ctx, source, watch[3], optionIndex, 'bytes=0-0', movie.updated_at
-        );
-        if (probe.status !== 206) {
-          try { await probe.body?.cancel(); } catch {}
-          return new Response(null, { status: probe.status, headers: probe.headers });
-        }
-        const total = Number((probe.headers.get('content-range') || '').split('/')[1]);
-        const headers = new Headers(probe.headers);
-        headers.delete('content-range');
-        headers.set('content-length', String(Number.isSafeInteger(total) && total >= 0 ? total : 0));
-        headers.set('cache-control', 'private, no-store, max-age=0');
-        headers.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
-        try { await probe.body?.cancel(); } catch {}
-        return new Response(null, { status: 200, headers });
-      }
-
-      const response = await cachedVideoRange(
-        req, ctx, source, watch[3], optionIndex,
-        req.headers.get('Range') || 'bytes=0-', movie.updated_at
-      );
-      if ((response.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
-        return json({ error: 'Drive returned an HTML page instead of video. Check that the source is public and available.' }, 502);
-      }
-      const responseHeaders = new Headers(response.headers);
-      responseHeaders.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
-      if (!req.headers.has('Range')) responseHeaders.delete('content-range');
-      return new Response(response.body, {
-        status: req.headers.has('Range') ? response.status : 200,
-        statusText: req.headers.has('Range') ? response.statusText : 'OK',
-        headers: responseHeaders
-      });
-    } catch (error) {
-      console.error('Video proxy failed:', error?.message || error);
-      const detail = error instanceof Error ? error.message : 'Unknown upstream video error';
-      return json({ error: detail.slice(0, 300) }, 502);
-    }
-
+    return json({ error: 'Video playback and any available download are provided on the official VOE page.' }, 410);
   }
 
   if (path.startsWith('/api/admin/')) {
     if (!await isAdmin(req, env)) return json({ error: 'Admin login required' }, 401);
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) sameOrigin(req, env);
     const sql = sqlFor(env);
+
     if (path === '/api/admin/movies' && method === 'GET') {
-      return json({ movies: await sql`SELECT id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at FROM movies ORDER BY updated_at DESC LIMIT 500` });
+      const rows = await sql`SELECT id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at
+        FROM movies ORDER BY updated_at DESC LIMIT 500`;
+      const movies = rows.map((movie) => ({
+        ...movie,
+        video_sources: (Array.isArray(movie.video_sources) ? movie.video_sources : []).flatMap((source) => {
+          if (source?.provider !== 'voe.sx') return [];
+          try {
+            return [{
+              label: (typeof source.label === 'string' && source.label.trim() ? source.label.trim() : 'VOE').slice(0, 60),
+              url: videoSourceUrl(source.url),
+              provider: 'voe.sx'
+            }];
+          } catch {
+            return [];
+          }
+        })
+      }));
+      return json({ movies });
     }
+
     if (path === '/api/admin/stats' && method === 'GET') {
       const rows = await sql`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE is_published)::int AS published,
-        COUNT(*) FILTER (WHERE category='Action')::int AS action, COUNT(*) FILTER (WHERE category='Romantic')::int AS romantic FROM movies`;
+        COUNT(*) FILTER (WHERE category='Action')::int AS action, COUNT(*) FILTER (WHERE category='Romantic')::int AS romantic
+        FROM movies`;
       return json({ stats: rows[0] });
     }
+
     if (path === '/api/admin/movies' && method === 'POST') {
-      const v = movieInput(await readBody(req));
+      const movie = movieInput(await readBody(req));
       const rows = await sql`INSERT INTO movies(id,title,poster_url,category,videos,is_published)
-        VALUES(${crypto.randomUUID()},${v.title},${v.poster},${v.category},${JSON.stringify(v.sources)}::jsonb,${v.published})
+        VALUES(${crypto.randomUUID()},${movie.title},${movie.poster},${movie.category},${JSON.stringify(movie.sources)}::jsonb,${movie.published})
         RETURNING id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at`;
       await invalidateContentCaches(ctx);
       return json({ movie: rows[0] }, 201);
     }
+
     const id = path.split('/')[4];
     if (path.startsWith('/api/admin/movies/') && id) {
       if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: 'Invalid movie ID' }, 400);
       if (method === 'PUT') {
-        const v = movieInput(await readBody(req));
-        const rows = await sql`UPDATE movies SET title=${v.title},poster_url=${v.poster},category=${v.category},
-          videos=${JSON.stringify(v.sources)}::jsonb,is_published=${v.published},updated_at=NOW()
+        const movie = movieInput(await readBody(req));
+        const rows = await sql`UPDATE movies SET title=${movie.title},poster_url=${movie.poster},category=${movie.category},
+          videos=${JSON.stringify(movie.sources)}::jsonb,is_published=${movie.published},updated_at=NOW()
           WHERE id=${id} RETURNING id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at`;
         if (!rows[0]) return json({ error: 'Movie not found' }, 404);
-        await invalidateContentCaches(ctx, id);
+        await invalidateContentCaches(ctx);
         return json({ movie: rows[0] });
       }
       if (method === 'DELETE') {
         const rows = await sql`DELETE FROM movies WHERE id=${id} RETURNING id`;
         if (!rows[0]) return json({ error: 'Movie not found' }, 404);
-        await invalidateContentCaches(ctx, id);
+        await invalidateContentCaches(ctx);
         return json({ ok: true });
       }
     }
@@ -1210,7 +346,7 @@ export default {
     } catch (error) {
       console.error('Request failed:', error?.stack || error?.message || error);
       const message = error instanceof Error ? error.message : 'Internal server error';
-      const client = /required|invalid|must |between |only |unknown category|too large|HTTPS|Google Drive|Archive\.org|video link/i.test(message);
+      const client = /required|invalid|must |unknown category|too large|HTTPS|VOE|video link/i.test(message);
       return json({ error: client ? message : 'Internal server error' }, client ? 400 : 500);
     }
   }
