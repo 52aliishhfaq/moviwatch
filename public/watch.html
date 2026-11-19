@@ -3,129 +3,156 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0a0e19">
+<meta name="theme-color" content="#080d18">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Moviwatch">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="/assets/moviwatch-app-icon.svg">
 <link rel="apple-touch-icon" href="/assets/moviwatch-app-icon-180.png">
-<title>Watch · Moviwatch</title>
-<link rel="dns-prefetch" href="//voe.sx">
-<link rel="preconnect" href="https://voe.sx">
+<link rel="preconnect" href="https://drive.usercontent.google.com">
+<link rel="preconnect" href="https://archive.org">
+<title>Watch movie · Moviwatch</title>
 <style>
-:root{color-scheme:dark;--bg:#0a0e19;--panel:#151e30;--line:#303b54;--muted:#9ba8c1;--accent:#8294ff}
+:root{color-scheme:dark;--bg:#080d18;--panel:#111a2b;--line:#26334a;--muted:#9eabc4;--accent:#7185ff}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:#f4f6fc;font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
-header{height:64px;border-bottom:1px solid #202b40;display:flex;align-items:center;justify-content:space-between;padding:0 max(18px,calc((100% - 1120px)/2))}
-a{color:#b7c4ff}
-.brand{font-weight:800;text-decoration:none;color:#fff}
-nav a{text-decoration:none}
-main{width:min(1120px,calc(100% - 36px));margin:28px auto 56px}
-.back{display:inline-block;margin-bottom:18px;text-decoration:none}
+body{margin:0;background:radial-gradient(ellipse at 50% -20%,#1a2944 0,transparent 55%),var(--bg);color:#f4f6fc;font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+header{height:68px;padding:0 max(5vw,22px);display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);background:#080d18e8}
+.brand{font-weight:750;font-size:19px;color:#fff;text-decoration:none;letter-spacing:-.3px}
+header nav a,.back{color:#bdc8ff;text-decoration:none}
+header nav a:hover,.back:hover{color:#fff}
+main{width:min(1160px,calc(100% - 40px));margin:30px auto 64px}
+.back{display:inline-flex;align-items:center;gap:8px;margin-bottom:18px;font-size:14px}
 .heading{margin-bottom:16px}
-h1{font-size:clamp(22px,4vw,34px);line-height:1.2;margin:0 0 6px}
-.meta{color:var(--muted);margin:0}
-.player-shell{position:relative;width:100%;aspect-ratio:16/9;background:#000;border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 18px 50px #0005}
-#voePlayer{display:block;width:100%;height:100%;border:0;background:#000}
-.loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:12px;color:#e4e9f8;background:#000b;pointer-events:none}
-.loading[hidden]{display:none}
-.spinner{width:22px;height:22px;border:3px solid #ffffff45;border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite}
+h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px}
+.meta{color:var(--muted);margin:8px 0 0;font-size:14px}
+.player-shell{position:relative;overflow:hidden;padding:12px;background:#0b1220;border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 80px #0006}
+movi-player{display:block;width:100%;aspect-ratio:16/9;min-height:0;height:auto;border-radius:10px;overflow:hidden;background:#05080e;--movi-accent:var(--accent);--movi-background:#05080e;--movi-panel:#111a2b;--movi-text:#f4f6fc}
+.loading{display:flex;align-items:center;gap:10px;color:#c7d1e5;padding:18px 4px}
+.loading[hidden]{display:none!important}
+.spinner{width:16px;height:16px;border:2px solid #52617c;border-top-color:#aabaff;border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
-.status{min-height:24px;color:var(--muted);margin:12px 2px 0}
-.status.error{color:#ff9ca8}
-.controls{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
-.action{display:inline-flex;min-height:44px;align-items:center;justify-content:center;padding:10px 16px;border:1px solid #8294ff;border-radius:10px;background:#6578f5;color:#fff;text-decoration:none;font-weight:700;cursor:pointer}
-.action.secondary{background:#202b40;border-color:#465675}
-.hint{margin:15px 2px 0;color:var(--muted);font-size:13px}
-@media(max-width:650px){header{height:58px;padding:0 14px}main{width:calc(100% - 20px);margin:18px auto 40px}.player-shell{border-radius:10px}.action{flex:1 1 100%}}
+.status{min-height:24px;margin:12px 4px 2px;color:var(--muted);font-size:13px}
+.status.error{color:#ff9d9d}
+.status:empty{display:none}
+.source-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0 10px;padding:14px 16px;background:#111a2b;border:1px solid var(--line);border-radius:12px}
+.source-bar label{font-weight:700;font-size:13px}
+select{min-width:min(300px,100%);max-width:100%;height:42px;padding:0 38px 0 12px;background:#0d1627;color:#f4f6fc;border:1px solid #40506d;border-radius:9px;font:inherit}
+.download-now{display:inline-flex;min-height:42px;align-items:center;justify-content:center;padding:9px 16px;border:1px solid #8294ff;border-radius:9px;background:#6578f5;color:#fff;text-decoration:none;font-weight:700}
+.download-now[hidden]{display:none}
+.retry{display:none;margin:8px 4px 2px;border:1px solid #53658a;border-radius:8px;background:#1b2941;color:#fff;padding:9px 14px;font:inherit;cursor:pointer}
+.retry.show{display:inline-flex}
+.hint{margin:14px 4px;color:var(--muted);font-size:13px}
+@media(max-width:650px){header{height:58px;padding:0 14px}main{width:calc(100% - 24px);margin:20px auto 40px}.player-shell{padding:0;border-radius:12px}.source-bar{align-items:stretch;flex-direction:column}.source-bar select,.source-bar .download-now{width:100%}}
 </style>
 </head>
 <body>
 <header><a class="brand" href="/">🎬 Moviwatch</a><nav><a href="/admin">Admin</a></nav></header>
 <main>
-  <a class="back" href="/">← Back to catalogue</a>
-  <div class="heading"><h1 id="title">Loading movie…</h1><p id="category" class="meta"></p></div>
-  <section class="player-shell" aria-label="VOE hosted video player">
-    <iframe id="voePlayer" title="VOE video player" allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" loading="eager"></iframe>
-    <div id="loading" class="loading"><span class="spinner" aria-hidden="true"></span><span>Connecting to VOE…</span></div>
-  </section>
+<a class="back" href="/">← Back to catalogue</a>
+<div class="heading"><h1 id="title">Loading movie…</h1><p class="meta" id="category"></p></div>
+<section class="player-shell" aria-label="Movie video player">
+  <movi-player id="video" controls playsinline preload="metadata" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
+  <div id="loading" class="loading"><span class="spinner" aria-hidden="true"></span><span>Preparing the first cached video segment…</span></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
-  <div class="controls">
-    <a id="voeDownload" class="action" href="https://voe.sx/e/af7mpped9rwa" target="_blank" rel="noopener noreferrer" hidden>Open VOE download options ↗</a>
-    <button id="retry" class="action secondary" type="button">Reload player</button>
-  </div>
-  <p class="hint">Slow mobile connection in Pakistan? Open the quality/settings menu inside the VOE player and choose a lower resolution (such as 360p or 480p) when available. Playback speed, available qualities and download availability are controlled by VOE.</p>
+  <button id="retry" class="retry" type="button">Retry stream</button>
+</section>
+<div class="source-bar">
+  <label for="sourceSelect">Streaming source</label>
+  <select id="sourceSelect" aria-label="Choose video source" disabled></select>
+  <a id="downloadNow" class="download-now" href="#" hidden>Download selected source ↓</a>
+</div>
+<p class="hint">Moviwatch uses Cloudflare Worker byte-range streaming and edge-cached chunks for seeking and repeat playback. Google Drive files must be shared as “Anyone with the link – Viewer”. Archive.org items must be public direct file downloads. Playback quality depends on the original file and host limits.</p>
 </main>
+<script src="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js"></script>
 <script>
 const $=selector=>document.querySelector(selector);
 const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||new URLSearchParams(location.search).get('id')||'');
-const player=$('#voePlayer');
-let embedUrl='';
-let loadTimer=null;
+const video=$('#video');
+let availableSources=[],activeOptionIndex=-1,startupTimer=null,generation=0;
 
 function setStatus(message,error=false){
   $('#status').textContent=message;
   $('#status').classList.toggle('error',error);
 }
 function setLoading(value){$('#loading').hidden=!value;}
-function stopTimer(){if(loadTimer!==null){clearTimeout(loadTimer);loadTimer=null;}}
+function clearTimer(){if(startupTimer!==null){clearTimeout(startupTimer);startupTimer=null;}}
+function showError(message){clearTimer();setLoading(false);setStatus(message,true);$('#retry').classList.add('show');}
 
-function canonicalVoeUrl(input){
-  try{
-    const url=new URL(input);
-    if(url.protocol!=='https:'||url.hostname.toLowerCase()!=='voe.sx'||url.username||url.password||url.port)return '';
-    const match=/^\/e\/([A-Za-z0-9_-]{3,100})\/?$/.exec(url.pathname);
-    return match?'https://voe.sx/e/'+match[1]:'';
-  }catch{return ''}
+function updateDownload(index){
+  const source=availableSources[index];
+  const link=$('#downloadNow');
+  if(!source){link.hidden=true;link.removeAttribute('href');return;}
+  link.href='/api/download/'+encodeURIComponent(movieId)+'/'+source.source_index;
+  link.hidden=false;
 }
 
-function loadPlayer(){
-  if(!embedUrl){setStatus('No valid VOE embed is configured for this movie. Add a VOE embed link from the admin panel.',true);return;}
-  stopTimer();
+function playSource(localIndex){
+  const source=availableSources[localIndex];
+  if(!source)return;
+  activeOptionIndex=localIndex;
+  $('#sourceSelect').value=String(localIndex);
+  updateDownload(localIndex);
+  clearTimer();
+  const current=++generation;
   setLoading(true);
-  setStatus('Opening the VOE hosted player…');
-  player.src=embedUrl;
-  loadTimer=setTimeout(()=>{
-    setLoading(false);
-    setStatus('VOE is taking longer than usual to respond. Check your connection or open the VOE page directly.',true);
-  },25000);
+  setStatus('Connecting to '+(source.provider==='archive.org'?'Archive.org':'Google Drive')+' through the edge cache…');
+  $('#retry').classList.remove('show');
+  video.preload='metadata';
+  video.src='/api/watch/'+encodeURIComponent(movieId)+'/'+source.source_index;
+  video.load();
+  startupTimer=setTimeout(()=>{
+    if(current===generation&&!(Number(video.duration)>0)&&video.readyState<1){
+      showError('The video has not delivered metadata within 30 seconds. Check that the source is public, supports byte ranges and has not reached its host quota.');
+    }
+  },30000);
 }
 
 async function prepare(){
   setLoading(true);
   setStatus('');
   try{
-    const response=await fetch('/api/movies',{cache:'no-store'});
+    const response=await fetch('/api/movies',{cache:'no-store',headers:{Accept:'application/json'}});
     const data=await response.json();
     if(!response.ok)throw new Error(data.error||'Could not load the movie catalogue.');
     const movie=(data.movies||[]).find(item=>item.id===movieId);
-    if(!movie)throw new Error('This movie is not published or does not have a VOE player configured.');
+    if(!movie)throw new Error('This movie is not published or could not be found.');
     $('#title').textContent=movie.title;
     $('#category').textContent=movie.category||'';
-    const source=(movie.video_sources||[]).find(item=>item.provider==='voe.sx');
-    embedUrl=canonicalVoeUrl(source?.embed_url||'');
-    if(!embedUrl)throw new Error('No valid VOE embed is configured for this movie. Add https://voe.sx/e/VIDEO_CODE in the admin panel.');
-    const officialPage=canonicalVoeUrl(source?.download_url||embedUrl)||embedUrl;
-    $('#voeDownload').href=officialPage;
-    $('#voeDownload').hidden=false;
-    loadPlayer();
+    if(movie.poster_url)video.poster=movie.poster_url;
+    availableSources=Array.isArray(movie.video_sources)?movie.video_sources:[];
+    if(!availableSources.length)throw new Error('No Google Drive or Archive.org source is configured for this movie.');
+    const select=$('#sourceSelect');
+    select.replaceChildren();
+    availableSources.forEach((source,index)=>{
+      const option=document.createElement('option');
+      option.value=String(index);
+      option.textContent=(source.label||source.provider)+' · '+(source.provider==='archive.org'?'Archive.org':'Google Drive');
+      select.append(option);
+    });
+    select.disabled=availableSources.length<2;
+    playSource(0);
   }catch(error){
-    stopTimer();
     setLoading(false);
     setStatus(error.message||'Unable to prepare this video.',true);
-    $('#voeDownload').hidden=true;
+    $('#retry').classList.add('show');
   }
 }
 
-player.addEventListener('load',()=>{
-  stopTimer();
-  setLoading(false);
-  setStatus('VOE player page loaded. Press Play inside the player. VOE controls stream quality and buffering.');
+video.addEventListener('loadedmetadata',()=>{clearTimer();setLoading(false);setStatus('');$('#retry').classList.remove('show');});
+video.addEventListener('canplay',()=>{clearTimer();setLoading(false);setStatus('');$('#retry').classList.remove('show');});
+video.addEventListener('waiting',()=>{if(!video.paused)setStatus('Buffering the next cached segment…');});
+video.addEventListener('playing',()=>setStatus(''));
+video.addEventListener('error',()=>{
+  const code=video.error?.code;
+  const message=code===2?'Network error while loading the selected source.':
+    code===3?'The browser could not decode this file. Try an MP4 using H.264 video and AAC audio.':
+    code===4?'This file may use an unsupported container or codec. MP4 (H.264 + AAC) is the most compatible option.':
+    'Video playback failed. Check the source link and permissions.';
+  showError(message);
 });
-player.addEventListener('error',()=>{
-  stopTimer();
-  setLoading(false);
-  setStatus('The VOE player could not be loaded. Check that the video is available and allows embedding.',true);
-});
-$('#retry').addEventListener('click',loadPlayer);
+$('#sourceSelect').addEventListener('change',event=>playSource(Number(event.target.value)));
+$('#retry').addEventListener('click',()=>playSource(Math.max(activeOptionIndex,0)));
 prepare();
 </script>
 <link rel="stylesheet" href="/pwa-install.css">
