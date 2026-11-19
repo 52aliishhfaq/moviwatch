@@ -2,235 +2,130 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#080d18">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Moviwatch">
-<link rel="manifest" href="/manifest.webmanifest">
-<link rel="icon" type="image/svg+xml" href="/assets/moviwatch-app-icon.svg">
-<link rel="apple-touch-icon" href="/assets/moviwatch-app-icon-180.png">
-<title>Watch movie · Moviwatch</title>
-
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a0e19">
+<title>Watch · Moviwatch</title>
+<link rel="dns-prefetch" href="//voe.sx">
+<link rel="preconnect" href="https://voe.sx">
 <style>
-:root{color-scheme:dark;--bg:#080d18;--panel:#111a2b;--line:#26334a;--muted:#9eabc4;--accent:#7185ff}
+:root{color-scheme:dark;--bg:#0a0e19;--panel:#151e30;--line:#303b54;--muted:#9ba8c1;--accent:#8294ff}
 *{box-sizing:border-box}
-body{margin:0;background:radial-gradient(ellipse at 50% -20%,#1a2944 0,transparent 55%),var(--bg);color:#f4f6fc;font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
-header{height:68px;padding:0 max(5vw,22px);display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);background:#080d18e8}
-.brand{font-weight:750;font-size:19px;color:#fff;text-decoration:none;letter-spacing:-.3px}
-header nav a,.back{color:#bdc8ff;text-decoration:none}
-header nav a:hover,.back:hover{color:#fff}
-main{width:min(1160px,calc(100% - 40px));margin:30px auto 64px}
-.back{display:inline-flex;align-items:center;gap:8px;margin-bottom:18px;font-size:14px}
-.heading{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;margin-bottom:16px}
-h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px}
-.meta{color:var(--muted);margin:8px 0 0;font-size:14px}
-.player-shell{padding:12px;background:#0b1220;border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 80px #0006}
-.player-shell{position:relative;overflow:hidden}.player-shell movi-player{display:block;width:100%;aspect-ratio:16/9;min-height:0;height:auto;border-radius:10px;overflow:hidden;background:#05080e;--movi-accent:var(--accent);--movi-background:#05080e;--movi-panel:#111a2b;--movi-text:#f4f6fc}.doodstream-stage{position:absolute;inset:12px 12px auto;width:auto;height:auto;z-index:4;overflow:hidden;border-radius:10px;background:#05080e;aspect-ratio:16/9}.doodstream-stage[hidden]{display:none}.doodstream-stage iframe{display:block;width:100%;height:100%;min-height:0;border:0;background:#05080e;touch-action:pan-y}.status{min-height:24px;margin:12px 4px 2px;color:var(--muted);font-size:13px}
-.status.error{color:#ff9d9d}
-.status:empty{display:none}
-.loading{display:flex;align-items:center;gap:10px;color:#c7d1e5;padding:26px 4px}.loading[hidden]{display:none!important}
-.spinner{width:16px;height:16px;border:2px solid #52617c;border-top-color:#aabaff;border-radius:50%;animation:spin .8s linear infinite}
+body{margin:0;background:var(--bg);color:#f4f6fc;font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+header{height:64px;border-bottom:1px solid #202b40;display:flex;align-items:center;justify-content:space-between;padding:0 max(18px,calc((100% - 1120px)/2))}
+a{color:#b7c4ff}
+.brand{font-weight:800;text-decoration:none;color:#fff}
+nav a{text-decoration:none}
+main{width:min(1120px,calc(100% - 36px));margin:28px auto 56px}
+.back{display:inline-block;margin-bottom:18px;text-decoration:none}
+.heading{margin-bottom:16px}
+h1{font-size:clamp(22px,4vw,34px);line-height:1.2;margin:0 0 6px}
+.meta{color:var(--muted);margin:0}
+.player-shell{position:relative;width:100%;aspect-ratio:16/9;background:#000;border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 18px 50px #0005}
+#voePlayer{display:block;width:100%;height:100%;border:0;background:#000}
+.loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:12px;color:#e4e9f8;background:#000b;pointer-events:none}
+.loading[hidden]{display:none}
+.spinner{width:22px;height:22px;border:3px solid #ffffff45;border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
-.retry{display:none;margin:8px 4px 2px;border:1px solid #53658a;border-radius:8px;background:#1b2941;color:#fff;padding:9px 14px;font:inherit;cursor:pointer}
-.retry.show{display:inline-flex}
-.download-now-panel{display:flex;align-items:center;flex-direction:column;gap:12px;margin:16px 0 12px;padding:18px;background:linear-gradient(145deg,#172642,#101a2d);border:1px solid #3a4a6a;border-radius:14px;text-align:center}
-.download-now-panel[hidden]{display:none}
-.download-now-heading{margin:0;font-size:18px;line-height:1.25}
-.download-now-note{margin:0;color:var(--muted);font-size:12px;max-width:620px}
-.download-now{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;gap:9px;min-width:170px;padding:13px 18px;border:1px solid #8294ff;border-radius:10px;background:#6578f5;color:#fff;text-decoration:none;text-align:center;font:700 14px/1.2 system-ui,-apple-system,Segoe UI,sans-serif;cursor:pointer}
-.download-now:hover,.download-now:focus-visible{background:#7a8aff;outline:2px solid #aab7ff;outline-offset:2px}
-.download-now:disabled{border-color:#46516a;background:#263249;color:#9eabc4;cursor:not-allowed;outline:none}
-.download-now[hidden]{display:none}
-@media(max-width:650px){.download-now-panel{padding:14px}.download-now{width:100%}}
-@media(max-width:650px){header{height:58px}main{width:calc(100% - 24px);margin:20px auto 40px}.player-shell{padding:0;border-radius:12px}.player-shell movi-player{border-radius:11px}.doodstream-stage{inset:0 0 auto;width:auto;height:auto;border-radius:11px}.heading{display:block}h1{font-size:25px}}
+.status{min-height:24px;color:var(--muted);margin:12px 2px 0}
+.status.error{color:#ff9ca8}
+.controls{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.action{display:inline-flex;min-height:44px;align-items:center;justify-content:center;padding:10px 16px;border:1px solid #8294ff;border-radius:10px;background:#6578f5;color:#fff;text-decoration:none;font-weight:700;cursor:pointer}
+.action.secondary{background:#202b40;border-color:#465675}
+.hint{margin:15px 2px 0;color:var(--muted);font-size:13px}
+@media(max-width:650px){header{height:58px;padding:0 14px}main{width:calc(100% - 20px);margin:18px auto 40px}.player-shell{border-radius:10px}.action{flex:1 1 100%}}
 </style>
 </head>
 <body>
 <header><a class="brand" href="/">🎬 Moviwatch</a><nav><a href="/admin">Admin</a></nav></header>
 <main>
-<a class="back" href="/">← Back to catalogue</a>
-<div class="heading"><div><h1 id="title">Loading movie…</h1><p class="meta" id="category"></p></div></div>
-<section class="player-shell" aria-label="Movie player">
-  <movi-player id="video" controls playsinline preload="metadata" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
-  <div id="doodstreamStage" class="doodstream-stage" hidden aria-label="Doodstream hosted player"></div>
-  <div id="loading" class="loading"><span class="spinner"></span><span>Preparing video for quick playback…</span></div>
+  <a class="back" href="/">← Back to catalogue</a>
+  <div class="heading"><h1 id="title">Loading movie…</h1><p id="category" class="meta"></p></div>
+  <section class="player-shell" aria-label="VOE hosted video player">
+    <iframe id="voePlayer" title="VOE video player" allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" loading="eager"></iframe>
+    <div id="loading" class="loading"><span class="spinner" aria-hidden="true"></span><span>Connecting to VOE…</span></div>
+  </section>
   <p id="status" class="status" role="status" aria-live="polite"></p>
-  <button id="retry" class="retry" type="button">Retry stream</button>
-</section>
-<section id="downloadNowPanel" class="download-now-panel" aria-label="Download dual audio movie" hidden>
-  <h2 id="downloadNowHeading" class="download-now-heading">Download Dual Audio Movie English + Hindi</h2>
-  <a id="downloadNow" class="download-now" href="#" hidden>Download Now <span aria-hidden="true">↓</span></a>
-  <button id="downloadUnavailable" class="download-now" type="button" disabled hidden>Download Now</button>
-  <p id="downloadNowNote" class="download-now-note" role="status" aria-live="polite"></p>
-</section>
+  <div class="controls">
+    <a id="voeDownload" class="action" href="https://voe.sx/e/af7mpped9rwa" target="_blank" rel="noopener noreferrer" hidden>Open VOE download options ↗</a>
+    <button id="retry" class="action secondary" type="button">Reload player</button>
+  </div>
+  <p class="hint">Slow mobile connection in Pakistan? Open the quality/settings menu inside the VOE player and choose a lower resolution (such as 360p or 480p) when available. Playback speed, available qualities and download availability are controlled by VOE.</p>
 </main>
-<script src="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js"></script>
 <script>
-const $=s=>document.querySelector(s);
+const $=selector=>document.querySelector(selector);
 const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||new URLSearchParams(location.search).get('id')||'');
-const video=$('#video');
-let streamUrl='',mediaContainer='unknown',mediaType='',activeOptionIndex=0,availableSources=[];
-const doodstreamStage=$('#doodstreamStage');
-let startupTimer=null,prepareGeneration=0;
-function status(message,error=false){$('#status').textContent=message;$('#status').classList.toggle('error',error)}
-function loading(on){$('#loading').hidden=!on}
-function clearStartupTimer(){if(startupTimer!==null){clearTimeout(startupTimer);startupTimer=null}}
-function showPlayerError(message){clearStartupTimer();loading(false);status(message,true);$('#retry').classList.add('show')}
-function playbackReady(){clearStartupTimer();loading(false);status('');$('#retry').classList.remove('show')}
-function playMogoDownloadUrlFromEmbed(input){
+const player=$('#voePlayer');
+let embedUrl='';
+let loadTimer=null;
+
+function setStatus(message,error=false){
+  $('#status').textContent=message;
+  $('#status').classList.toggle('error',error);
+}
+function setLoading(value){$('#loading').hidden=!value;}
+function stopTimer(){if(loadTimer!==null){clearTimeout(loadTimer);loadTimer=null;}}
+
+function canonicalVoeUrl(input){
   try{
     const url=new URL(input);
-    const host=url.hostname.toLowerCase();
-    if(host!=='playmogo.com'&&!host.endsWith('.playmogo.com'))return null;
-    const match=/^\/e\/([A-Za-z0-9_-]{3,100})$/.exec(url.pathname);
-    if(!match)return null;
-    return url.origin+'/d/'+match[1];
-  }catch{
-    return null;
-  }
+    if(url.protocol!=='https:'||url.hostname.toLowerCase()!=='voe.sx'||url.username||url.password||url.port)return '';
+    const match=/^\/e\/([A-Za-z0-9_-]{3,100})\/?$/.exec(url.pathname);
+    return match?'https://voe.sx/e/'+match[1]:'';
+  }catch{return ''}
 }
-function updateDownloadNow(index){
-  const source=availableSources[index];
-  const panel=$('#downloadNowPanel');
-  const link=$('#downloadNow');
-  const unavailable=$('#downloadUnavailable');
-  panel.hidden=!source;
-  if(!source)return;
 
-  $('#downloadNowHeading').textContent='Download Dual Audio Movie English + Hindi';
-  // Derive from the public embed URL as a fallback; older cached catalogue
-  // responses may not yet include the server-generated download_url field.
-  const playMogoDownloadUrl=source.provider==='doodstream'
-    ? playMogoDownloadUrlFromEmbed(source.embed_url)
-    : null;
-  const isPlayMogoDownload=typeof playMogoDownloadUrl==='string';
-  const supportsProxyDownload=['google-drive','archive.org'].includes(source.provider);
+function loadPlayer(){
+  if(!embedUrl){setStatus('No valid VOE embed is configured for this movie. Add a VOE embed link from the admin panel.',true);return;}
+  stopTimer();
+  setLoading(true);
+  setStatus('Opening the VOE hosted player…');
+  player.src=embedUrl;
+  loadTimer=setTimeout(()=>{
+    setLoading(false);
+    setStatus('VOE is taking longer than usual to respond. Check your connection or open the VOE page directly.',true);
+  },25000);
+}
 
-  if(isPlayMogoDownload){
-    link.href=playMogoDownloadUrl;
-    link.target='_blank';
-    link.rel='noopener noreferrer';
-    link.hidden=false;
-    unavailable.hidden=true;
-    $('#downloadNowNote').textContent='Opens PlayMogo’s download page for this exact video. Follow any download prompt shown by PlayMogo.';
-  }else if(supportsProxyDownload){
-    link.href='/api/download/'+encodeURIComponent(movieId)+'/'+index;
-    link.removeAttribute('target');
-    link.removeAttribute('rel');
-    link.hidden=false;
-    unavailable.hidden=true;
-    $('#downloadNowNote').textContent='Downloads the selected original video file. English + Hindi audio are included only when both tracks are present in that source.';
-  }else{
-    link.hidden=true;
-    link.removeAttribute('href');
-    link.removeAttribute('target');
-    link.removeAttribute('rel');
-    unavailable.hidden=false;
-    $('#downloadNowNote').textContent='No supported download URL is available for this hosted player source.';
-  }
-}
-function playSource(index,resume=false){
-  const source=availableSources[index];
-  updateDownloadNow(index);
-  clearStartupTimer();
-  if(source?.provider==='doodstream'){
-    video.pause();
-    video.removeAttribute('src');
-    video.load();
-    video.style.visibility='hidden';
-    const frame=document.createElement('iframe');
-    frame.loading='eager';
-    frame.src=source.embed_url;
-    frame.title='Doodstream hosted video';
-    frame.allow='autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write';
-    frame.allowFullscreen=true;
-    frame.referrerPolicy='strict-origin-when-cross-origin';
-    // Do not sandbox hosted video providers: their player scripts, popups, and media APIs may be required.
-    frame.addEventListener('load',()=>{
-      clearStartupTimer();loading(false);status('Hosted player page loaded. Press Play inside it. The browser cannot confirm playback inside this cross-site player.');
-      $('#retry').classList.remove('show');
-    },{once:true});
-    doodstreamStage.replaceChildren(frame);
-    doodstreamStage.hidden=false;
-    loading(true);status('Loading Doodstream inside Movi Player…');
-    startupTimer=setTimeout(()=>{
-      if(doodstreamStage.contains(frame)){
-        loading(false);
-        status('Doodstream embed did not respond. Check that this video allows embedding.',true);
-        $('#retry').classList.add('show');
-      }
-    },30000);
-    return;
-  }
-  doodstreamStage.replaceChildren();
-  doodstreamStage.hidden=true;
-  video.style.visibility='visible';
-  video.preload='metadata';
-  streamUrl='/api/watch/'+encodeURIComponent(movieId)+'/'+index;
-  video.src=streamUrl;
-  video.load();
-  loading(true);
-  status('Connecting to the V6 stream and loading the first media fragment…');
-  const generation=++prepareGeneration;
-  startupTimer=setTimeout(()=>{
-    if(generation===prepareGeneration&&!(Number(video.duration)>0)&&video.readyState<1){
-      showPlayerError('The V6 stream has not delivered browser metadata within 30 seconds. Check that the source is public and supports byte ranges.');
-    }
-  },30000);
-  if(resume)video.addEventListener('canplay',()=>video.play().catch(()=>{}),{once:true});
-}
-function mediaError(){
-  if(!doodstreamStage.hidden)return;
-  const e=video.error;
-  let message='Video playback failed.';
-  if(e?.code===4){
-    if(['mkv','avi','flv','ogg','ebml'].includes(mediaContainer)){
-      message='This file is '+mediaContainer.toUpperCase()+'. Chrome/Edge cannot play this container directly. It needs MP4 (H.264 video + AAC audio) or HLS conversion.';
-    }else if(mediaContainer==='mp4'){
-      message='The file is an MP4, but its video/audio codec may not be browser-compatible (for example HEVC, AC3 or DTS). Re-encode to H.264 + AAC MP4 or HLS.';
-    }else{
-      message='The browser rejected this media source. Detected container: '+mediaContainer+'. The file may be malformed or use an unsupported codec.';
-    }
-  }else if(e?.code===2) message='Network error while downloading the video stream.';
-  else if(e?.code===3) message='The browser could not decode this video. The codec may be unsupported or the file may be damaged.';
-  else if(e?.code===1) message='Playback was interrupted.';
-  showPlayerError(message);
-}
 async function prepare(){
-  const generation=++prepareGeneration;
-  clearStartupTimer();
-  $('#retry').classList.remove('show');loading(true);status('');
+  setLoading(true);
+  setStatus('');
   try{
-    const catalog=await fetch('/api/movies',{cache:'no-store'});
-    const data=await catalog.json();
-    if(!catalog.ok)throw new Error(data.error||'Could not load the movie catalogue.');
-    const movie=(data.movies||[]).find(x=>x.id===movieId);
-    if(!movie)throw new Error('This movie is not published or could not be found.');
+    const response=await fetch('/api/movies',{cache:'no-store'});
+    const data=await response.json();
+    if(!response.ok)throw new Error(data.error||'Could not load the movie catalogue.');
+    const movie=(data.movies||[]).find(item=>item.id===movieId);
+    if(!movie)throw new Error('This movie is not published or does not have a VOE player configured.');
     $('#title').textContent=movie.title;
     $('#category').textContent=movie.category||'';
-    if(movie.poster_url)video.poster=movie.poster_url;
-    if(!Array.isArray(movie.video_sources)||!movie.video_sources.length)throw new Error('No video source is configured for this movie.');
-    availableSources=movie.video_sources;
-    activeOptionIndex=0;
-    playSource(activeOptionIndex);
-  }catch(e){
-    clearStartupTimer();loading(false);status(e.message||'Unable to prepare this video.',true);$('#retry').classList.add('show');
+    const source=(movie.video_sources||[]).find(item=>item.provider==='voe.sx');
+    embedUrl=canonicalVoeUrl(source?.embed_url||'');
+    if(!embedUrl)throw new Error('No valid VOE embed is configured for this movie. Add https://voe.sx/e/VIDEO_CODE in the admin panel.');
+    const officialPage=canonicalVoeUrl(source?.download_url||embedUrl)||embedUrl;
+    $('#voeDownload').href=officialPage;
+    $('#voeDownload').hidden=false;
+    loadPlayer();
+  }catch(error){
+    stopTimer();
+    setLoading(false);
+    setStatus(error.message||'Unable to prepare this video.',true);
+    $('#voeDownload').hidden=true;
   }
 }
-video.addEventListener('error',mediaError);
-video.addEventListener('loadedmetadata',playbackReady);
-video.addEventListener('canplay',playbackReady);
-video.addEventListener('errordisplay',event=>{
-  const detail=event.detail||{};
-  const message=[detail.title,detail.message].filter(Boolean).join(': ')||'Movi Player could not read this video source.';
-  showPlayerError(message);
+
+player.addEventListener('load',()=>{
+  stopTimer();
+  setLoading(false);
+  setStatus('VOE player page loaded. Press Play inside the player. VOE controls stream quality and buffering.');
 });
-video.addEventListener('waiting',()=>{if(!video.paused)status('Buffering the next video segment…')});
-video.addEventListener('playing',()=>status(''));
-$('#retry').addEventListener('click',()=>{if(availableSources[activeOptionIndex]?.provider==='doodstream')playSource(activeOptionIndex);else prepare()});
+player.addEventListener('error',()=>{
+  stopTimer();
+  setLoading(false);
+  setStatus('The VOE player could not be loaded. Check that the video is available and allows embedding.',true);
+});
+$('#retry').addEventListener('click',loadPlayer);
 prepare();
 </script>
-<link rel="stylesheet" href="/pwa-install.css"><script src="/pwa-install.js" defer></script>
+<link rel="stylesheet" href="/pwa-install.css">
+<script src="/pwa-install.js" defer></script>
 </body>
 </html>
