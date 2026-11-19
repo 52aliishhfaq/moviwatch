@@ -138,7 +138,7 @@ const CATALOGUE_CACHE_TTL = 30;
 
 async function publicMovies(env, category, query) {
   const sql = sqlFor(env);
-  return await sql\`SELECT id,title,poster_url,category,created_at,
+  return await sql`SELECT id,title,poster_url,category,created_at,
     COALESCE((
       SELECT jsonb_agg(
         jsonb_build_object(
@@ -159,7 +159,7 @@ async function publicMovies(env, category, query) {
       )
       AND (${category || null}::text IS NULL OR category=${category || null})
       AND (${query || null}::text IS NULL OR title ILIKE ${query ? '%' + query + '%' : null})
-    ORDER BY created_at DESC LIMIT 100\`;
+    ORDER BY created_at DESC LIMIT 100`;
 }
 
 export class PublicCatalogue extends WorkerEntrypoint {
@@ -275,8 +275,8 @@ async function api(req, env, ctx) {
     const sql = sqlFor(env);
 
     if (path === '/api/admin/movies' && method === 'GET') {
-      const rows = await sql\`SELECT id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at
-        FROM movies ORDER BY updated_at DESC LIMIT 500\`;
+      const rows = await sql`SELECT id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at
+        FROM movies ORDER BY updated_at DESC LIMIT 500`;
       const movies = rows.map((movie) => ({
         ...movie,
         video_sources: (Array.isArray(movie.video_sources) ? movie.video_sources : []).flatMap((source) => {
@@ -296,17 +296,17 @@ async function api(req, env, ctx) {
     }
 
     if (path === '/api/admin/stats' && method === 'GET') {
-      const rows = await sql\`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE is_published)::int AS published,
+      const rows = await sql`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE is_published)::int AS published,
         COUNT(*) FILTER (WHERE category='Action')::int AS action, COUNT(*) FILTER (WHERE category='Romantic')::int AS romantic
-        FROM movies\`;
+        FROM movies`;
       return json({ stats: rows[0] });
     }
 
     if (path === '/api/admin/movies' && method === 'POST') {
       const movie = movieInput(await readBody(req));
-      const rows = await sql\`INSERT INTO movies(id,title,poster_url,category,videos,is_published)
+      const rows = await sql`INSERT INTO movies(id,title,poster_url,category,videos,is_published)
         VALUES(${crypto.randomUUID()},${movie.title},${movie.poster},${movie.category},${JSON.stringify(movie.sources)}::jsonb,${movie.published})
-        RETURNING id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at\`;
+        RETURNING id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at`;
       await invalidateContentCaches(ctx);
       return json({ movie: rows[0] }, 201);
     }
@@ -316,15 +316,15 @@ async function api(req, env, ctx) {
       if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: 'Invalid movie ID' }, 400);
       if (method === 'PUT') {
         const movie = movieInput(await readBody(req));
-        const rows = await sql\`UPDATE movies SET title=${movie.title},poster_url=${movie.poster},category=${movie.category},
+        const rows = await sql`UPDATE movies SET title=${movie.title},poster_url=${movie.poster},category=${movie.category},
           videos=${JSON.stringify(movie.sources)}::jsonb,is_published=${movie.published},updated_at=NOW()
-          WHERE id=${id} RETURNING id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at\`;
+          WHERE id=${id} RETURNING id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at`;
         if (!rows[0]) return json({ error: 'Movie not found' }, 404);
         await invalidateContentCaches(ctx);
         return json({ movie: rows[0] });
       }
       if (method === 'DELETE') {
-        const rows = await sql\`DELETE FROM movies WHERE id=${id} RETURNING id\`;
+        const rows = await sql`DELETE FROM movies WHERE id=${id} RETURNING id`;
         if (!rows[0]) return json({ error: 'Movie not found' }, 404);
         await invalidateContentCaches(ctx);
         return json({ ok: true });
