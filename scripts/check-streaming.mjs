@@ -47,7 +47,7 @@ for (const bad of [
 // Worker source policy and safe provider redirects.
 assertIncludes(worker, "host === 'drive.google.com' || host === 'drive.usercontent.google.com'", 'Drive host allowlist missing');
 assertIncludes(worker, "host === 'archive.org' || host.endsWith('.archive.org')", 'Archive.org host allowlist missing');
-assertIncludes(worker, 'redirect: \\'manual\\'', 'Upstream redirects must be validated hop by hop');
+assertIncludes(worker, "redirect: 'manual'", 'Upstream redirects must be validated hop by hop');
 assertIncludes(worker, 'sourceKind(new URL(source).hostname)', 'Google sign-in redirects must be detected');
 assertIncludes(worker, 'Anyone with the link (Viewer)', 'Private Drive guidance missing');
 
