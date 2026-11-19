@@ -78,12 +78,12 @@ assertIncludes(catalogue, 'source_index:index', 'Public player source index miss
 assert.ok(!catalogue.includes("'url':") && !catalogue.includes("url:source.url"),
   'Public catalogue must not expose provider URLs');
 
-assertIncludes(worker, "path.startsWith('/api/watch/')", 'Watch proxy route missing');
-assertIncludes(worker, "path.startsWith('/api/download/')", 'Download proxy route missing');
+assertIncludes(worker, "const watch = path.split('/')", 'Watch proxy route missing');
+assertIncludes(worker, "const download = path.split('/')", 'Download proxy route missing');
 assertIncludes(worker, 'cachedVideoRange(', 'Proxy must use the edge chunk cache');
 assertIncludes(worker, 'content-disposition', 'Download attachment header missing');
 assertIncludes(worker, 'content-range', 'HTTP content-range support missing');
-assertIncludes(worker, 'source.provider === \\'archive.org\\'', 'Archive provider detection missing');
+assertIncludes(worker, "return host === 'archive.org' || host.endsWith('.archive.org') ? 'archive.org' : 'google-drive'", 'Archive provider detection missing');
 assert.ok(!/doodstream|playmogo|voe\.sx/i.test(worker), 'Legacy hosts must not remain in the Worker');
 
 // Vercel / Cloudflare routing and responsive player controls.
@@ -100,8 +100,8 @@ assertIncludes(admin, 'id="sources"', 'Admin source editor missing');
 assertIncludes(admin, 'Google Drive / Archive.org video links', 'Admin must describe supported providers');
 assertIncludes(admin, 'drive.google.com/file/d/', 'Admin Drive example missing');
 assertIncludes(admin, 'archive.org/download/', 'Admin Archive example missing');
-assertIncludes(admin, 'source.provider===\\'google-drive\\'', 'Admin Drive summary missing');
-assertIncludes(admin, 'source.provider===\\'archive.org\\'', 'Admin Archive summary missing');
+assertIncludes(admin, "source.provider==='google-drive'", 'Admin Drive summary missing');
+assertIncludes(admin, "source.provider==='archive.org'", 'Admin Archive summary missing');
 assert.ok(!/doodstream|playmogo|voe\.sx/i.test(admin), 'Legacy providers must not remain in the admin page');
 
 // All four Worker entrypoints must be cache-enabled independently of the uncached gateway.
@@ -122,6 +122,6 @@ for (const file of ['public/index.html', 'public/watch.html', 'public/admin.html
 }
 
 assertIncludes(readme, 'Drive and Archive.org byte-range streaming', 'README must describe the restored providers');
-assertIncludes(readme, 'zero-buffering guarantee', 'README must document realistic buffering limits');
+assertIncludes(readme, 'cannot guarantee zero buffering', 'README must document realistic buffering limits');
 
 console.log('Drive/Archive URL, provider, cache, range, download, admin, watch and inline-script checks passed.');
