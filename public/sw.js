@@ -1,4 +1,4 @@
-const CACHE='moviwatch-shell-v1';
+const CACHE='moviwatch-shell-v2';
 const SHELL=['/','/manifest.webmanifest','/assets/moviwatch-app-icon.svg','/assets/moviwatch-logo-4k.svg','/pwa-install.css','/pwa-install.js'];
 self.addEventListener('install',event=>event.waitUntil((async()=>{
  const cache=await caches.open(CACHE);
