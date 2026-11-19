@@ -35,24 +35,6 @@
       "cache": {
         "enabled": true
       }
-    },
-    "MovieMetadata": {
-      "type": "worker",
-      "cache": {
-        "enabled": true
-      }
-    },
-    "VideoChunk": {
-      "type": "worker",
-      "cache": {
-        "enabled": true
-      }
-    },
-    "VideoHeader": {
-      "type": "worker",
-      "cache": {
-        "enabled": true
-      }
     }
   }
 }
