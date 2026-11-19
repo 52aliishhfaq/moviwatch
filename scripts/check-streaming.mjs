@@ -84,7 +84,7 @@ assertIncludes(worker, "const download = path.split('/')", 'Download proxy route
 assertIncludes(worker, 'cachedVideoRange(', 'Proxy must use the edge chunk cache');
 assertIncludes(worker, 'content-disposition', 'Download attachment header missing');
 assertIncludes(worker, 'content-range', 'HTTP content-range support missing');
-assertIncludes(sourceModule, "return host === 'archive.org' || host.endsWith('.archive.org') ? 'archive.org' : 'google-drive'", 'Archive provider detection missing');
+assertIncludes(sourceModule, "return host==='archive.org'||host.endsWith('.archive.org')?'archive.org':'google-drive'", 'Archive provider detection missing');
 assert.ok(!/doodstream|playmogo|voe\.sx/i.test(worker), 'Legacy hosts must not remain in the Worker');
 
 // Vercel / Cloudflare routing and responsive player controls.
