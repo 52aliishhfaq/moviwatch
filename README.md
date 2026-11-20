@@ -7,11 +7,11 @@ A movie catalogue with Google Drive and Archive.org byte-range streaming. The fr
 - Public movie catalogue with Action and Romantic categories; visitors can browse and play without accounts.
 - Password-protected admin dashboard at \`/admin\`.
 - Add up to 8 labeled source links per movie from Google Drive and Archive.org.
-- Responsive Movi Player with a source selector, a Download selected source button, and a 32 MiB per-browser LRU cache of 1 MiB HTTP range pieces.
-- HTTP Range support for playback, browser seeking, and HEAD metadata requests. Archive.org's Download Now button links directly to its canonical file URL (no Worker proxy); Google Drive downloads retain the Worker attachment route.
+- Responsive Movi Player with a source selector, a protected Download Now action, and a 32 MiB per-browser LRU cache of 1 MiB HTTP range pieces.
+- HTTP Range support for playback, browser seeking, and HEAD metadata requests. Both playback and downloads stay behind the same-origin Cloudflare Worker; neither provider's raw media URL is returned to public clients.
 - Cloudflare Workers Cache stores complete 8 MiB video chunks for 24 hours through separately cached Worker entrypoints. Chunk keys include the source URL hash, movie, option index, source version, range start, and chunk size—not a viewer or browser ID—so the same cached bytes can be reused by other viewers.
 - Fragmented MP4 detection uses a compact header probe, a 512 KiB initial Worker segment, and 8 MiB continuation chunks in Cloudflare's shared cache; the player requests at most 1 MiB at a time and prefetches the next two pieces during playback.
-- Public catalogue responses expose labels, providers, and source indexes; Archive.org sources additionally expose only their canonical download URL so downloads can bypass the Worker. Google Drive playback URLs remain private in the internal metadata entrypoint.
+- Public catalogue responses expose only labels, providers, and source indexes. Raw Google Drive and Archive.org source URLs remain in the internal metadata path and are never sent to public watch pages.
 - Admin secrets stay in Cloudflare Worker Secrets.
 
 ## Adding video sources
@@ -23,7 +23,7 @@ Google Drive 1080p | https://drive.google.com/file/d/FILE_ID/view
 Archive.org 720p | https://archive.org/download/IDENTIFIER/video.mp4
 \`\`\`
 
-The first source is selected by default. When multiple options exist, the watch page shows a source selector. The Download Now button opens Archive.org's canonical `/download/IDENTIFIER/FILENAME` link directly for Archive.org sources, while Google Drive downloads continue through the Worker attachment endpoint.
+The first source is selected by default. When multiple options exist, the watch page shows a source selector. Download Now always uses the protected Worker attachment endpoint, including for Archive.org sources; the browser never receives a provider URL.
 
 **Google Drive:** Set General access to **Anyone with the link – Viewer**. Private files, sign-in redirects, malware confirmation screens, and quota pages cannot be converted into video by the proxy. Use a file URL, not a folder URL.
 
@@ -43,7 +43,7 @@ For fragmented MP4, the Worker's first cached segment remains 512 KiB; later Wor
 
 **Archive.org mirror handling:** the Worker reads Internet Archive item metadata (`server`, `workable_servers`, `d1`, and `d2`), tries available storage hosts for each byte range, measures successful transfer throughput, prefers previously faster mirrors, and temporarily cools down hosts after failed or timed-out requests. If item metadata is unavailable, the original public Archive.org URL remains the fallback.
 
-**Downloads:** Archive.org's Download Now button points directly to the official `https://archive.org/download/IDENTIFIER/FILENAME` URL and bypasses Cloudflare for the file transfer. The browser is asked to save it as a file. Archive.org may still serve an MP4 inline, in which case the browser can open it in a new tab rather than immediately save it; this cannot be overridden reliably by the cross-origin HTML download attribute. Playback remains proxied and edge-cached by the Worker. Google Drive downloads continue using the existing Worker attachment route.
+**Downloads:** Both Archive.org and Google Drive downloads are streamed through the Worker attachment endpoint after the same playback authorization checks. Provider URLs are not placed in the page, catalogue response, or redirect Location header. File bytes can still be saved by a visitor who is legitimately allowed to download them; this design prevents simple link reuse and third-party hotlinking, not copying captured media bytes after an authorized download.
 
 **This reduces repeat reads and improves resilience; it cannot guarantee zero buffering.** Internet Archive still controls mirror availability, source bandwidth, throttling, and item permissions. If every storage mirror is slow or unavailable, playback can still buffer or fail. Cache misses still depend on an Internet Archive server. For best compatibility, use MP4 with H.264 video and AAC audio. Unsupported containers/codecs need conversion by the rights holder before upload.
 
@@ -121,11 +121,12 @@ The production Vercel domain must be present in the Cloudflare Worker \`APP_ORIG
 |---|---|---|
 | GET | \`/api/health\` | Public health check |
 | POST | \`/api/auth/login\` | Admin password |
+| POST | \\`/api/playback/session\\` | Same-origin watch page; issues a movie-bound HttpOnly session cookie |
 | POST | \`/api/auth/logout\` | Session cookie |
 | GET | \`/api/auth/me\` | Session status |
 | GET | \`/api/movies?q=&category=\` | Public catalogue (source labels/provider/index only) |
-| GET/HEAD | \`/api/watch/:movieId/:optionIndex\` | Range-aware streaming |
-| GET/HEAD | \`/api/download/:movieId/:optionIndex\` | Attachment download |
+| GET/HEAD | \\`/api/watch/:movieId/:optionIndex\\` | Valid movie-bound HttpOnly session + matching same-origin watch-page referrer |
+| GET/HEAD | \\`/api/download/:movieId/:optionIndex\\` | Same playback authorization as watch; Worker attachment download |
 | GET | \`/api/admin/movies\` | Admin |
 | POST/PUT/DELETE | \`/api/admin/movies[/:id]\` | Admin |
 | GET | \`/api/admin/stats\` | Admin |
@@ -133,6 +134,10 @@ The production Vercel domain must be present in the Cloudflare Worker \`APP_ORIG
 ## Security and operational notes
 
 - Only HTTPS Google Drive and Archive.org source hosts are accepted. Upstream redirects are validated hop by hop; arbitrary URLs are not fetched.
+- A watch page obtains a short-lived signed playback session in a \\`Secure\\`, \\`HttpOnly\\`, \\`SameSite=Strict\\` cookie, bound to that movie ID. The token is never exposed to JavaScript or query strings.
+- \\`/api/watch\\` and \\`/api/download\\` require that session cookie and a matching same-origin \\`Referer\\` for \\`/watch/:movieId\\`; cross-site requests and copied media URLs without the browser session are rejected.
+- Both providers' downloads are proxied; Archive.org does not redirect the browser to its public source URL. Media responses use \\`Cross-Origin-Resource-Policy: same-origin\\`.
+- Vercel sends \\`Referrer-Policy: same-origin\\`, \\`X-Frame-Options: DENY\\`, \\`Content-Security-Policy: frame-ancestors 'none'\\`, and \\`X-Content-Type-Options: nosniff\\` to prevent third-party framing and preserve same-origin watch-page context.
 - Google Drive and Archive.org source URLs are not included in public catalogue JSON.
 - The proxy does not bypass upstream access controls, quotas, copyright restrictions, or host throttling.
 - Admin password verifier, pepper, JWT secret, Neon URL, and Redis token must be configured as Worker secrets, never committed.

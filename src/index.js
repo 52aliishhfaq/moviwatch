@@ -1,10 +1,13 @@
 import { neon } from '@neondatabase/serverless';
 import { Redis } from '@upstash/redis';
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { videoSourceUrl, sourceProvider, archiveDownloadUrl } from './video-sources.js';
+import { videoSourceUrl, sourceProvider } from './video-sources.js';
 
 const COOKIE = 'moviwatch_admin';
 const SESSION = 8 * 60 * 60;
+const PLAYBACK_COOKIE = 'moviwatch_playback';
+const PLAYBACK_SESSION = 12 * 60 * 60;
+const playbackCookieName = (movieId) => PLAYBACK_COOKIE + '_' + movieId.toLowerCase();
 const CATEGORIES = new Set(['Action', 'Romantic']);
 const enc = new TextEncoder();
 
@@ -59,16 +62,89 @@ async function validToken(env, token) {
     return diff === 0;
   } catch { return false; }
 }
-function getCookie(req) {
+function getCookieValue(req, name) {
   for (const part of (req.headers.get('Cookie') || '').split(';')) {
     const i = part.indexOf('=');
-    if (i > 0 && part.slice(0, i).trim() === COOKIE) return part.slice(i + 1).trim();
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
   }
   return '';
+}
+function getCookie(req) {
+  return getCookieValue(req, COOKIE);
 }
 async function isAdmin(req, env) {
   const value = getCookie(req);
   return Boolean(value && env.JWT_SECRET && await validToken(env, value));
+}
+async function makePlaybackToken(env, movieId) {
+  if (!env.JWT_SECRET) throw new Error('Playback signing secret is not configured');
+  const now = Math.floor(Date.now() / 1000);
+  const sid = new Uint8Array(32);
+  crypto.getRandomValues(sid);
+  const head = b64(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const payload = b64(JSON.stringify({ sub: 'playback', mid: movieId, sid: b64(sid), iat: now, exp: now + PLAYBACK_SESSION }));
+  const unsigned = head + '.' + payload;
+  return unsigned + '.' + b64(await hmac(enc.encode(env.JWT_SECRET), enc.encode(unsigned)));
+}
+async function validPlaybackToken(env, token) {
+  try {
+    if (!env.JWT_SECRET || typeof token !== 'string') return false;
+    const parts = token.split('.');
+    if (parts.length !== 3) return false;
+    const head = JSON.parse(new TextDecoder().decode(unb64(parts[0])));
+    const body = JSON.parse(new TextDecoder().decode(unb64(parts[1])));
+    const now = Math.floor(Date.now() / 1000);
+    if (head.alg !== 'HS256' || body.sub !== 'playback' ||
+        typeof body.mid !== 'string' || !/^[0-9a-f-]{36}$/i.test(body.mid) ||
+        typeof body.sid !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body.sid) ||
+        !Number.isInteger(body.exp) || body.exp <= now ||
+        !Number.isInteger(body.iat) || body.iat > now + 60 ||
+        body.exp - body.iat > PLAYBACK_SESSION) return false;
+    const expected = await hmac(enc.encode(env.JWT_SECRET), enc.encode(parts[0] + '.' + parts[1]));
+    const received = unb64(parts[2]);
+    if (received.length !== expected.length) return false;
+    let diff = 0;
+    for (let i = 0; i < expected.length; i++) diff |= expected[i] ^ received[i];
+    return diff === 0 ? body : null;
+  } catch { return null; }
+}
+function isTrustedAppOrigin(req, env, value) {
+  try {
+    const origin = new URL(value).origin;
+    if (origin === new URL(req.url).origin) return true;
+    for (const candidate of (env.APP_ORIGINS || '').split(',')) {
+      const item = candidate.trim();
+      if (!item) continue;
+      try {
+        const parsed = new URL(item);
+        if (parsed.protocol === 'https:' && parsed.origin === origin) return true;
+      } catch { /* Ignore malformed allowlist entries. */ }
+    }
+  } catch { /* Invalid or absent origin. */ }
+  return false;
+}
+function playbackContextAllowed(req, env, movieId) {
+  const fetchSite = req.headers.get('Sec-Fetch-Site');
+  if (fetchSite && fetchSite !== 'same-origin') return false;
+  const referer = req.headers.get('Referer');
+  if (!referer || !isTrustedAppOrigin(req, env, referer)) return false;
+  let page;
+  try { page = new URL(referer); } catch { return false; }
+  const segments = page.pathname.split('/').filter(Boolean);
+  if (segments.length !== 2 || segments[0] !== 'watch') return false;
+  let pageMovieId;
+  try { pageMovieId = decodeURIComponent(segments[1]); } catch { return false; }
+  if (pageMovieId.toLowerCase() !== movieId.toLowerCase()) return false;
+  const origin = req.headers.get('Origin');
+  if (origin && !isTrustedAppOrigin(req, env, origin)) return false;
+  return true;
+}
+async function hasPlaybackAccess(req, env, movieId) {
+  const session = getCookieValue(req, playbackCookieName(movieId));
+  if (!session) return false;
+  const claims = await validPlaybackToken(env, session);
+  return Boolean(claims && claims.mid.toLowerCase() === movieId.toLowerCase() &&
+    playbackContextAllowed(req, env, movieId));
 }
 function sameOrigin(req, env) {
   const origin = req.headers.get('Origin');
@@ -145,7 +221,7 @@ export class PublicCatalogue extends WorkerEntrypoint {
      label:source.label||(provider==='archive.org'?'Archive.org':'Google Drive'),
      provider,
      source_index:index,
-     ...(provider==='archive.org'?{download_url:archiveDownloadUrl(url)}:{})
+     
     }];
    }catch{return[]}});
    return playable.length?[{...movie,video_sources:playable}]:[];
@@ -954,6 +1030,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
       'x-moviwatch-container': container,
       'x-moviwatch-fragmented': String(fragmented),
       'x-moviwatch-stream-profile': fragmented ? 'single-file-fmp4' : 'range-stream',
+      'cross-origin-resource-policy': 'same-origin',
       'content-length': String(contentLength),
       'content-range': 'bytes ' + responseStart + '-' + responseEnd + '/' + total,
       'accept-ranges': 'bytes',
@@ -981,6 +1058,19 @@ async function api(req, env, ctx) {
   const path = url.pathname;
   const method = req.method;
   if (path === '/api/health' && method === 'GET') return json({ ok: true, service: 'moviwatch' });
+
+  // Each watch page establishes a short-lived, signed, HttpOnly session.
+  // The credential is never exposed to JavaScript or placed in a media URL.
+  if (path === '/api/playback/session' && method === 'POST') {
+    sameOrigin(req, env);
+    const body = await readBody(req);
+    const movieId = typeof body.movieId === 'string' ? body.movieId : '';
+    if (!/^[0-9a-f-]{36}$/i.test(movieId)) return json({ error: 'A valid movie ID is required.' }, 400);
+    const token = await makePlaybackToken(env, movieId);
+    return json({ ok: true, expiresIn: PLAYBACK_SESSION }, 200, {
+      'set-cookie': playbackCookieName(movieId) + '=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/api/; Max-Age=' + PLAYBACK_SESSION
+    });
+  }
 
   if (path === '/api/auth/login' && method === 'POST') {
     sameOrigin(req, env);
@@ -1038,6 +1128,11 @@ async function api(req, env, ctx) {
   const download = path.split('/');
   if (download.length === 5 && download[1] === 'api' && download[2] === 'download' &&
       (method === 'GET' || method === 'HEAD')) {
+    if (!await hasPlaybackAccess(req, env, download[3])) {
+      return method === 'HEAD'
+        ? new Response(null, { status: 403, headers: { 'cache-control': 'no-store', 'cross-origin-resource-policy': 'same-origin' } })
+        : json({ error: 'Open this movie in Moviwatch before downloading.' }, 403);
+    }
     const metadata = await movieById(ctx, env, download[3]);
     const movie = metadata.movie;
     if (!movie) return method === 'HEAD'
@@ -1050,11 +1145,6 @@ async function api(req, env, ctx) {
       return method === 'HEAD'
         ? new Response(null, { status: 404, headers: { 'cache-control': 'no-store' } })
         : json({ error: 'Google Drive or Archive.org video source not found' }, 404);
-    }
-
-    // Archive.org downloads are redirected to the original file endpoint.
-    if (source.provider === 'archive.org') {
-      return Response.redirect(archiveDownloadUrl(source.url), 302);
     }
 
     const cleanPart = (value) => String(value || '')
@@ -1156,6 +1246,11 @@ async function api(req, env, ctx) {
 
     const watch = path.split('/');
   if (watch.length === 5 && watch[1] === 'api' && watch[2] === 'watch' && (method === 'GET' || method === 'HEAD')) {
+    if (!await hasPlaybackAccess(req, env, watch[3])) {
+      return method === 'HEAD'
+        ? new Response(null, { status: 403, headers: { 'cache-control': 'no-store', 'cross-origin-resource-policy': 'same-origin' } })
+        : json({ error: 'Open this movie in Moviwatch to start playback.' }, 403);
+    }
     const metadata = await movieById(ctx, env, watch[3]);
     const movie = metadata.movie;
     if (!movie) return json({ error: 'Movie not found' }, 404);
@@ -1180,6 +1275,7 @@ async function api(req, env, ctx) {
       }
       const out = new Headers({
         'cache-control': 'private, no-store',
+        'cross-origin-resource-policy': 'same-origin',
         'x-content-type-options': 'nosniff',
         'accept-ranges': 'bytes'
       });
