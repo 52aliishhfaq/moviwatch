@@ -61,9 +61,9 @@ assertIncludes(worker, 'const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024', '51
 assertIncludes(worker, 'https://archive.org/metadata/', 'Archive.org metadata discovery missing');
 assertIncludes(worker, 'metadata.d1', 'Archive.org d1 mirror missing');
 assertIncludes(worker, 'metadata.d2', 'Archive.org d2 mirror missing');
-assertIncludes(worker, 'archiveMirrorScores', 'Per-item mirror throughput scoring missing');
-assertIncludes(worker, 'ARCHIVE_MIRROR_COOLDOWN_MS', 'Mirror circuit-breaker cooldown missing');
-assertIncludes(worker, 'fetchVideoRangeFromMirrors', 'Archive.org Range mirror failover missing');
+assertIncludes(worker, 'archiveScores', 'Archive.org throughput scoring missing');
+assertIncludes(worker, 'ARCHIVE_COOLDOWN', 'Archive.org failure cooldown missing');
+assertIncludes(worker, 'fetchVideoRangeFromMirrors', 'Archive.org per-range failover missing');
 assertIncludes(worker, 'const VIDEO_HEADER_PROBE_SIZE = 16 * 1024', 'Compact video header probe missing');
 assertIncludes(worker, 'mp4MoovEnd(bytes)', 'MP4 moov atom size detection missing');
 assertIncludes(worker, 'mp4HasMvex(bytes)', 'Fragmented MP4 detection missing');
@@ -90,8 +90,8 @@ assert.ok(!catalogue.includes("'url':") && !catalogue.includes("url:source.url")
 assertIncludes(worker, "const watch = path.split('/')", 'Watch proxy route missing');
 assertIncludes(worker, "const download = path.split('/')", 'Download proxy route missing');
 assertIncludes(worker, 'cachedVideoRange(', 'Proxy must use the edge chunk cache');
-assertIncludes(worker, 'content-disposition', 'Google Drive proxy download attachment header missing');
-assertIncludes(worker, "Response.redirect(archiveDownloadUrl(source.url), 302)", 'Archive.org downloads must bypass Worker streaming');
+assertIncludes(worker, 'content-disposition', 'Google Drive Worker download attachment header missing');
+assertIncludes(worker, "Response.redirect(archiveDownloadUrl(source.url), 302)", 'Archive.org downloads must redirect directly to Archive.org');
 assertIncludes(worker, 'content-range', 'HTTP content-range support missing');
 assertIncludes(sourceModule, "return host==='archive.org'||host.endsWith('.archive.org')?'archive.org':'google-drive'", 'Archive provider detection missing');
 assert.ok(!/doodstream|playmogo|voe\.sx/i.test(worker), 'Legacy hosts must not remain in the Worker');
@@ -135,6 +135,6 @@ assertIncludes(readme, 'Drive and Archive.org byte-range streaming', 'README mus
 assertIncludes(readme, 'cannot guarantee zero buffering', 'README must document realistic buffering limits');
 assertIncludes(readme, '8 MiB continuation chunks', 'README must document 8 MiB chunks');
 assertIncludes(readme, 'directly to Internet Archive', 'README must document direct Archive.org downloads');
-assertIncludes(readme, 'd1', 'README must document mirror selection');
+assertIncludes(readme, 'd1', 'README must document mirror failover');
 
 console.log('Drive/Archive URL, provider, cache, range, download, admin, watch and inline-script checks passed.');
