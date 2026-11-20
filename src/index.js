@@ -731,7 +731,7 @@ async function archiveCandidates(sourceUrl) {
     const aBad = (a.score?.until || 0) > Date.now();
     const bBad = (b.score?.until || 0) > Date.now();
     if (aBad !== bBad) return aBad ? 1 : -1;
-    if (!!a.score?.rate !== !!b.score?.rate) return a.score?.rate ? 1 : -1;
+    if (!!a.score?.rate !== !!b.score?.rate) return a.score?.rate ? -1 : 1;
     if (a.score?.rate && b.score?.rate && a.score.rate !== b.score.rate) return b.score.rate - a.score.rate;
     return a.order - b.order;
   });
@@ -803,8 +803,8 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
 
   // The cached header probe identifies fragmented MP4 for every range request,
-  // including seeks. Keep a compact first segment and 4 MiB continuation chunks
-  // so cold seeks do not have to wait for a 4 MiB Drive transfer.
+  // including seeks. Keep a compact first segment and 8 MiB continuation chunks
+  // so cold seeks do not have to wait for a 8 MiB Archive.org/Drive transfer.
   const header = await getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash);
   const fragmented = header.fragmented === true;
   const total = header.total;
@@ -831,8 +831,8 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
 
   if (startupPrefetch) {
     const prefetchStarted = Date.now();
-    // Load the compact fMP4 first segment and the following 4 MiB media
-    // segment concurrently. For conventional MP4, retain 4 MiB-aligned chunks
+    // Load the compact fMP4 first segment and the following 8 MiB media
+    // segment concurrently. For conventional MP4, retain 8 MiB-aligned chunks
     // and prefetch every chunk required to reach the moov index.
     const starts = [];
     let nextStart = 0;
@@ -1146,7 +1146,7 @@ async function api(req, env, ctx) {
     const source = storedVideoSource(movie, optionIndex);
     if (!source) return json({ error: 'Google Drive or Archive.org video source not found' }, 404);
 
-    // Serve HEAD and ordinary full-file GET through the same 4 MiB edge cache.
+    // Serve HEAD and ordinary full-file GET through the same 8 MiB edge cache.
     // Only If-Range stays on the origin path because it depends on origin validators.
     if (req.headers.has('If-Range')) {
       const headers = new Headers();
