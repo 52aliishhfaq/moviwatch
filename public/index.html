@@ -91,6 +91,79 @@ main{width:min(calc(100% - 44px),var(--content));margin:0 auto;padding:24px 0 80
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 .brand-logo{display:block;width:148px;height:84px;object-fit:contain;flex:0 0 auto}
 @media(max-width:650px){:root{--topbar:66px}.brand-logo{width:108px;height:61px}}
+
+/* Moviwatch UI refresh: calm first paint, consistent controls, and clean movie cards. */
+:root{--bg:#090c13;--panel:#111827;--line:#283247;--muted:#98a5bb;--text:#f7f8fc;--accent:#9ba8ff;--topbar:76px;--content:1840px}
+body{background:radial-gradient(ellipse at 50% -34%,#1c2a48 0,transparent 56%),#090c13}
+.topbar{background:rgba(9,12,19,.94);border-bottom-color:#ffffff12}
+.topbar-inner{min-height:var(--topbar);gap:26px}
+.brand-logo{width:132px;height:70px}
+.search{height:44px;border-radius:14px;background:#ffffff08}
+.search:focus{box-shadow:0 0 0 4px #8795ff18}
+.top-actions{gap:9px}
+.install-link,.admin-link{min-height:40px;padding:0 13px;border:1px solid #ffffff18;border-radius:12px;background:#ffffff07;color:#d7def0;font-size:12px;font-weight:750;cursor:pointer;transition:background .18s,border-color .18s,transform .18s}
+.install-link{display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.install-link:hover,.admin-link:hover{transform:translateY(-1px);border-color:#9ba8ff78;background:#ffffff10}
+.category-shell{background:rgba(11,15,24,.92);border-bottom-color:#ffffff0c}
+.category-inner{height:58px}
+.category-nav{gap:8px}
+.category-pill{min-height:36px;padding:0 16px;border-radius:11px;background:#ffffff07}
+.category-pill[aria-pressed="true"]{background:linear-gradient(135deg,#b7c0ff,#8391ff);border-color:#c2c9ff;color:#11162a;box-shadow:0 5px 18px #7887ff22}
+main{padding-top:30px}
+.section-heading{align-items:center;margin:6px 2px 20px}
+.section-kicker{margin:0 0 5px;color:#9ca9ff;font-size:9px;font-weight:850;letter-spacing:2px}
+.section-title{font-size:clamp(25px,3vw,34px);letter-spacing:-1.1px}
+.section-subtitle{margin-top:6px;color:#9ca8bd;font-size:13px}
+.movie-count{padding:7px 11px;border:1px solid #ffffff12;border-radius:999px;background:#ffffff06;color:#bbc5d8;font-size:11px}
+.movie-grid{gap:24px 18px}
+.movie-card{border-color:#ffffff0e;border-radius:16px;background:#101622;box-shadow:0 8px 28px #0003}
+.movie-card:hover{transform:translateY(-4px);border-color:#a2adff74;box-shadow:0 18px 38px #0005}
+.poster-wrap{background:linear-gradient(145deg,#1c2940,#101521)}
+.poster{opacity:0;transition:opacity .22s ease,transform .35s ease}
+.poster-wrap.is-loaded .poster{opacity:1}
+.poster-wrap.is-unavailable::before{content:"MOVIWATCH";position:absolute;inset:0;display:grid;place-items:center;color:#7f8ca7;font-size:10px;font-weight:850;letter-spacing:2px;background:linear-gradient(145deg,#1c2940,#101521)}
+.movie-details{padding:13px 13px 14px}
+.movie-title{font-size:13px;letter-spacing:-.1px}
+.movie-category{font-size:10px;letter-spacing:.8px;color:#a1aec5}
+.state-panel{border-style:solid;border-color:#ffffff12;background:#ffffff04}
+.category-placeholder{position:relative;display:block;flex:0 0 auto;width:76px;height:34px;overflow:hidden;border:1px solid #ffffff0c;border-radius:11px;background:#ffffff08}
+.category-placeholder--wide{width:94px}
+.skeleton-card{min-width:0;overflow:hidden;border:1px solid #ffffff0d;border-radius:16px;background:#101622}
+.skeleton-poster{position:relative;aspect-ratio:2/3;overflow:hidden;background:linear-gradient(145deg,#1a263a,#101521)}
+.skeleton-details{display:grid;gap:10px;padding:13px}
+.skeleton-line{position:relative;display:block;height:10px;overflow:hidden;border-radius:6px;background:#ffffff0b}
+.skeleton-line--title{width:78%}
+.skeleton-line--meta{width:42%;height:7px}
+.category-placeholder::after,.skeleton-poster::after,.skeleton-line::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,#ffffff0b,transparent);animation:mw-shimmer 1.5s ease-in-out infinite}
+@keyframes mw-shimmer{to{transform:translateX(100%)}}
+.poster-wrap:not(.is-loaded){background:linear-gradient(145deg,#1a263a,#101521)}
+.footer{color:#8390a8}
+@media(max-width:950px){.topbar-inner{gap:16px}.category-inner{height:56px}main{padding-top:22px}}
+@media(max-width:650px){
+ :root{--topbar:64px}
+ .topbar-inner{min-height:var(--topbar);gap:8px}
+ .brand-logo{width:98px;height:56px}
+ .top-actions{gap:6px}
+ .install-link,.admin-link{width:36px;min-height:36px;padding:0;font-size:0;gap:0;border-radius:11px}
+ .install-link svg,.admin-link svg{width:16px;height:16px}
+ .search{height:38px}
+ .category-inner{height:52px}
+ main{padding-top:18px}
+ .section-heading{margin:2px 1px 15px}
+ .section-kicker{font-size:8px;letter-spacing:1.6px}
+ .section-title{font-size:23px}
+ .section-subtitle{font-size:11px}
+ .movie-count{padding:6px 8px;font-size:10px}
+ .movie-grid{gap:15px 11px}
+ .movie-card,.skeleton-card{border-radius:12px}
+ .movie-details{padding:10px 10px 12px}
+ .movie-title{font-size:12px}
+ .movie-category{font-size:9px}
+ .skeleton-details{gap:8px;padding:10px}
+}
+@media(max-width:370px){.brand-logo{width:88px}.install-link,.admin-link{width:32px}.search{font-size:11px}}
+@media(prefers-reduced-motion:reduce){.category-placeholder::after,.skeleton-poster::after,.skeleton-line::after{animation:none}}
+
 </style>
 </head>
 <body>
@@ -104,6 +177,10 @@ main{width:min(calc(100% - 44px),var(--content));margin:0 auto;padding:24px 0 80
       <button class="clear-search" id="clearSearch" type="button" aria-label="Clear search">✕</button>
     </div>
     <div class="top-actions">
+      <button class="install-link" type="button" data-install-app aria-label="Install Moviwatch">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11"></path><path d="m8 10 4 4 4-4"></path><path d="M5 17v3h14v-3"></path></svg>
+        <span>Install app</span>
+      </button>
       <a class="admin-link" href="/admin" aria-label="Admin dashboard">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z"></path><path d="m9 12 2 2 4-4"></path></svg>
         Admin
@@ -115,7 +192,9 @@ main{width:min(calc(100% - 44px),var(--content));margin:0 auto;padding:24px 0 80
   <div class="category-inner">
     <span class="category-label">Explore</span>
     <nav id="categories" class="category-nav" aria-label="Movie categories" role="toolbar">
-      <span class="category-pill" aria-hidden="true">Loading categories…</span>
+      <span class="category-placeholder category-placeholder--wide" aria-hidden="true"></span>
+      <span class="category-placeholder" aria-hidden="true"></span>
+      <span class="category-placeholder" aria-hidden="true"></span>
     </nav>
   </div>
 </div>
@@ -123,13 +202,61 @@ main{width:min(calc(100% - 44px),var(--content));margin:0 auto;padding:24px 0 80
   <section id="catalogue" aria-labelledby="catalogueTitle">
     <div class="section-heading">
       <div>
-        <h2 id="catalogueTitle" class="section-title">Browse all movies</h2>
-        <p id="catalogueSubtitle" class="section-subtitle">Pick a category and find your next watch.</p>
+        <p class="section-kicker">THE MOVIWATCH COLLECTION</p>
+        <h2 id="catalogueTitle" class="section-title">Discover your next watch</h2>
+        <p id="catalogueSubtitle" class="section-subtitle">Explore the collection and find something worth watching.</p>
       </div>
       <span id="movieCount" class="movie-count"></span>
     </div>
     <div id="grid" class="movie-grid" aria-live="polite" aria-busy="true">
-      <div class="state-panel"><p class="state-title">Loading your movies</p><p class="state-message">Getting the catalogue ready…</p></div>
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-poster"></div>
+        <div class="skeleton-details"><span class="skeleton-line skeleton-line--title"></span><span class="skeleton-line skeleton-line--meta"></span></div>
+      </div>
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-poster"></div>
+        <div class="skeleton-details"><span class="skeleton-line skeleton-line--title"></span><span class="skeleton-line skeleton-line--meta"></span></div>
+      </div>
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-poster"></div>
+        <div class="skeleton-details"><span class="skeleton-line skeleton-line--title"></span><span class="skeleton-line skeleton-line--meta"></span></div>
+      </div>
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-poster"></div>
+        <div class="skeleton-details"><span class="skeleton-line skeleton-line--title"></span><span class="skeleton-line skeleton-line--meta"></span></div>
+      </div>
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-poster"></div>
+        <div class="skeleton-details"><span class="skeleton-line skeleton-line--title"></span><span class="skeleton-line skeleton-line--meta"></span></div>
+      </div>
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-poster"></div>
+        <div class="skeleton-details"><span class="skeleton-line skeleton-line--title"></span><span class="skeleton-line skeleton-line--meta"></span></div>
+      </div>
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-poster"></div>
+        <div class="skeleton-details"><span class="skeleton-line skeleton-line--title"></span><span class="skeleton-line skeleton-line--meta"></span></div>
+      </div>
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-poster"></div>
+        <div class="skeleton-details"><span class="skeleton-line skeleton-line--title"></span><span class="skeleton-line skeleton-line--meta"></span></div>
+      </div>
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-poster"></div>
+        <div class="skeleton-details"><span class="skeleton-line skeleton-line--title"></span><span class="skeleton-line skeleton-line--meta"></span></div>
+      </div>
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-poster"></div>
+        <div class="skeleton-details"><span class="skeleton-line skeleton-line--title"></span><span class="skeleton-line skeleton-line--meta"></span></div>
+      </div>
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-poster"></div>
+        <div class="skeleton-details"><span class="skeleton-line skeleton-line--title"></span><span class="skeleton-line skeleton-line--meta"></span></div>
+      </div>
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-poster"></div>
+        <div class="skeleton-details"><span class="skeleton-line skeleton-line--title"></span><span class="skeleton-line skeleton-line--meta"></span></div>
+      </div>
     </div>
   </section>
   <footer class="footer">Made for movie nights · Moviwatch</footer>
@@ -179,9 +306,9 @@ function setFeatured(){ /* The catalogue now opens directly; no oversized hero b
 function renderCatalogue(){
   const rows=filteredMovies();
   const query=searchInput.value.trim();
-  const heading=activeCategory==='All'?'Browse all movies':activeCategory+' movies';
-  $('#catalogueTitle').textContent=query?('Search results for “'+query+'”'):heading;
-  $('#catalogueSubtitle').textContent=activeCategory==='All'?'Pick a category and find your next watch.':'Explore titles from the '+activeCategory+' collection.';
+  const heading=activeCategory==='All'?'Discover movies':activeCategory+' movies';
+  $('#catalogueTitle').textContent=query?('Results for “'+query+'”'):heading;
+  $('#catalogueSubtitle').textContent=activeCategory==='All'?'Find something great for your next movie night.':'Explore the '+activeCategory+' collection.';
   $('#movieCount').textContent=rows.length+' '+(rows.length===1?'movie':'movies');
   setFeatured(rows[0]);
   grid.replaceChildren();grid.setAttribute('aria-busy','false');
@@ -190,31 +317,62 @@ function renderCatalogue(){
     setState('No movies found',message,query?{label:'Clear search',run:()=>{searchInput.value='';syncSearch();renderCatalogue()}}:null);
     return;
   }
-  for(const movie of rows){
+  rows.forEach((movie,index)=>{
     const card=node('a','movie-card');card.href=watchPath(movie.id);card.setAttribute('aria-label','Watch '+movie.title);
     const posterWrap=node('div','poster-wrap');
-    const poster=node('img','poster');poster.alt=(movie.title||'Movie')+' poster';poster.loading='lazy';poster.decoding='async';poster.referrerPolicy='no-referrer';
-    poster.onerror=()=>poster.remove();
-    if(movie.poster_url)poster.src=movie.poster_url;else poster.hidden=true;
+    const poster=node('img','poster');poster.alt=(movie.title||'Movie')+' poster';
+    poster.loading=index<6?'eager':'lazy';poster.decoding='async';poster.referrerPolicy='no-referrer';
+    if(index<3)poster.fetchPriority='high';
+    poster.onload=()=>posterWrap.classList.add('is-loaded');
+    poster.onerror=()=>{poster.remove();posterWrap.classList.add('is-unavailable')};
+    posterWrap.append(poster);
+    if(movie.poster_url){poster.src=movie.poster_url}else{poster.hidden=true;posterWrap.classList.add('is-unavailable')}
     const play=node('span','play-indicator','▶');play.setAttribute('aria-hidden','true');
-    posterWrap.append(poster,play);
+    posterWrap.append(play);
     const details=node('div','movie-details');
     details.append(node('span','movie-title',movie.title||'Untitled movie'),node('span','movie-category',movie.category||'Movie'));
     card.append(posterWrap,details);grid.append(card);
-  }
+  });
 }
 function syncSearch(){ $('#searchWrap').classList.toggle('has-value',!!searchInput.value) }
+const CATALOGUE_CACHE_KEY='moviwatch-public-catalogue-v2';
+const CATALOGUE_CACHE_MAX_AGE=24*60*60*1000;
+function readCatalogueCache(){
+  try{
+    const cached=JSON.parse(localStorage.getItem(CATALOGUE_CACHE_KEY)||'null');
+    if(!cached||!Array.isArray(cached.movies)||!Number.isFinite(cached.savedAt)||Date.now()-cached.savedAt>CATALOGUE_CACHE_MAX_AGE)return null;
+    return cached.movies.filter(movie=>movie&&typeof movie.id==='string'&&typeof movie.title==='string').map(movie=>({
+      id:movie.id,title:movie.title,category:typeof movie.category==='string'?movie.category:'Movie',
+      poster_url:typeof movie.poster_url==='string'&&movie.poster_url.startsWith('https://')?movie.poster_url:'',
+      created_at:typeof movie.created_at==='string'?movie.created_at:''
+    }));
+  }catch{return null}
+}
+function saveCatalogueCache(rows){
+  const safeRows=rows.map(movie=>({
+    id:movie.id,title:movie.title,category:movie.category||'Movie',
+    poster_url:typeof movie.poster_url==='string'&&movie.poster_url.startsWith('https://')?movie.poster_url:'',
+    created_at:movie.created_at||''
+  }));
+  try{localStorage.setItem(CATALOGUE_CACHE_KEY,JSON.stringify({savedAt:Date.now(),movies:safeRows}))}catch{}
+}
 async function loadMovies(){
-  grid.setAttribute('aria-busy','true');
+  const hasVisibleCatalogue=allMovies.length>0;
+  if(!hasVisibleCatalogue)grid.setAttribute('aria-busy','true');
   try{
     const response=await fetch('/api/movies',{cache:'no-store',headers:{Accept:'application/json'}});
     const data=await response.json();
     if(!response.ok)throw new Error(data.error||'Could not load the catalogue.');
     allMovies=Array.isArray(data.movies)?data.movies:[];
+    saveCatalogueCache(allMovies);
     buildCategories();renderCatalogue();
   }catch(error){
-    setState('Could not load movies',error.message||'Please check your connection and try again.',{label:'Try again',run:loadMovies});
-    $('#catalogueSubtitle').textContent='Your movie catalogue is temporarily unavailable.';
+    if(hasVisibleCatalogue){
+      $('#catalogueSubtitle').textContent='Showing your saved collection. We could not refresh it just now.';
+      return;
+    }
+    setState('We could not load the movies',error.message||'Please check your connection and try again.',{label:'Try again',run:loadMovies});
+    $('#catalogueSubtitle').textContent='Your catalogue is temporarily unavailable.';
     $('#movieCount').textContent='';
   }
 }
@@ -247,6 +405,13 @@ grid.addEventListener('keydown',event=>{
   }else return;
   if(cards[next]){event.preventDefault();cards[next].focus();cards[next].scrollIntoView({block:'nearest',inline:'nearest'})}
 });
+const cachedMovies=readCatalogueCache();
+if(cachedMovies&&cachedMovies.length){
+  allMovies=cachedMovies;
+  buildCategories();
+  renderCatalogue();
+  $('#catalogueSubtitle').textContent='Your saved collection is ready · checking for new movies…';
+}
 loadMovies();
 </script>
 <link rel="stylesheet" href="/pwa-install.css"><script src="/pwa-install.js" defer></script>
