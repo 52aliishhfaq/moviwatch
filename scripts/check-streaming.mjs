@@ -9,6 +9,7 @@ const watch = readFileSync('public/watch.html', 'utf8');
 const rangeSource = readFileSync('public/player-range-source.js', 'utf8');
 const admin = readFileSync('public/admin.html', 'utf8');
 const config = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
+const vercel = JSON.parse(readFileSync('vercel.json', 'utf8'));
 const readme = readFileSync('README.md', 'utf8');
 
 function assertIncludes(source, value, message) {
@@ -108,6 +109,11 @@ assertIncludes(worker, "HttpOnly; Secure; SameSite=Strict; Path=/api/", 'Playbac
 assertIncludes(worker, "if (!await hasPlaybackAccess(req, env, download[3]))", 'Download endpoint must reject unbound requests');
 assertIncludes(worker, "if (!await hasPlaybackAccess(req, env, watch[3]))", 'Watch endpoint must reject unbound requests');
 assertIncludes(worker, "'cross-origin-resource-policy': 'same-origin'", 'Media responses must block cross-origin embedding');
+assert.ok(vercel.headers?.some((entry) => entry.source === '/(.*)' &&
+  entry.headers?.some((header) => header.key === 'Referrer-Policy' && header.value === 'same-origin') &&
+  entry.headers?.some((header) => header.key === 'X-Frame-Options' && header.value === 'DENY') &&
+  entry.headers?.some((header) => header.key === 'Content-Security-Policy' && header.value.includes("frame-ancestors 'none'"))),
+  'Vercel must preserve same-origin referrers and block cross-site framing');
 assertIncludes(worker, 'content-range', 'HTTP content-range support missing');
 assertIncludes(sourceModule, "return host==='archive.org'||host.endsWith('.archive.org')?'archive.org':'google-drive'", 'Archive provider detection missing');
 assert.ok(!/doodstream|playmogo|voe\.sx/i.test(worker), 'Legacy hosts must not remain in the Worker');
