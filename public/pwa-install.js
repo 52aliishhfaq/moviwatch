@@ -42,9 +42,10 @@ function hide(dismiss){if(!modal)return;modal.classList.remove('is-visible');doc
 function init(){
  if('serviceWorker'in navigator)addEventListener('load',()=>navigator.serviceWorker.register('/sw.js',{scope:'/'}).catch(e=>console.warn('PWA worker:',e)),{once:true});
  const footer=document.querySelector('.footer');if(footer&&!footer.querySelector('[data-install]')){const b=document.createElement('button');b.className='pwa-footer-link';b.dataset.install='';b.textContent='＋ Install Moviwatch';b.onclick=()=>show(true);footer.append(document.createElement('br'),b)}
- if(standalone()){save('installed');return}if(!choice())setTimeout(()=>show(),2600)
+ if(standalone()){save('installed');return}
+ document.querySelectorAll('[data-install-app]').forEach(button=>button.addEventListener('click',()=>show(true)))
 }
-addEventListener('beforeinstallprompt',e=>{e.preventDefault();promptEvent=e;if(!choice()&&!standalone())show();refreshLabel()});
+addEventListener('beforeinstallprompt',e=>{e.preventDefault();promptEvent=e;refreshLabel()});
 addEventListener('appinstalled',()=>{save('installed');hide(false)});
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
 })();
