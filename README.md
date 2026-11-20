@@ -7,9 +7,9 @@ A movie catalogue with Google Drive and Archive.org byte-range streaming. The fr
 - Public movie catalogue with Action and Romantic categories; visitors can browse and play without accounts.
 - Password-protected admin dashboard at \`/admin\`.
 - Add up to 8 labeled source links per movie from Google Drive and Archive.org.
-- Responsive Movi Player with a source selector and a Download selected source button.
+- Responsive Movi Player with a source selector, a Download selected source button, and a bounded 32 MiB in-memory rolling buffer.
 - HTTP Range support for playback, browser seeking, and HEAD metadata requests. Archive.org downloads redirect directly to Internet Archive; Google Drive downloads retain the Worker download route.
-- Cloudflare Workers Cache stores complete video chunks through separately cached Worker entrypoints. Chunk keys include the source URL hash, movie, option index, source version, range start, and chunk size.
+- Cloudflare Workers Cache stores complete 8 MiB video chunks for 24 hours through separately cached Worker entrypoints. Chunk keys include the source URL hash, movie, option index, source version, range start, and chunk size—not a viewer or browser ID—so the same cached bytes can be reused by other viewers.
 - Fragmented MP4 detection uses a compact header probe, a 512 KiB initial segment, 8 MiB continuation chunks, and parallel startup/next-segment prefetch.
 - Public catalogue responses expose labels, providers, and source indexes—not raw Drive/Archive URLs. Actual upstream URLs stay in the cached internal metadata entrypoint.
 - Admin secrets stay in Cloudflare Worker Secrets.
@@ -33,7 +33,9 @@ Only publish videos for which you have the rights and permissions required to di
 
 ## Pakistan/mobile streaming behavior
 
-The browser requests byte ranges from the Moviwatch API. Cloudflare Workers fetches a small video header first, detects MP4 fragmentation, then reads/cache-warms the relevant chunks. Seeking asks for the segment matching the requested byte offset, while the next segment is fetched in the background. Later requests can reuse complete chunks from Cloudflare's edge cache rather than re-reading the same bytes from Drive or Archive.org.
+Movi Player keeps the native fallback on metadata preload and sets a `buffersize="32"` cap for its own HTTP source. Its HTTP source keeps a rolling in-memory byte window of up to 32 MiB for forward playback; it does not download the whole movie, and old ranges are evicted as the window moves. This is a per-browser buffer, not shared between browsers. The 32 MiB cap is a memory ceiling (about four 8 MiB Worker continuation chunks), not a promise that every device will have all 32 MiB filled before playback starts.
+
+The browser requests byte ranges from the Moviwatch API. Cloudflare Workers fetches a small video header first, detects MP4 fragmentation, then reads/cache-warms the relevant chunks. Seeking asks for the aligned segment matching the requested byte offset, while the next segment is fetched in the background. Complete 200 chunk responses are retained in Cloudflare's edge cache for 24 hours; other viewers using the same movie/source/version/range can reuse those cached bytes instead of re-reading the same content from Drive or Archive.org.
 
 For fragmented MP4, the initial segment remains 512 KiB; continuation segments are 8 MiB. Conventional MP4 files use 8 MiB range chunks. Keeping the first fragmented-MP4 segment small protects cold-start playback, while larger continuation chunks reduce the number of upstream Range requests.
 
