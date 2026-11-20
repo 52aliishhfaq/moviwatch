@@ -90,7 +90,8 @@ const catalogueStart = worker.indexOf('export class PublicCatalogue');
 const catalogueEnd = worker.indexOf('export class MovieMetadata', catalogueStart);
 const catalogue = worker.slice(catalogueStart, catalogueEnd);
 assertIncludes(catalogue, 'source_index:index', 'Public player source index missing');
-assertIncludes(catalogue, "download_url:archiveDownloadUrl(url)", 'Public catalogue must provide canonical Archive.org download URLs');
+assert.ok(!catalogue.includes("download_url:") && !catalogue.includes("url:source.url"),
+  'Public catalogue must not expose raw provider or direct download URLs');
 assert.ok(!catalogue.includes("'url':") && !catalogue.includes("url:source.url"),
   'Public catalogue must not expose raw provider streaming URLs');
 
@@ -98,7 +99,17 @@ assertIncludes(worker, "const watch = path.split('/')", 'Watch proxy route missi
 assertIncludes(worker, "const download = path.split('/')", 'Download proxy route missing');
 assertIncludes(worker, 'cachedVideoRange(', 'Proxy must use the edge chunk cache');
 assertIncludes(worker, 'content-disposition', 'Google Drive Worker download attachment header missing');
-assertIncludes(worker, "Response.redirect(archiveDownloadUrl(source.url), 302)", 'Archive.org downloads must redirect directly to Archive.org');
+assert.ok(!worker.includes("Response.redirect(archiveDownloadUrl("), 'Protected downloads must not redirect users to provider URLs');
+assertIncludes(worker, "const PLAYBACK_COOKIE = 'moviwatch_playback'", 'HttpOnly playback session cookie missing');
+assertIncludes(worker, 'async function makePlaybackToken(env, movieId)', 'Playback ticket must be cryptographically signed and movie-bound');
+assertIncludes(worker, 'async function validPlaybackToken(env, token)', 'Playback ticket verifier missing');
+assertIncludes(worker, 'body.mid.toLowerCase() === movieId.toLowerCase()', 'Playback ticket must be bound to the requested movie');
+assertIncludes(worker, 'playbackContextAllowed(req, env, movieId)', 'Media endpoints must verify same-origin watch page context');
+assertIncludes(worker, "path === '/api/playback/session'", 'Playback session endpoint missing');
+assertIncludes(worker, "HttpOnly; Secure; SameSite=Strict; Path=/api/", 'Playback session cookie must be HttpOnly, Secure and SameSite=Strict');
+assertIncludes(worker, "if (!await hasPlaybackAccess(req, env, download[3]))", 'Download endpoint must reject unbound requests');
+assertIncludes(worker, "if (!await hasPlaybackAccess(req, env, watch[3]))", 'Watch endpoint must reject unbound requests');
+assertIncludes(worker, "'cross-origin-resource-policy': 'same-origin'", 'Media responses must block cross-origin embedding');
 assertIncludes(worker, 'content-range', 'HTTP content-range support missing');
 assertIncludes(sourceModule, "return host==='archive.org'||host.endsWith('.archive.org')?'archive.org':'google-drive'", 'Archive provider detection missing');
 assert.ok(!/doodstream|playmogo|voe\.sx/i.test(worker), 'Legacy hosts must not remain in the Worker');
@@ -108,14 +119,11 @@ assertIncludes(watch, 'id="video"', 'Movi Player element missing');
 assertIncludes(watch, "const streamUrl='/api/watch/'", 'Player source must use the Worker range endpoint');
 assertIncludes(watch, 'new window.MoviwatchRangeSource(streamUrl', 'Player must use the controlled range adapter');
 assertIncludes(watch, 'video.sourceAdapter=activeRangeSource', 'Movi Player must receive the custom range source');
-assertIncludes(watch, "link.href='/api/download/'+encodeURIComponent(movieId)+'/'+source.source_index", 'Google Drive downloads must retain the Worker attachment endpoint');
-assertIncludes(watch, "if(source.provider==='archive.org')", 'Archive.org downloads must take the direct-link path');
-assertIncludes(watch, 'new URL(source.download_url)', 'Archive.org download must use the direct catalogue URL');
-assertIncludes(watch, "link.href=directUrl.toString()", 'Archive.org button must navigate directly to Archive.org, not Cloudflare');
+assertIncludes(watch, "link.href='/api/download/'+encodeURIComponent(movieId)+'/'+source.source_index", 'All provider downloads must use the protected Worker attachment endpoint');
+assertIncludes(watch, "body:JSON.stringify({movieId})", 'Watch page must request a movie-bound playback session');
+assertIncludes(watch, "credentials:'same-origin'", 'Watch page must send the HttpOnly session cookie on same-origin requests');
 assertIncludes(watch, "link.textContent='Download Now'", 'Download button must use the exact Download Now label');
-assertIncludes(watch, "link.setAttribute('download',filename)", 'Download link must request a file download');
-assertIncludes(watch, "link.setAttribute('target','_blank')", 'Archive.org download should not navigate away from the watch page');
-assertIncludes(watch, "link.setAttribute('rel','noopener noreferrer')", 'External download link must use safe target isolation');
+assert.ok(!watch.includes('source.download_url') && !watch.includes('directUrl.toString()'), 'Watch page must not expose direct provider URLs');
 assertIncludes(watch, "select.hidden=availableSources.length<2", 'Single-source selector must be hidden');
 assert.ok(!watch.includes('class="hint"'), 'Remove the verbose player helper paragraph');
 assertIncludes(watch, 'id="sourceSelect"', 'Multiple source selector missing');
@@ -175,4 +183,5 @@ assertIncludes(readme, 'not shared between browsers', 'README must distinguish p
 assertIncludes(readme, 'https://archive.org/download/IDENTIFIER/FILENAME', 'README must document canonical direct Archive.org downloads');
 assertIncludes(readme, 'd1', 'README must document mirror failover');
 
-console.log('Drive/Archive URL, provider, cache, range, download, admin, watch and inline-script checks passed.');
+assertIncludes(readme, 'movie-bound HttpOnly playback session', 'README must describe the new playback authorization');
+console.log('Drive/Archive URL, provider, cache, range, protected playback/download, admin, watch and inline-script checks passed.');
