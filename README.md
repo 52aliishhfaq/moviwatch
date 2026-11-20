@@ -33,7 +33,7 @@ Only publish videos for which you have the rights and permissions required to di
 
 ## Pakistan/mobile streaming behavior
 
-The watch page uses Movi Player's custom `SourceAdapter` to split the player's requested byte reads into HTTP Range requests of at most 1 MiB. The adapter deduplicates in-flight reads and keeps an LRU cache capped at 32 MiB in the current browser tab; older pieces are evicted as playback advances. This cache is private to that browser and is not visible to other visitors. A demuxer may still need several 1 MiB pieces to inspect the container and decode the first frame, so a 1 MiB request size does not mean that exactly 1 MiB total is always enough to start playback.
+The watch page uses Movi Player's custom `SourceAdapter` to split the player's requested byte reads into HTTP Range requests of at most 1 MiB. The adapter deduplicates in-flight reads and keeps an LRU cache capped at 32 MiB in the current browser tab; older pieces are evicted as playback advances. This cache is private to that browser, is not shared between browsers, and is not visible to other visitors. A demuxer may still need several 1 MiB pieces to inspect the container and decode the first frame, so a 1 MiB request size does not mean that exactly 1 MiB total is always enough to start playback.
 
 Once playback is active, each completed read warms the next two 1 MiB pieces in the background. Pausing or ending playback stops speculative prefetch, a seek cancels stale speculative requests, and the next demuxer read fetches the new position. The player does not download the whole movie.
 
