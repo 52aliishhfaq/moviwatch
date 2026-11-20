@@ -172,7 +172,7 @@ assertIncludes(readme, '8 MiB continuation chunks', 'README must document 8 MiB 
 assertIncludes(readme, '32 MiB', 'README must document the bounded player memory buffer');
 assertIncludes(readme, '24 hours', 'README must document the shared edge cache TTL');
 assertIncludes(readme, 'not shared between browsers', 'README must distinguish private player memory from shared edge caching');
-assertIncludes(readme, 'directly to Internet Archive', 'README must document direct Archive.org downloads');
+assertIncludes(readme, 'https://archive.org/download/IDENTIFIER/FILENAME', 'README must document canonical direct Archive.org downloads');
 assertIncludes(readme, 'd1', 'README must document mirror failover');
 
 console.log('Drive/Archive URL, provider, cache, range, download, admin, watch and inline-script checks passed.');
