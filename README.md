@@ -8,10 +8,10 @@ A movie catalogue with Google Drive and Archive.org byte-range streaming. The fr
 - Password-protected admin dashboard at \`/admin\`.
 - Add up to 8 labeled source links per movie from Google Drive and Archive.org.
 - Responsive Movi Player with a source selector, a Download selected source button, and a 32 MiB per-browser LRU cache of 1 MiB HTTP range pieces.
-- HTTP Range support for playback, browser seeking, and HEAD metadata requests. Archive.org downloads redirect directly to Internet Archive; Google Drive downloads retain the Worker download route.
+- HTTP Range support for playback, browser seeking, and HEAD metadata requests. Archive.org's Download Now button links directly to its canonical file URL (no Worker proxy); Google Drive downloads retain the Worker attachment route.
 - Cloudflare Workers Cache stores complete 8 MiB video chunks for 24 hours through separately cached Worker entrypoints. Chunk keys include the source URL hash, movie, option index, source version, range start, and chunk size—not a viewer or browser ID—so the same cached bytes can be reused by other viewers.
 - Fragmented MP4 detection uses a compact header probe, a 512 KiB initial Worker segment, and 8 MiB continuation chunks in Cloudflare's shared cache; the player requests at most 1 MiB at a time and prefetches the next two pieces during playback.
-- Public catalogue responses expose labels, providers, and source indexes—not raw Drive/Archive URLs. Actual upstream URLs stay in the cached internal metadata entrypoint.
+- Public catalogue responses expose labels, providers, and source indexes; Archive.org sources additionally expose only their canonical download URL so downloads can bypass the Worker. Google Drive playback URLs remain private in the internal metadata entrypoint.
 - Admin secrets stay in Cloudflare Worker Secrets.
 
 ## Adding video sources
@@ -23,7 +23,7 @@ Google Drive 1080p | https://drive.google.com/file/d/FILE_ID/view
 Archive.org 720p | https://archive.org/download/IDENTIFIER/video.mp4
 \`\`\`
 
-The first source is selected by default. Other options appear in the watch-page source selector. Archive.org downloads redirect directly to Internet Archive; Google Drive downloads continue through the Worker attachment endpoint.
+The first source is selected by default. When multiple options exist, the watch page shows a source selector. The Download Now button opens Archive.org's canonical `/download/IDENTIFIER/FILENAME` link directly for Archive.org sources, while Google Drive downloads continue through the Worker attachment endpoint.
 
 **Google Drive:** Set General access to **Anyone with the link – Viewer**. Private files, sign-in redirects, malware confirmation screens, and quota pages cannot be converted into video by the proxy. Use a file URL, not a folder URL.
 
@@ -43,7 +43,7 @@ For fragmented MP4, the Worker's first cached segment remains 512 KiB; later Wor
 
 **Archive.org mirror handling:** the Worker reads Internet Archive item metadata (`server`, `workable_servers`, `d1`, and `d2`), tries available storage hosts for each byte range, measures successful transfer throughput, prefers previously faster mirrors, and temporarily cools down hosts after failed or timed-out requests. If item metadata is unavailable, the original public Archive.org URL remains the fallback.
 
-**Downloads:** Archive.org download clicks redirect to the official `archive.org/download/...` URL. Cloudflare does not relay or cache Archive.org download bytes. Playback remains proxied and edge-cached by the Worker. Google Drive downloads continue using the existing Worker attachment route.
+**Downloads:** Archive.org's Download Now button points directly to the official `https://archive.org/download/IDENTIFIER/FILENAME` URL and bypasses Cloudflare for the file transfer. The browser is asked to save it as a file. Archive.org may still serve an MP4 inline, in which case the browser can open it in a new tab rather than immediately save it; this cannot be overridden reliably by the cross-origin HTML download attribute. Playback remains proxied and edge-cached by the Worker. Google Drive downloads continue using the existing Worker attachment route.
 
 **This reduces repeat reads and improves resilience; it cannot guarantee zero buffering.** Internet Archive still controls mirror availability, source bandwidth, throttling, and item permissions. If every storage mirror is slow or unavailable, playback can still buffer or fail. Cache misses still depend on an Internet Archive server. For best compatibility, use MP4 with H.264 video and AAC audio. Unsupported containers/codecs need conversion by the rights holder before upload.
 

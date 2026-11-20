@@ -90,8 +90,9 @@ const catalogueStart = worker.indexOf('export class PublicCatalogue');
 const catalogueEnd = worker.indexOf('export class MovieMetadata', catalogueStart);
 const catalogue = worker.slice(catalogueStart, catalogueEnd);
 assertIncludes(catalogue, 'source_index:index', 'Public player source index missing');
+assertIncludes(catalogue, "download_url:archiveDownloadUrl(url)", 'Public catalogue must provide canonical Archive.org download URLs');
 assert.ok(!catalogue.includes("'url':") && !catalogue.includes("url:source.url"),
-  'Public catalogue must not expose provider URLs');
+  'Public catalogue must not expose raw provider streaming URLs');
 
 assertIncludes(worker, "const watch = path.split('/')", 'Watch proxy route missing');
 assertIncludes(worker, "const download = path.split('/')", 'Download proxy route missing');
@@ -107,7 +108,16 @@ assertIncludes(watch, 'id="video"', 'Movi Player element missing');
 assertIncludes(watch, "const streamUrl='/api/watch/'", 'Player source must use the Worker range endpoint');
 assertIncludes(watch, 'new window.MoviwatchRangeSource(streamUrl', 'Player must use the controlled range adapter');
 assertIncludes(watch, 'video.sourceAdapter=activeRangeSource', 'Movi Player must receive the custom range source');
-assertIncludes(watch, "'/api/download/'+encodeURIComponent(movieId)+'/'+source.source_index", 'Download action must use the same selected source');
+assertIncludes(watch, "link.href='/api/download/'+encodeURIComponent(movieId)+'/'+source.source_index", 'Google Drive downloads must retain the Worker attachment endpoint');
+assertIncludes(watch, "if(source.provider==='archive.org')", 'Archive.org downloads must take the direct-link path');
+assertIncludes(watch, 'new URL(source.download_url)', 'Archive.org download must use the direct catalogue URL');
+assertIncludes(watch, "link.href=directUrl.toString()", 'Archive.org button must navigate directly to Archive.org, not Cloudflare');
+assertIncludes(watch, "link.textContent='Download Now'", 'Download button must use the exact Download Now label');
+assertIncludes(watch, "link.setAttribute('download',filename)", 'Download link must request a file download');
+assertIncludes(watch, "link.setAttribute('target','_blank')", 'Archive.org download should not navigate away from the watch page');
+assertIncludes(watch, "link.setAttribute('rel','noopener noreferrer')", 'External download link must use safe target isolation');
+assertIncludes(watch, "select.hidden=availableSources.length<2", 'Single-source selector must be hidden');
+assert.ok(!watch.includes('class="hint"'), 'Remove the verbose player helper paragraph');
 assertIncludes(watch, 'id="sourceSelect"', 'Multiple source selector missing');
 assertIncludes(watch, 'const PLAYER_BUFFER_SIZE_MB=32', '32 MiB player memory limit missing');
 assertIncludes(watch, 'const PLAYER_RANGE_CHUNK_SIZE=1024*1024', '1 MiB player request size missing');
@@ -162,7 +172,7 @@ assertIncludes(readme, '8 MiB continuation chunks', 'README must document 8 MiB 
 assertIncludes(readme, '32 MiB', 'README must document the bounded player memory buffer');
 assertIncludes(readme, '24 hours', 'README must document the shared edge cache TTL');
 assertIncludes(readme, 'not shared between browsers', 'README must distinguish private player memory from shared edge caching');
-assertIncludes(readme, 'directly to Internet Archive', 'README must document direct Archive.org downloads');
+assertIncludes(readme, 'https://archive.org/download/IDENTIFIER/FILENAME', 'README must document canonical direct Archive.org downloads');
 assertIncludes(readme, 'd1', 'README must document mirror failover');
 
 console.log('Drive/Archive URL, provider, cache, range, download, admin, watch and inline-script checks passed.');

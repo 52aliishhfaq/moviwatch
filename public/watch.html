@@ -36,13 +36,13 @@ movi-player{display:block;width:100%;aspect-ratio:16/9;min-height:0;height:auto;
 .status.error{color:#ff9d9d}
 .status:empty{display:none}
 .source-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0 10px;padding:14px 16px;background:#111a2b;border:1px solid var(--line);border-radius:12px}
+.source-bar [hidden]{display:none!important}
 .source-bar label{font-weight:700;font-size:13px}
 select{min-width:min(300px,100%);max-width:100%;height:42px;padding:0 38px 0 12px;background:#0d1627;color:#f4f6fc;border:1px solid #40506d;border-radius:9px;font:inherit}
 .download-now{display:inline-flex;min-height:42px;align-items:center;justify-content:center;padding:9px 16px;border:1px solid #8294ff;border-radius:9px;background:#6578f5;color:#fff;text-decoration:none;font-weight:700}
 .download-now[hidden]{display:none}
 .retry{display:none;margin:8px 4px 2px;border:1px solid #53658a;border-radius:8px;background:#1b2941;color:#fff;padding:9px 14px;font:inherit;cursor:pointer}
 .retry.show{display:inline-flex}
-.hint{margin:14px 4px;color:var(--muted);font-size:13px}
 @media(max-width:650px){header{height:58px;padding:0 14px}main{width:calc(100% - 24px);margin:20px auto 40px}.player-shell{padding:0;border-radius:12px}.source-bar{align-items:stretch;flex-direction:column}.source-bar select,.source-bar .download-now{width:100%}}
 </style>
 </head>
@@ -53,16 +53,15 @@ select{min-width:min(300px,100%);max-width:100%;height:42px;padding:0 38px 0 12p
 <div class="heading"><h1 id="title">Loading movie…</h1><p class="meta" id="category"></p></div>
 <section class="player-shell" aria-label="Movie video player">
   <movi-player id="video" controls playsinline preload="metadata" buffersize="32" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
-  <div id="loading" class="loading"><span class="spinner" aria-hidden="true"></span><span>Preparing the first cached video segment…</span></div>
+  <div id="loading" class="loading"><span class="spinner" aria-hidden="true"></span><span>Loading video…</span></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <button id="retry" class="retry" type="button">Retry stream</button>
 </section>
 <div class="source-bar">
-  <label for="sourceSelect">Streaming source</label>
-  <select id="sourceSelect" aria-label="Choose video source" disabled></select>
-  <a id="downloadNow" class="download-now" href="#" hidden>Download selected source ↓</a>
+  <a id="downloadNow" class="download-now" href="#" hidden>Download Now</a>
+  <label id="sourceSelectLabel" for="sourceSelect" hidden>Streaming source</label>
+  <select id="sourceSelect" aria-label="Choose video source" disabled hidden></select>
 </div>
-<p class="hint">Moviwatch uses Cloudflare Worker byte-range streaming and edge-cached chunks for seeking and repeat playback. Google Drive files must be shared as “Anyone with the link – Viewer”. Archive.org items must be public direct file downloads. Playback quality depends on the original file and host limits.</p>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js"></script>
 <script src="/player-range-source.js"></script>
@@ -86,7 +85,7 @@ function markPlayerReady(){
   startupReady=true;
   clearTimer();
   setLoading(false);
-  setStatus('Player ready. 1 MiB range requests, up to '+PLAYER_BUFFER_SIZE_MB+' MiB in browser memory, and '+PLAYER_PREFETCH_AHEAD+' ranges prefetch while playing.');
+  setStatus('');
   $('#retry').classList.remove('show');
 }
 function playerState(event){
@@ -100,7 +99,36 @@ function playerState(event){
 function updateDownload(index){
   const source=availableSources[index];
   const link=$('#downloadNow');
-  if(!source){link.hidden=true;link.removeAttribute('href');return;}
+  link.textContent='Download Now';
+  link.hidden=true;
+  link.removeAttribute('href');
+  link.removeAttribute('download');
+  link.removeAttribute('referrerpolicy');
+  link.removeAttribute('target');
+  link.removeAttribute('rel');
+  if(!source)return;
+
+  if(source.provider==='archive.org'){
+    // Archive.org downloads are deliberately linked straight to its canonical
+    // /download URL. Do not route the file bytes through our Worker.
+    try{
+      const directUrl=new URL(source.download_url);
+      if(directUrl.protocol!=='https:'||directUrl.hostname!=='archive.org'||
+         !directUrl.pathname.startsWith('/download/'))return;
+      const encodedName=directUrl.pathname.split('/').filter(Boolean).pop()||'video';
+      let filename=encodedName;
+      try{filename=decodeURIComponent(encodedName);}catch{}
+      link.href=directUrl.toString();
+      link.setAttribute('download',filename);
+      link.setAttribute('referrerpolicy','no-referrer');
+      link.setAttribute('target','_blank');
+      link.setAttribute('rel','noopener noreferrer');
+      link.hidden=false;
+      return;
+    }catch{return;}
+  }
+
+  // Google Drive keeps the existing Worker attachment endpoint.
   link.href='/api/download/'+encodeURIComponent(movieId)+'/'+source.source_index;
   link.hidden=false;
 }
@@ -115,7 +143,7 @@ function playSource(localIndex){
   const current=++generation;
   startupReady=false;
   setLoading(true);
-  setStatus('Connecting to '+(source.provider==='archive.org'?'Archive.org':'Google Drive')+'; preparing 1 MiB player ranges…');
+  setStatus('');
   $('#retry').classList.remove('show');
   video.preload='metadata';
   video.setAttribute('buffersize',String(PLAYER_BUFFER_SIZE_MB));
@@ -128,11 +156,10 @@ function playSource(localIndex){
       prefetchAhead:PLAYER_PREFETCH_AHEAD
     });
     video.sourceAdapter=activeRangeSource;
-    setStatus('Using 1 MiB range requests, a 32 MiB browser-memory cache, and two-range prefetch during playback.');
   }else{
     // Defensive compatibility fallback for an unexpected player build.
     video.src=streamUrl;
-    setStatus('Using the player built-in HTTP source; custom 1 MiB range mode is unavailable.');
+    setStatus('');
   }
   startupTimer=setTimeout(()=>{
     if(current===generation&&!startupReady){
@@ -156,6 +183,9 @@ async function prepare(){
     availableSources=Array.isArray(movie.video_sources)?movie.video_sources:[];
     if(!availableSources.length)throw new Error('No Google Drive or Archive.org source is configured for this movie.');
     const select=$('#sourceSelect');
+    const selectLabel=$('#sourceSelectLabel');
+    select.hidden=availableSources.length<2;
+    selectLabel.hidden=availableSources.length<2;
     select.replaceChildren();
     availableSources.forEach((source,index)=>{
       const option=document.createElement('option');
@@ -189,7 +219,7 @@ video.addEventListener('statechange',event=>{
   }else if(state==='paused'){
     if(activeRangeSource)activeRangeSource.setPlaybackActive(false);
   }else if(state==='buffering'&&!video.paused){
-    setStatus('Buffering… refreshing the in-player window from Cloudflare edge cache.');
+    setStatus('Buffering…');
   }else if(state==='error'){
     showError('The player could not decode or fetch this media. Check the source and codec.');
   }

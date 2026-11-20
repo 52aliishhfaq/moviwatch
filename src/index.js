@@ -136,7 +136,18 @@ export class PublicCatalogue extends WorkerEntrypoint {
   const{category='',query=''}=this.ctx.props||{};
   const rows=await publicMovies(this.env,category,query);
   const movies=rows.flatMap(({video_sources,...movie})=>{
-   const playable=(video_sources||[]).flatMap(source=>{try{const url=videoSourceUrl(source.url);const index=Number(source.source_index);if(!Number.isInteger(index)||index<0||index>7)return[];return[{label:source.label||(sourceProvider(url)==='archive.org'?'Archive.org':'Google Drive'),provider:sourceProvider(url),source_index:index}]}catch{return[]}});
+   const playable=(video_sources||[]).flatMap(source=>{try{
+    const url=videoSourceUrl(source.url);
+    const provider=sourceProvider(url);
+    const index=Number(source.source_index);
+    if(!Number.isInteger(index)||index<0||index>7)return[];
+    return [{
+     label:source.label||(provider==='archive.org'?'Archive.org':'Google Drive'),
+     provider,
+     source_index:index,
+     ...(provider==='archive.org'?{download_url:archiveDownloadUrl(url)}:{})
+    }];
+   }catch{return[]}});
    return playable.length?[{...movie,video_sources:playable}]:[];
   });
   return json({movies},200,{'cache-control':'public, max-age='+CATALOGUE_CACHE_TTL+', stale-while-revalidate=120','cache-tag':'public-catalogue'});
