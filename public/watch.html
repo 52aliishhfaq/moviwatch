@@ -104,6 +104,8 @@ function updateDownload(index){
   link.removeAttribute('href');
   link.removeAttribute('download');
   link.removeAttribute('referrerpolicy');
+  link.removeAttribute('target');
+  link.removeAttribute('rel');
   if(!source)return;
 
   if(source.provider==='archive.org'){
@@ -119,6 +121,8 @@ function updateDownload(index){
       link.href=directUrl.toString();
       link.setAttribute('download',filename);
       link.setAttribute('referrerpolicy','no-referrer');
+      link.setAttribute('target','_blank');
+      link.setAttribute('rel','noopener noreferrer');
       link.hidden=false;
       return;
     }catch{return;}
