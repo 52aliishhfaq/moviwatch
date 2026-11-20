@@ -107,8 +107,8 @@ assertIncludes(watch, "video.src='/api/watch/'", 'Native playback must use the W
 assertIncludes(watch, "'/api/download/'+encodeURIComponent(movieId)+'/'+source.source_index", 'Download action must use the same selected source');
 assertIncludes(watch, 'id="sourceSelect"', 'Multiple source selector missing');
 assertIncludes(watch, 'const PLAYER_BUFFER_SIZE_MB=32', '32 MiB in-player rolling buffer cap missing');
-assertIncludes(watch, 'preload="auto" buffersize="32"', 'Player must enable eager loading with a bounded 32 MiB buffer');
-assertIncludes(watch, "video.preload='auto'", 'Player source switch must retain eager loading');
+assertIncludes(watch, 'preload="metadata" buffersize="32"', 'Player must keep metadata preload while applying the bounded 32 MiB range buffer');
+assertIncludes(watch, "video.preload='metadata'", 'Player source switch must preserve conservative native fallback preload');
 assertIncludes(watch, "video.setAttribute('buffersize',String(PLAYER_BUFFER_SIZE_MB))", 'Player buffer cap must be applied on every source selection');
 assertIncludes(watch, "video.addEventListener('statechange'", 'Buffering state must use Movi Player statechange events');
 assertIncludes(watch, "video.addEventListener('loadeddata'", 'Player startup must use its supported loadeddata event');
