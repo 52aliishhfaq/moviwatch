@@ -7,6 +7,7 @@ const COOKIE = 'moviwatch_admin';
 const SESSION = 8 * 60 * 60;
 const PLAYBACK_COOKIE = 'moviwatch_playback';
 const PLAYBACK_SESSION = 12 * 60 * 60;
+const playbackCookieName = (movieId) => PLAYBACK_COOKIE + '_' + movieId.toLowerCase();
 const CATEGORIES = new Set(['Action', 'Romantic']);
 const enc = new TextEncoder();
 
@@ -139,7 +140,7 @@ function playbackContextAllowed(req, env, movieId) {
   return true;
 }
 async function hasPlaybackAccess(req, env, movieId) {
-  const session = getCookieValue(req, PLAYBACK_COOKIE);
+  const session = getCookieValue(req, playbackCookieName(movieId));
   if (!session) return false;
   const claims = await validPlaybackToken(env, session);
   return Boolean(claims && claims.mid.toLowerCase() === movieId.toLowerCase() &&
@@ -1067,7 +1068,7 @@ async function api(req, env, ctx) {
     if (!/^[0-9a-f-]{36}$/i.test(movieId)) return json({ error: 'A valid movie ID is required.' }, 400);
     const token = await makePlaybackToken(env, movieId);
     return json({ ok: true, expiresIn: PLAYBACK_SESSION }, 200, {
-      'set-cookie': PLAYBACK_COOKIE + '=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/api/; Max-Age=' + PLAYBACK_SESSION
+      'set-cookie': playbackCookieName(movieId) + '=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/api/; Max-Age=' + PLAYBACK_SESSION
     });
   }
 
