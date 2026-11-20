@@ -75,13 +75,13 @@ async function isAdmin(req, env) {
   const value = getCookie(req);
   return Boolean(value && env.JWT_SECRET && await validToken(env, value));
 }
-async function makePlaybackToken(env) {
+async function makePlaybackToken(env, movieId) {
   if (!env.JWT_SECRET) throw new Error('Playback signing secret is not configured');
   const now = Math.floor(Date.now() / 1000);
   const sid = new Uint8Array(32);
   crypto.getRandomValues(sid);
   const head = b64(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = b64(JSON.stringify({ sub: 'playback', sid: b64(sid), iat: now, exp: now + PLAYBACK_SESSION }));
+  const payload = b64(JSON.stringify({ sub: 'playback', mid: movieId, sid: b64(sid), iat: now, exp: now + PLAYBACK_SESSION }));
   const unsigned = head + '.' + payload;
   return unsigned + '.' + b64(await hmac(enc.encode(env.JWT_SECRET), enc.encode(unsigned)));
 }
@@ -94,6 +94,7 @@ async function validPlaybackToken(env, token) {
     const body = JSON.parse(new TextDecoder().decode(unb64(parts[1])));
     const now = Math.floor(Date.now() / 1000);
     if (head.alg !== 'HS256' || body.sub !== 'playback' ||
+        typeof body.mid !== 'string' || !/^[0-9a-f-]{36}$/i.test(body.mid) ||
         typeof body.sid !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body.sid) ||
         !Number.isInteger(body.exp) || body.exp <= now ||
         !Number.isInteger(body.iat) || body.iat > now + 60 ||
@@ -103,8 +104,8 @@ async function validPlaybackToken(env, token) {
     if (received.length !== expected.length) return false;
     let diff = 0;
     for (let i = 0; i < expected.length; i++) diff |= expected[i] ^ received[i];
-    return diff === 0;
-  } catch { return false; }
+    return diff === 0 ? body : null;
+  } catch { return null; }
 }
 function isTrustedAppOrigin(req, env, value) {
   try {
@@ -139,7 +140,9 @@ function playbackContextAllowed(req, env, movieId) {
 }
 async function hasPlaybackAccess(req, env, movieId) {
   const session = getCookieValue(req, PLAYBACK_COOKIE);
-  return Boolean(session && await validPlaybackToken(env, session) &&
+  if (!session) return false;
+  const claims = await validPlaybackToken(env, session);
+  return Boolean(claims && claims.mid.toLowerCase() === movieId.toLowerCase() &&
     playbackContextAllowed(req, env, movieId));
 }
 function sameOrigin(req, env) {
@@ -1059,8 +1062,10 @@ async function api(req, env, ctx) {
   // The credential is never exposed to JavaScript or placed in a media URL.
   if (path === '/api/playback/session' && method === 'POST') {
     sameOrigin(req, env);
-    await readBody(req);
-    const token = await makePlaybackToken(env);
+    const body = await readBody(req);
+    const movieId = typeof body.movieId === 'string' ? body.movieId : '';
+    if (!/^[0-9a-f-]{36}$/i.test(movieId)) return json({ error: 'A valid movie ID is required.' }, 400);
+    const token = await makePlaybackToken(env, movieId);
     return json({ ok: true, expiresIn: PLAYBACK_SESSION }, 200, {
       'set-cookie': PLAYBACK_COOKIE + '=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/api/; Max-Age=' + PLAYBACK_SESSION
     });
