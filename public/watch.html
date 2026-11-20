@@ -52,7 +52,7 @@ select{min-width:min(300px,100%);max-width:100%;height:42px;padding:0 38px 0 12p
 <a class="back" href="/">← Back to catalogue</a>
 <div class="heading"><h1 id="title">Loading movie…</h1><p class="meta" id="category"></p></div>
 <section class="player-shell" aria-label="Movie video player">
-  <movi-player id="video" controls playsinline preload="metadata" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
+  <movi-player id="video" controls playsinline preload="auto" buffersize="32" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
   <div id="loading" class="loading"><span class="spinner" aria-hidden="true"></span><span>Preparing the first cached video segment…</span></div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <button id="retry" class="retry" type="button">Retry stream</button>
@@ -67,9 +67,10 @@ select{min-width:min(300px,100%);max-width:100%;height:42px;padding:0 38px 0 12p
 <script src="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js"></script>
 <script>
 const $=selector=>document.querySelector(selector);
+const PLAYER_BUFFER_SIZE_MB=32;
 const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||new URLSearchParams(location.search).get('id')||'');
 const video=$('#video');
-let availableSources=[],activeOptionIndex=-1,startupTimer=null,generation=0;
+let availableSources=[],activeOptionIndex=-1,startupTimer=null,generation=0,startupReady=false;
 
 function setStatus(message,error=false){
   $('#status').textContent=message;
@@ -78,6 +79,20 @@ function setStatus(message,error=false){
 function setLoading(value){$('#loading').hidden=!value;}
 function clearTimer(){if(startupTimer!==null){clearTimeout(startupTimer);startupTimer=null;}}
 function showError(message){clearTimer();setLoading(false);setStatus(message,true);$('#retry').classList.add('show');}
+function markPlayerReady(){
+  startupReady=true;
+  clearTimer();
+  setLoading(false);
+  setStatus('Player ready. Rolling in-memory buffer is capped at '+PLAYER_BUFFER_SIZE_MB+' MiB.');
+  $('#retry').classList.remove('show');
+}
+function playerState(event){
+  const detail=event.detail;
+  if(typeof detail==='string')return detail.toLowerCase();
+  if(detail&&typeof detail.state==='string')return detail.state.toLowerCase();
+  if(detail&&typeof detail.status==='string')return detail.status.toLowerCase();
+  return '';
+}
 
 function updateDownload(index){
   const source=availableSources[index];
@@ -95,15 +110,17 @@ function playSource(localIndex){
   updateDownload(localIndex);
   clearTimer();
   const current=++generation;
+  startupReady=false;
   setLoading(true);
-  setStatus('Connecting to '+(source.provider==='archive.org'?'Archive.org':'Google Drive')+' through the edge cache…');
+  setStatus('Connecting to '+(source.provider==='archive.org'?'Archive.org':'Google Drive')+'; preparing the player buffer…');
   $('#retry').classList.remove('show');
-  video.preload='metadata';
+  video.preload='auto';
+  video.setAttribute('buffersize',String(PLAYER_BUFFER_SIZE_MB));
+  // Movi Player starts its range loader when src changes; native load() is not part of its API.
   video.src='/api/watch/'+encodeURIComponent(movieId)+'/'+source.source_index;
-  video.load();
   startupTimer=setTimeout(()=>{
-    if(current===generation&&!(Number(video.duration)>0)&&video.readyState<1){
-      showError('The video has not delivered metadata within 30 seconds. Check that the source is public, supports byte ranges and has not reached its host quota.');
+    if(current===generation&&!startupReady){
+      showError('The player has not become ready within 30 seconds. Check that the source is public, supports byte ranges and has not reached its host quota.');
     }
   },30000);
 }
@@ -139,17 +156,28 @@ async function prepare(){
   }
 }
 
-video.addEventListener('loadedmetadata',()=>{clearTimer();setLoading(false);setStatus('');$('#retry').classList.remove('show');});
-video.addEventListener('canplay',()=>{clearTimer();setLoading(false);setStatus('');$('#retry').classList.remove('show');});
-video.addEventListener('waiting',()=>{if(!video.paused)setStatus('Buffering the next cached segment…');});
-video.addEventListener('playing',()=>setStatus(''));
-video.addEventListener('error',()=>{
-  const code=video.error?.code;
-  const message=code===2?'Network error while loading the selected source.':
-    code===3?'The browser could not decode this file. Try an MP4 using H.264 video and AAC audio.':
-    code===4?'This file may use an unsupported container or codec. MP4 (H.264 + AAC) is the most compatible option.':
-    'Video playback failed. Check the source link and permissions.';
-  showError(message);
+video.addEventListener('loadeddata',markPlayerReady);
+video.addEventListener('statechange',event=>{
+  const state=playerState(event);
+  if(state==='ready')markPlayerReady();
+  else if(state==='playing'){
+    startupReady=true;
+    clearTimer();
+    setLoading(false);
+    setStatus('');
+    $('#retry').classList.remove('show');
+  }else if(state==='buffering'&&!video.paused){
+    setStatus('Buffering… refreshing the in-player window from Cloudflare edge cache.');
+  }else if(state==='error'){
+    showError('The player could not decode or fetch this media. Check the source and codec.');
+  }
+});
+video.addEventListener('error',event=>{
+  const detail=event.detail;
+  const reason=detail instanceof Error?detail.message:
+    typeof detail==='string'?detail:
+    (typeof detail?.message==='string'?detail.message:'');
+  showError(reason?'Playback failed: '+reason:'Playback failed. Check the source link, permissions and supported codecs.');
 });
 $('#sourceSelect').addEventListener('change',event=>playSource(Number(event.target.value)));
 $('#retry').addEventListener('click',()=>playSource(Math.max(activeOptionIndex,0)));
