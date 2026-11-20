@@ -60,3 +60,51 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Smoke-test app-bound media access
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_URL="https://moviwatch.vercel.app"
+          WORKER_URL="https://moviwatch.52aliishhfaq.workers.dev"
+          MOVIE_ID="00000000-0000-0000-0000-000000000000"
+          tmpdir="$(mktemp -d)"
+          trap 'rm -rf "$tmpdir"' EXIT
+
+          # Wait until the production Vercel rewrite can reach the deployed Worker.
+          ready=0
+          for attempt in {1..15}; do
+            health="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "$APP_URL/api/health" || true)"
+            if [[ "$health" == "200" ]]; then ready=1; break; fi
+            sleep 2
+          done
+          [[ "$ready" == "1" ]] || { echo "::error::Production API did not become healthy"; exit 1; }
+
+          # Copied media endpoints must fail without the app-issued cookie.
+          for endpoint in watch download; do
+            status="$(curl -sS --max-time 20 -o "$tmpdir/denied" -w '%{http_code}' "$APP_URL/api/$endpoint/$MOVIE_ID/999")"
+            [[ "$status" == "403" ]] || { echo "::error::Unauthenticated $endpoint request returned $status, expected 403"; cat "$tmpdir/denied"; exit 1; }
+          done
+
+          # The Worker host must also reject a copied stream URL without a session.
+          status="$(curl -sS --max-time 20 -o "$tmpdir/direct-worker" -w '%{http_code}' "$WORKER_URL/api/watch/$MOVIE_ID/999")"
+          [[ "$status" == "403" ]] || { echo "::error::Direct Worker media URL returned $status, expected 403"; cat "$tmpdir/direct-worker"; exit 1; }
+
+          # An attacker origin must not be allowed to mint a browser playback session.
+          status="$(curl -sS --max-time 20 -o "$tmpdir/evil-origin" -w '%{http_code}' -X POST "$APP_URL/api/playback/session" -H 'Origin: https://attacker.invalid' -H 'Content-Type: application/json' --data "{\"movieId\":\"$MOVIE_ID\"}")"
+          [[ "$status" == "400" ]] || { echo "::error::Cross-origin session request returned $status, expected 400"; cat "$tmpdir/evil-origin"; exit 1; }
+
+          # Same-origin app handshake must return a movie-specific HttpOnly cookie.
+          status="$(curl -sS --max-time 20 -D "$tmpdir/session-headers" -o "$tmpdir/session-body" -w '%{http_code}' -X POST "$APP_URL/api/playback/session" -H "Origin: $APP_URL" -H 'Content-Type: application/json' -H 'Sec-Fetch-Site: same-origin' --data "{\"movieId\":\"$MOVIE_ID\"}")"
+          [[ "$status" == "200" ]] || { echo "::error::Same-origin playback session returned $status"; cat "$tmpdir/session-body"; exit 1; }
+          cookie_pair="$(awk -v expected="moviwatch_playback_${MOVIE_ID}=" '/^[^:]+:[[:space:]]*/ { line=$0; sub(/^[^:]+:[[:space:]]*/, "", line); sub(/\r$/, "", line); if (index(line, expected)==1) { sub(/;.*/, "", line); print line; exit } }' "$tmpdir/session-headers")"
+          [[ -n "$cookie_pair" ]] || { echo "::error::Playback response did not set the movie-specific cookie"; exit 1; }
+
+          # A valid cookie still cannot be replayed from a third-party page.
+          status="$(curl -sS --max-time 20 -o "$tmpdir/hotlink" -w '%{http_code}' "$APP_URL/api/watch/$MOVIE_ID/999" -H "Cookie: $cookie_pair" -H "Referer: https://attacker.invalid/watch/$MOVIE_ID" -H 'Sec-Fetch-Site: cross-site')"
+          [[ "$status" == "403" ]] || { echo "::error::Cross-site media request returned $status, expected 403"; cat "$tmpdir/hotlink"; exit 1; }
+
+          # Correct app page + cookie passes the gate; invalid source index should then return 404.
+          status="$(curl -sS --max-time 20 -o "$tmpdir/authorized" -w '%{http_code}' "$APP_URL/api/watch/$MOVIE_ID/999" -H "Cookie: $cookie_pair" -H "Referer: $APP_URL/watch/$MOVIE_ID" -H 'Sec-Fetch-Site: same-origin')"
+          [[ "$status" == "404" ]] || { echo "::error::Valid app-bound session gate returned $status, expected downstream 404"; cat "$tmpdir/authorized"; exit 1; }
+
+          echo "Production smoke tests passed: copied links denied, hostile origin rejected, and app-bound session accepted."
