@@ -1396,7 +1396,7 @@ export default {
     } catch (error) {
       console.error('Request failed:', error?.stack || error?.message || error);
       const message = error instanceof Error ? error.message : 'Internal server error';
-      const client = /required|invalid|must |between |only |unknown category|too large|HTTPS|Google Drive|Archive\.org|video link/i.test(message);
+      const client = /required|invalid|cross-origin|must |between |only |unknown category|too large|HTTPS|Google Drive|Archive\.org|video link/i.test(message);
       return json({ error: client ? message : 'Internal server error' }, client ? 400 : 500);
     }
   }
