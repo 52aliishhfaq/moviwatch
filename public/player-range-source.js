@@ -23,6 +23,7 @@
         ? Math.min(options.prefetchAhead, 4) : DEFAULT_PREFETCH_AHEAD;
 
       this.totalSize = null;
+      this.sizePromise = null;
       this.position = 0;
       this.cache = new Map();
       this.cacheBytes = 0;
@@ -59,39 +60,51 @@
     async getSize() {
       this._assertOpen();
       if (this.totalSize !== null) return this.totalSize;
+      if (this.sizePromise) return this.sizePromise;
 
-      // The Worker HEAD path validates the source and warms the first shared
-      // Cloudflare cache block before the player's first byte-range read.
-      const response = await fetch(this.url, {
-        method: 'HEAD',
-        cache: 'no-store',
-        credentials: 'same-origin'
-      });
-      this._assertOpen();
-      if (!response.ok) throw await this._responseError(response, 'Video metadata request failed');
-
-      let total = Number(response.headers.get('content-length'));
-      if (!Number.isSafeInteger(total) || total < 1) {
-        const probe = await fetch(this.url, {
-          method: 'GET',
-          headers: { Range: 'bytes=0-0' },
+      // Several demuxer reads can arrive together during startup. Share a
+      // single metadata probe instead of racing multiple HEAD requests.
+      this.sizePromise = (async () => {
+        // The Worker HEAD path validates the source and warms the first shared
+        // Cloudflare cache block before the player's first byte-range read.
+        const response = await fetch(this.url, {
+          method: 'HEAD',
           cache: 'no-store',
           credentials: 'same-origin'
         });
-        if (probe.status !== 206) {
-          throw await this._responseError(probe, 'Could not determine video size');
-        }
-        const range = this._parseContentRange(probe.headers.get('content-range'));
-        try { await probe.body?.cancel(); } catch {}
-        if (!range || range.start !== 0) throw new Error('Video source returned invalid size metadata');
-        total = range.total;
-      }
+        this._assertOpen();
+        if (!response.ok) throw await this._responseError(response, 'Video metadata request failed');
 
-      if (!Number.isSafeInteger(total) || total < 1) {
-        throw new Error('Video source returned an invalid file size');
+        let total = Number(response.headers.get('content-length'));
+        if (!Number.isSafeInteger(total) || total < 1) {
+          const probe = await fetch(this.url, {
+            method: 'GET',
+            headers: { Range: 'bytes=0-0' },
+            cache: 'no-store',
+            credentials: 'same-origin'
+          });
+          if (probe.status !== 206) {
+            throw await this._responseError(probe, 'Could not determine video size');
+          }
+          const range = this._parseContentRange(probe.headers.get('content-range'));
+          try { await probe.body?.cancel(); } catch {}
+          if (!range || range.start !== 0) throw new Error('Video source returned invalid size metadata');
+          total = range.total;
+        }
+
+        if (!Number.isSafeInteger(total) || total < 1) {
+          throw new Error('Video source returned an invalid file size');
+        }
+        this.totalSize = total;
+        return total;
+      })();
+
+      try {
+        return await this.sizePromise;
+      } catch (error) {
+        this.sizePromise = null;
+        throw error;
       }
-      this.totalSize = total;
-      return total;
     }
 
     _store(index, bytes) {
