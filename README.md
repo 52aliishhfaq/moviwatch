@@ -8,9 +8,9 @@ A movie catalogue with Google Drive and Archive.org byte-range streaming. The fr
 - Password-protected admin dashboard at \`/admin\`.
 - Add up to 8 labeled source links per movie from Google Drive and Archive.org.
 - Responsive Movi Player with a source selector and a Download selected source button.
-- HTTP Range support for playback, browser seeking, resumable download, and HEAD metadata requests.
+- HTTP Range support for playback, browser seeking, and HEAD metadata requests. Archive.org downloads redirect directly to Internet Archive; Google Drive downloads retain the Worker download route.
 - Cloudflare Workers Cache stores complete video chunks through separately cached Worker entrypoints. Chunk keys include the source URL hash, movie, option index, source version, range start, and chunk size.
-- Fragmented MP4 detection uses a compact header probe, a 512 KiB initial segment, 4 MiB continuation chunks, and parallel startup/next-segment prefetch.
+- Fragmented MP4 detection uses a compact header probe, a 512 KiB initial segment, 8 MiB continuation chunks, and parallel startup/next-segment prefetch.
 - Public catalogue responses expose labels, providers, and source indexes—not raw Drive/Archive URLs. Actual upstream URLs stay in the cached internal metadata entrypoint.
 - Admin secrets stay in Cloudflare Worker Secrets.
 
@@ -35,9 +35,13 @@ Only publish videos for which you have the rights and permissions required to di
 
 The browser requests byte ranges from the Moviwatch API. Cloudflare Workers fetches a small video header first, detects MP4 fragmentation, then reads/cache-warms the relevant chunks. Seeking asks for the segment matching the requested byte offset, while the next segment is fetched in the background. Later requests can reuse complete chunks from Cloudflare's edge cache rather than re-reading the same bytes from Drive or Archive.org.
 
-For fragmented MP4, the initial segment is 512 KiB; continuation segments are 4 MiB. Conventional MP4 and other supported files use 4 MiB segments. The first playback request may still have to fetch bytes from the original host before the cache is warm.
+For fragmented MP4, the initial segment remains 512 KiB; continuation segments are 8 MiB. Conventional MP4 files use 8 MiB range chunks. Keeping the first fragmented-MP4 segment small protects cold-start playback, while larger continuation chunks reduce the number of upstream Range requests.
 
-**This reduces repeat reads and improves startup/seek behavior; it cannot guarantee zero buffering.** Google Drive and Archive.org still control access permissions, upstream throughput, quotas, throttling, availability, and source-file quality. Cloudflare cache misses still depend on the upstream host. For best compatibility, use MP4 with H.264 video and AAC audio. Unsupported containers/codecs need conversion by the rights holder before upload.
+**Archive.org mirror intelligence:** the Worker reads Internet Archive item metadata (`server`, `workable_servers`, `d1`, and `d2`), tries available storage hosts for each byte range, measures successful transfer throughput, prefers previously faster mirrors, and temporarily cools down hosts after failed or timed-out requests. If item metadata is unavailable, the original public Archive.org URL remains the fallback.
+
+**Downloads:** Archive.org download clicks redirect to the official `archive.org/download/...` URL. Cloudflare does not relay or cache Archive.org download bytes. Playback remains proxied and edge-cached by the Worker. Google Drive downloads continue using the existing Worker attachment route.
+
+**This reduces repeat reads and improves resilience; it cannot guarantee zero buffering.** Internet Archive still controls mirror availability, source bandwidth, throttling, and item permissions. If every storage mirror is slow or unavailable, playback can still buffer or fail. Cache misses still depend on an Internet Archive server. For best compatibility, use MP4 with H.264 video and AAC audio. Unsupported containers/codecs need conversion by the rights holder before upload.
 
 ## Database and Redis
 
