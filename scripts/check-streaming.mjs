@@ -6,6 +6,7 @@ import { archiveDownloadUrl, sourceProvider, videoSourceUrl } from '../src/video
 const worker = readFileSync('src/index.js', 'utf8');
 const sourceModule = readFileSync('src/video-sources.js', 'utf8');
 const watch = readFileSync('public/watch.html', 'utf8');
+const rangeSource = readFileSync('public/player-range-source.js', 'utf8');
 const admin = readFileSync('public/admin.html', 'utf8');
 const config = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
 const readme = readFileSync('README.md', 'utf8');
@@ -103,13 +104,25 @@ assert.ok(!/doodstream|playmogo|voe\.sx/i.test(worker), 'Legacy hosts must not r
 
 // Vercel / Cloudflare routing and responsive player controls.
 assertIncludes(watch, 'id="video"', 'Movi Player element missing');
-assertIncludes(watch, "video.src='/api/watch/'", 'Native playback must use the Worker range endpoint');
+assertIncludes(watch, "const streamUrl='/api/watch/'", 'Player source must use the Worker range endpoint');
+assertIncludes(watch, 'new window.MoviwatchRangeSource(streamUrl', 'Player must use the controlled range adapter');
+assertIncludes(watch, 'video.sourceAdapter=activeRangeSource', 'Movi Player must receive the custom range source');
 assertIncludes(watch, "'/api/download/'+encodeURIComponent(movieId)+'/'+source.source_index", 'Download action must use the same selected source');
 assertIncludes(watch, 'id="sourceSelect"', 'Multiple source selector missing');
-assertIncludes(watch, 'const PLAYER_BUFFER_SIZE_MB=32', '32 MiB in-player rolling buffer cap missing');
+assertIncludes(watch, 'const PLAYER_BUFFER_SIZE_MB=32', '32 MiB player memory limit missing');
+assertIncludes(watch, 'const PLAYER_RANGE_CHUNK_SIZE=1024*1024', '1 MiB player request size missing');
+assertIncludes(watch, 'const PLAYER_PREFETCH_AHEAD=2', 'Two-range player prefetch setting missing');
 assertIncludes(watch, 'preload="metadata" buffersize="32"', 'Player must keep metadata preload while applying the bounded 32 MiB range buffer');
 assertIncludes(watch, "video.preload='metadata'", 'Player source switch must preserve conservative native fallback preload');
-assertIncludes(watch, "video.setAttribute('buffersize',String(PLAYER_BUFFER_SIZE_MB))", 'Player buffer cap must be applied on every source selection');
+assertIncludes(watch, "video.setAttribute('buffersize',String(PLAYER_BUFFER_SIZE_MB))", 'Player fallback buffer cap must be applied on every source selection');
+assertIncludes(watch, "activeRangeSource.setPlaybackActive(true)", 'Player must enable prefetch while playing');
+assertIncludes(watch, "activeRangeSource.setPlaybackActive(false)", 'Player must stop speculative prefetch when paused or stopped');
+assertIncludes(rangeSource, 'const CHUNK_SIZE = 1024 * 1024', 'Range adapter must request at most 1 MiB per piece');
+assertIncludes(rangeSource, 'const DEFAULT_MAX_CACHE_BYTES = 32 * 1024 * 1024', 'Range adapter must retain a bounded 32 MiB LRU cache');
+assertIncludes(rangeSource, 'const DEFAULT_PREFETCH_AHEAD = 2', 'Range adapter must prefetch two chunks ahead');
+assertIncludes(rangeSource, "Range: 'bytes=' + start + '-' + end", 'Range adapter must issue explicit HTTP byte ranges');
+assertIncludes(rangeSource, 'this._prefetchAfter(lastIndex)', 'Range adapter must warm upcoming segments after active reads');
+assertIncludes(rangeSource, 'this._cancelSpeculative()', 'Range adapter must cancel speculative reads on pause/seek');
 assertIncludes(watch, "video.addEventListener('statechange'", 'Buffering state must use Movi Player statechange events');
 assertIncludes(watch, "video.addEventListener('loadeddata'", 'Player startup must use its supported loadeddata event');
 assert.ok(!watch.includes('video.load();'), 'Movi Player loads on src assignment; avoid redundant native load() calls');
@@ -133,6 +146,7 @@ for (const name of ['PublicCatalogue', 'MovieMetadata', 'VideoChunk', 'VideoHead
 }
 
 // Browser inline scripts in all pages are syntactically valid.
+new Script(rangeSource, { filename: 'public/player-range-source.js' });
 for (const file of ['public/index.html', 'public/watch.html', 'public/admin.html']) {
   const html = readFileSync(file, 'utf8');
   const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];

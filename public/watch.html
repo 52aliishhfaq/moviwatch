@@ -65,12 +65,15 @@ select{min-width:min(300px,100%);max-width:100%;height:42px;padding:0 38px 0 12p
 <p class="hint">Moviwatch uses Cloudflare Worker byte-range streaming and edge-cached chunks for seeking and repeat playback. Google Drive files must be shared as “Anyone with the link – Viewer”. Archive.org items must be public direct file downloads. Playback quality depends on the original file and host limits.</p>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js"></script>
+<script src="/player-range-source.js"></script>
 <script>
 const $=selector=>document.querySelector(selector);
 const PLAYER_BUFFER_SIZE_MB=32;
+const PLAYER_RANGE_CHUNK_SIZE=1024*1024;
+const PLAYER_PREFETCH_AHEAD=2;
 const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||new URLSearchParams(location.search).get('id')||'');
 const video=$('#video');
-let availableSources=[],activeOptionIndex=-1,startupTimer=null,generation=0,startupReady=false;
+let availableSources=[],activeOptionIndex=-1,startupTimer=null,generation=0,startupReady=false,activeRangeSource=null;
 
 function setStatus(message,error=false){
   $('#status').textContent=message;
@@ -78,12 +81,12 @@ function setStatus(message,error=false){
 }
 function setLoading(value){$('#loading').hidden=!value;}
 function clearTimer(){if(startupTimer!==null){clearTimeout(startupTimer);startupTimer=null;}}
-function showError(message){clearTimer();setLoading(false);setStatus(message,true);$('#retry').classList.add('show');}
+function showError(message){if(activeRangeSource)activeRangeSource.setPlaybackActive(false);clearTimer();setLoading(false);setStatus(message,true);$('#retry').classList.add('show');}
 function markPlayerReady(){
   startupReady=true;
   clearTimer();
   setLoading(false);
-  setStatus('Player ready. Rolling in-memory buffer is capped at '+PLAYER_BUFFER_SIZE_MB+' MiB.');
+  setStatus('Player ready. 1 MiB range requests, up to '+PLAYER_BUFFER_SIZE_MB+' MiB in browser memory, and '+PLAYER_PREFETCH_AHEAD+' ranges prefetch while playing.');
   $('#retry').classList.remove('show');
 }
 function playerState(event){
@@ -112,12 +115,25 @@ function playSource(localIndex){
   const current=++generation;
   startupReady=false;
   setLoading(true);
-  setStatus('Connecting to '+(source.provider==='archive.org'?'Archive.org':'Google Drive')+'; preparing the player buffer…');
+  setStatus('Connecting to '+(source.provider==='archive.org'?'Archive.org':'Google Drive')+'; preparing 1 MiB player ranges…');
   $('#retry').classList.remove('show');
   video.preload='metadata';
   video.setAttribute('buffersize',String(PLAYER_BUFFER_SIZE_MB));
-  // Movi Player starts its range loader when src changes; native load() is not part of its API.
-  video.src='/api/watch/'+encodeURIComponent(movieId)+'/'+source.source_index;
+  const streamUrl='/api/watch/'+encodeURIComponent(movieId)+'/'+source.source_index;
+  if(activeRangeSource){activeRangeSource.close();activeRangeSource=null;}
+  if('sourceAdapter' in video && typeof window.MoviwatchRangeSource==='function'){
+    activeRangeSource=new window.MoviwatchRangeSource(streamUrl,{
+      chunkSize:PLAYER_RANGE_CHUNK_SIZE,
+      maxCacheBytes:PLAYER_BUFFER_SIZE_MB*1024*1024,
+      prefetchAhead:PLAYER_PREFETCH_AHEAD
+    });
+    video.sourceAdapter=activeRangeSource;
+    setStatus('Using 1 MiB range requests, a 32 MiB browser-memory cache, and two-range prefetch during playback.');
+  }else{
+    // Defensive compatibility fallback for an unexpected player build.
+    video.src=streamUrl;
+    setStatus('Using the player built-in HTTP source; custom 1 MiB range mode is unavailable.');
+  }
   startupTimer=setTimeout(()=>{
     if(current===generation&&!startupReady){
       showError('The player has not become ready within 30 seconds. Check that the source is public, supports byte ranges and has not reached its host quota.');
@@ -156,16 +172,22 @@ async function prepare(){
   }
 }
 
+video.addEventListener('play',()=>{if(activeRangeSource)activeRangeSource.setPlaybackActive(true);});
+video.addEventListener('pause',()=>{if(activeRangeSource)activeRangeSource.setPlaybackActive(false);});
+video.addEventListener('ended',()=>{if(activeRangeSource)activeRangeSource.setPlaybackActive(false);});
 video.addEventListener('loadeddata',markPlayerReady);
 video.addEventListener('statechange',event=>{
   const state=playerState(event);
   if(state==='ready')markPlayerReady();
   else if(state==='playing'){
+    if(activeRangeSource)activeRangeSource.setPlaybackActive(true);
     startupReady=true;
     clearTimer();
     setLoading(false);
     setStatus('');
     $('#retry').classList.remove('show');
+  }else if(state==='paused'){
+    if(activeRangeSource)activeRangeSource.setPlaybackActive(false);
   }else if(state==='buffering'&&!video.paused){
     setStatus('Buffering… refreshing the in-player window from Cloudflare edge cache.');
   }else if(state==='error'){
