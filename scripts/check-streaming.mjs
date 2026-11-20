@@ -102,7 +102,7 @@ assert.ok(!worker.includes("Response.redirect(archiveDownloadUrl("), 'Protected 
 assertIncludes(worker, "const PLAYBACK_COOKIE = 'moviwatch_playback'", 'HttpOnly playback session cookie missing');
 assertIncludes(worker, 'async function makePlaybackToken(env, movieId)', 'Playback ticket must be cryptographically signed and movie-bound');
 assertIncludes(worker, 'async function validPlaybackToken(env, token)', 'Playback ticket verifier missing');
-assertIncludes(worker, 'body.mid.toLowerCase() === movieId.toLowerCase()', 'Playback ticket must be bound to the requested movie');
+assertIncludes(worker, 'claims.mid.toLowerCase() === movieId.toLowerCase()', 'Playback ticket must be bound to the requested movie');
 assertIncludes(worker, 'playbackContextAllowed(req, env, movieId)', 'Media endpoints must verify same-origin watch page context');
 assertIncludes(worker, "path === '/api/playback/session'", 'Playback session endpoint missing');
 assertIncludes(worker, "HttpOnly; Secure; SameSite=Strict; Path=/api/", 'Playback session cookie must be HttpOnly, Secure and SameSite=Strict');
