@@ -58,6 +58,9 @@ assertIncludes(worker, 'Anyone with the link (Viewer)', 'Private Drive guidance 
 // and a prefetch of the immediate successor segment.
 assertIncludes(worker, 'const VIDEO_CHUNK_SIZE = 8 * 1024 * 1024', '8 MiB continuation chunks missing');
 assertIncludes(worker, 'const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024', '512 KiB fMP4 startup segment missing');
+assertIncludes(worker, 'const VIDEO_CACHE_TTL = 24 * 60 * 60', '24-hour shared video cache TTL missing');
+assertIncludes(worker, "'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600'", 'Complete video chunks must remain cacheable for 24 hours');
+assertIncludes(worker, 'props: { sourceUrl: source.url, sourceVersion: normalizedSourceVersion }', 'Video cache key must use source identity and version, not viewer identity');
 assertIncludes(worker, 'https://archive.org/metadata/', 'Archive.org metadata discovery missing');
 assertIncludes(worker, 'metadata.d1', 'Archive.org d1 mirror missing');
 assertIncludes(worker, 'metadata.d2', 'Archive.org d2 mirror missing');
@@ -72,6 +75,7 @@ assertIncludes(worker, 'videoChunkStartForOffset(offset, fragmented)', 'Seek off
 assertIncludes(worker, 'videoChunkSizeAt(chunkStart, fragmented)', 'Adaptive chunk sizing missing');
 assertIncludes(worker, 'const nextChunkStart = chunk.end + 1', 'Next-segment prefetch missing');
 assertIncludes(worker, 'ctx.waitUntil(Promise.allSettled([nextPromise]))', 'Next-segment prefetch must not block playback');
+assertIncludes(worker, "'cache-tag': 'video-chunks-' + movieId", 'Video chunks need a movie-level cache purge tag');
 assertIncludes(worker, "ctx.exports.VideoChunk({", 'Cached chunk entrypoint not used');
 assertIncludes(worker, "ctx.exports.VideoHeader({", 'Cached header entrypoint not used');
 assertIncludes(worker, "'x-moviwatch-cache': cacheStatus", 'Cache diagnostics header missing');
@@ -102,7 +106,13 @@ assertIncludes(watch, 'id="video"', 'Movi Player element missing');
 assertIncludes(watch, "video.src='/api/watch/'", 'Native playback must use the Worker range endpoint');
 assertIncludes(watch, "'/api/download/'+encodeURIComponent(movieId)+'/'+source.source_index", 'Download action must use the same selected source');
 assertIncludes(watch, 'id="sourceSelect"', 'Multiple source selector missing');
-assertIncludes(watch, "video.preload='metadata'", 'Metadata-first startup missing');
+assertIncludes(watch, 'const PLAYER_BUFFER_SIZE_MB=32', '32 MiB in-player rolling buffer cap missing');
+assertIncludes(watch, 'preload="auto" buffersize="32"', 'Player must enable eager loading with a bounded 32 MiB buffer');
+assertIncludes(watch, "video.preload='auto'", 'Player source switch must retain eager loading');
+assertIncludes(watch, "video.setAttribute('buffersize',String(PLAYER_BUFFER_SIZE_MB))", 'Player buffer cap must be applied on every source selection');
+assertIncludes(watch, "video.addEventListener('statechange'", 'Buffering state must use Movi Player statechange events');
+assertIncludes(watch, "video.addEventListener('loadeddata'", 'Player startup must use its supported loadeddata event');
+assert.ok(!watch.includes('video.load();'), 'Movi Player loads on src assignment; avoid redundant native load() calls');
 assertIncludes(watch, 'aspect-ratio:16/9', 'Responsive 16:9 player shell missing');
 assertIncludes(watch, '/manifest.webmanifest', 'Watch page PWA manifest missing');
 assert.ok(!/doodstream|playmogo|voe\.sx/i.test(watch), 'Legacy providers must not remain on the watch page');
@@ -135,6 +145,9 @@ for (const file of ['public/index.html', 'public/watch.html', 'public/admin.html
 assertIncludes(readme, 'Drive and Archive.org byte-range streaming', 'README must describe the restored providers');
 assertIncludes(readme, 'cannot guarantee zero buffering', 'README must document realistic buffering limits');
 assertIncludes(readme, '8 MiB continuation chunks', 'README must document 8 MiB chunks');
+assertIncludes(readme, '32 MiB', 'README must document the bounded player memory buffer');
+assertIncludes(readme, '24 hours', 'README must document the shared edge cache TTL');
+assertIncludes(readme, 'not shared between browsers', 'README must distinguish private player memory from shared edge caching');
 assertIncludes(readme, 'directly to Internet Archive', 'README must document direct Archive.org downloads');
 assertIncludes(readme, 'd1', 'README must document mirror failover');
 
