@@ -165,7 +165,7 @@ async function prepare(){
     const session=await fetch('/api/playback/session',{
       method:'POST',credentials:'same-origin',cache:'no-store',
       headers:{'Content-Type':'application/json','Accept':'application/json'},
-      body:'{}'
+      body:JSON.stringify({movieId})
     });
     if(!session.ok){
       let message='Could not establish a secure playback session.';
