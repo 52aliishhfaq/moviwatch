@@ -33,7 +33,7 @@ Only publish videos for which you have the rights and permissions required to di
 
 ## Pakistan/mobile streaming behavior
 
-Movi Player uses `preload="auto"` and a `buffersize="32"` cap. Its HTTP source keeps a rolling in-memory byte window of up to 32 MiB for forward playback; it does not download the whole movie, and old ranges are evicted as the window moves. This is a per-browser buffer, not shared between browsers. The 32 MiB cap is a memory ceiling (about four 8 MiB Worker continuation chunks), not a promise that every device will have all 32 MiB filled before playback starts.
+Movi Player keeps the native fallback on metadata preload and sets a `buffersize="32"` cap for its own HTTP source. Its HTTP source keeps a rolling in-memory byte window of up to 32 MiB for forward playback; it does not download the whole movie, and old ranges are evicted as the window moves. This is a per-browser buffer, not shared between browsers. The 32 MiB cap is a memory ceiling (about four 8 MiB Worker continuation chunks), not a promise that every device will have all 32 MiB filled before playback starts.
 
 The browser requests byte ranges from the Moviwatch API. Cloudflare Workers fetches a small video header first, detects MP4 fragmentation, then reads/cache-warms the relevant chunks. Seeking asks for the aligned segment matching the requested byte offset, while the next segment is fetched in the background. Complete 200 chunk responses are retained in Cloudflare's edge cache for 24 hours; other viewers using the same movie/source/version/range can reuse those cached bytes instead of re-reading the same content from Drive or Archive.org.
 
