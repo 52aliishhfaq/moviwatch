@@ -121,11 +121,12 @@ The production Vercel domain must be present in the Cloudflare Worker \`APP_ORIG
 |---|---|---|
 | GET | \`/api/health\` | Public health check |
 | POST | \`/api/auth/login\` | Admin password |
+| POST | \\`/api/playback/session\\` | Same-origin watch page; issues a movie-bound HttpOnly session cookie |
 | POST | \`/api/auth/logout\` | Session cookie |
 | GET | \`/api/auth/me\` | Session status |
 | GET | \`/api/movies?q=&category=\` | Public catalogue (source labels/provider/index only) |
-| GET/HEAD | \`/api/watch/:movieId/:optionIndex\` | Range-aware streaming |
-| GET/HEAD | \`/api/download/:movieId/:optionIndex\` | Attachment download |
+| GET/HEAD | \\`/api/watch/:movieId/:optionIndex\\` | Valid movie-bound HttpOnly session + matching same-origin watch-page referrer |
+| GET/HEAD | \\`/api/download/:movieId/:optionIndex\\` | Same playback authorization as watch; Worker attachment download |
 | GET | \`/api/admin/movies\` | Admin |
 | POST/PUT/DELETE | \`/api/admin/movies[/:id]\` | Admin |
 | GET | \`/api/admin/stats\` | Admin |
