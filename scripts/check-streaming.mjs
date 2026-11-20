@@ -114,6 +114,8 @@ assertIncludes(watch, 'new URL(source.download_url)', 'Archive.org download must
 assertIncludes(watch, "link.href=directUrl.toString()", 'Archive.org button must navigate directly to Archive.org, not Cloudflare');
 assertIncludes(watch, "link.textContent='Download Now'", 'Download button must use the exact Download Now label');
 assertIncludes(watch, "link.setAttribute('download',filename)", 'Download link must request a file download');
+assertIncludes(watch, "link.setAttribute('target','_blank')", 'Archive.org download should not navigate away from the watch page');
+assertIncludes(watch, "link.setAttribute('rel','noopener noreferrer')", 'External download link must use safe target isolation');
 assertIncludes(watch, "select.hidden=availableSources.length<2", 'Single-source selector must be hidden');
 assert.ok(!watch.includes('class="hint"'), 'Remove the verbose player helper paragraph');
 assertIncludes(watch, 'id="sourceSelect"', 'Multiple source selector missing');
