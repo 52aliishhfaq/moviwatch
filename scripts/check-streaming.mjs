@@ -100,6 +100,7 @@ assertIncludes(worker, 'cachedVideoRange(', 'Proxy must use the edge chunk cache
 assertIncludes(worker, 'content-disposition', 'Google Drive Worker download attachment header missing');
 assert.ok(!worker.includes("Response.redirect(archiveDownloadUrl("), 'Protected downloads must not redirect users to provider URLs');
 assertIncludes(worker, "const PLAYBACK_COOKIE = 'moviwatch_playback'", 'HttpOnly playback session cookie missing');
+assertIncludes(worker, "playbackCookieName(movieId) + '=' + token", 'Playback sessions must use a separate cookie per movie so open tabs do not overwrite each other');
 assertIncludes(worker, 'async function makePlaybackToken(env, movieId)', 'Playback ticket must be cryptographically signed and movie-bound');
 assertIncludes(worker, 'async function validPlaybackToken(env, token)', 'Playback ticket verifier missing');
 assertIncludes(worker, 'claims.mid.toLowerCase() === movieId.toLowerCase()', 'Playback ticket must be bound to the requested movie');
