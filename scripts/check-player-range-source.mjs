@@ -94,4 +94,32 @@ assert.equal(tail.byteLength, 10, 'Reads beyond EOF must return truncated data')
 adapter.close();
 await assert.rejects(adapter.read(0, 1), /closed/i);
 
-console.log('Validated 1 MiB Range requests, LRU reuse, two-ahead prefetch, pause behavior and EOF truncation.');
+// Parallel demuxer reads must share one HEAD metadata probe.
+const concurrentAdapter = new RangeSource('/api/watch/test/1', {
+  chunkSize: CHUNK_SIZE,
+  maxCacheBytes: 2 * CHUNK_SIZE,
+  prefetchAhead: 0
+});
+const [sizeA, sizeB, firstRead] = await Promise.all([
+  concurrentAdapter.getSize(),
+  concurrentAdapter.getSize(),
+  concurrentAdapter.read(0, 64)
+]);
+assert.equal(sizeA, totalSize);
+assert.equal(sizeB, totalSize);
+assert.equal(firstRead.byteLength, 64);
+assert.equal(headCalls, 2, 'Concurrent startup reads must share a single metadata HEAD request');
+
+// The browser cache must stay bounded and evict least-recently-used segments.
+await concurrentAdapter.read(CHUNK_SIZE, 64);
+await concurrentAdapter.read(2 * CHUNK_SIZE, 64);
+assert.ok(concurrentAdapter.cacheBytes <= 2 * CHUNK_SIZE, 'The browser LRU must respect its memory ceiling');
+assert.equal(concurrentAdapter.cache.has(0), false, 'Oldest segment should be evicted first');
+assert.equal(concurrentAdapter.cache.has(1), true);
+assert.equal(concurrentAdapter.cache.has(2), true);
+const countBeforeRefetch = requests.length;
+await concurrentAdapter.read(0, 64);
+assert.equal(requests.length, countBeforeRefetch + 1, 'An evicted segment must be fetched again');
+concurrentAdapter.close();
+
+console.log('Validated 1 MiB ranges, metadata de-duplication, bounded LRU reuse, two-ahead prefetch, pause behavior and EOF truncation.');
