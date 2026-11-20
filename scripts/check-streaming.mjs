@@ -63,6 +63,7 @@ assertIncludes(worker, 'metadata.d1', 'Archive.org d1 mirror missing');
 assertIncludes(worker, 'metadata.d2', 'Archive.org d2 mirror missing');
 assertIncludes(worker, 'archiveScores', 'Archive.org throughput scoring missing');
 assertIncludes(worker, 'ARCHIVE_COOLDOWN', 'Archive.org failure cooldown missing');
+assertIncludes(worker, 'ARCHIVE_FAST_MIRROR_BPS', 'Archive.org mirror health threshold missing');
 assertIncludes(worker, 'fetchVideoRangeFromMirrors', 'Archive.org per-range failover missing');
 assertIncludes(worker, 'const VIDEO_HEADER_PROBE_SIZE = 16 * 1024', 'Compact video header probe missing');
 assertIncludes(worker, 'mp4MoovEnd(bytes)', 'MP4 moov atom size detection missing');
