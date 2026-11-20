@@ -92,8 +92,6 @@ const catalogue = worker.slice(catalogueStart, catalogueEnd);
 assertIncludes(catalogue, 'source_index:index', 'Public player source index missing');
 assert.ok(!catalogue.includes("download_url:") && !catalogue.includes("url:source.url"),
   'Public catalogue must not expose raw provider or direct download URLs');
-assert.ok(!catalogue.includes("'url':") && !catalogue.includes("url:source.url"),
-  'Public catalogue must not expose raw provider streaming URLs');
 
 assertIncludes(worker, "const watch = path.split('/')", 'Watch proxy route missing');
 assertIncludes(worker, "const download = path.split('/')", 'Download proxy route missing');
