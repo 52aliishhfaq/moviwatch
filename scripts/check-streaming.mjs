@@ -187,5 +187,5 @@ assertIncludes(readme, 'not shared between browsers', 'README must distinguish p
 assertIncludes(readme, 'https://archive.org/download/IDENTIFIER/FILENAME', 'README must document canonical direct Archive.org downloads');
 assertIncludes(readme, 'd1', 'README must document mirror failover');
 
-assertIncludes(readme, 'movie-bound HttpOnly playback session', 'README must describe the new playback authorization');
+assertIncludes(readme, 'A watch page obtains a short-lived signed playback session', 'README must describe the new playback authorization');
 console.log('Drive/Archive URL, provider, cache, range, protected playback/download, admin, watch and inline-script checks passed.');
