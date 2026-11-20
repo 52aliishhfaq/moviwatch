@@ -10,7 +10,7 @@ A movie catalogue with Google Drive and Archive.org byte-range streaming. The fr
 - Responsive Movi Player with a source selector, a Download selected source button, and a 32 MiB per-browser LRU cache of 1 MiB HTTP range pieces.
 - HTTP Range support for playback, browser seeking, and HEAD metadata requests. Archive.org downloads redirect directly to Internet Archive; Google Drive downloads retain the Worker download route.
 - Cloudflare Workers Cache stores complete 8 MiB video chunks for 24 hours through separately cached Worker entrypoints. Chunk keys include the source URL hash, movie, option index, source version, range start, and chunk size—not a viewer or browser ID—so the same cached bytes can be reused by other viewers.
-- Fragmented MP4 detection uses a compact header probe, a 512 KiB initial Worker segment, and 8 MiB continuation cache chunks; the player requests at most 1 MiB at a time and prefetches the next two pieces during playback.
+- Fragmented MP4 detection uses a compact header probe, a 512 KiB initial Worker segment, and 8 MiB continuation chunks in Cloudflare's shared cache; the player requests at most 1 MiB at a time and prefetches the next two pieces during playback.
 - Public catalogue responses expose labels, providers, and source indexes—not raw Drive/Archive URLs. Actual upstream URLs stay in the cached internal metadata entrypoint.
 - Admin secrets stay in Cloudflare Worker Secrets.
 
