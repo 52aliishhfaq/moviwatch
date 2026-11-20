@@ -100,37 +100,15 @@ function updateDownload(index){
   const source=availableSources[index];
   const link=$('#downloadNow');
   link.textContent='Download Now';
-  link.hidden=true;
-  link.removeAttribute('href');
+  link.hidden=!source;
   link.removeAttribute('download');
-  link.removeAttribute('referrerpolicy');
   link.removeAttribute('target');
   link.removeAttribute('rel');
-  if(!source)return;
-
-  if(source.provider==='archive.org'){
-    // Archive.org downloads are deliberately linked straight to its canonical
-    // /download URL. Do not route the file bytes through our Worker.
-    try{
-      const directUrl=new URL(source.download_url);
-      if(directUrl.protocol!=='https:'||directUrl.hostname!=='archive.org'||
-         !directUrl.pathname.startsWith('/download/'))return;
-      const encodedName=directUrl.pathname.split('/').filter(Boolean).pop()||'video';
-      let filename=encodedName;
-      try{filename=decodeURIComponent(encodedName);}catch{}
-      link.href=directUrl.toString();
-      link.setAttribute('download',filename);
-      link.setAttribute('referrerpolicy','no-referrer');
-      link.setAttribute('target','_blank');
-      link.setAttribute('rel','noopener noreferrer');
-      link.hidden=false;
-      return;
-    }catch{return;}
-  }
-
-  // Google Drive keeps the existing Worker attachment endpoint.
+  link.removeAttribute('referrerpolicy');
+  if(!source){link.removeAttribute('href');return;}
+  // All providers now use the same protected Worker attachment route.
+  // Raw Archive.org and Google Drive URLs never enter the public page.
   link.href='/api/download/'+encodeURIComponent(movieId)+'/'+source.source_index;
-  link.hidden=false;
 }
 
 function playSource(localIndex){
@@ -172,7 +150,7 @@ async function prepare(){
   setLoading(true);
   setStatus('');
   try{
-    const response=await fetch('/api/movies',{cache:'no-store',headers:{Accept:'application/json'}});
+    const response=await fetch('/api/movies',{cache:'no-store',headers:{Accept:'application/json'},credentials:'same-origin'});
     const data=await response.json();
     if(!response.ok)throw new Error(data.error||'Could not load the movie catalogue.');
     const movie=(data.movies||[]).find(item=>item.id===movieId);
@@ -182,6 +160,18 @@ async function prepare(){
     if(movie.poster_url)video.poster=movie.poster_url;
     availableSources=Array.isArray(movie.video_sources)?movie.video_sources:[];
     if(!availableSources.length)throw new Error('No Google Drive or Archive.org source is configured for this movie.');
+
+    // Establish the HttpOnly playback cookie before loading any media bytes.
+    const session=await fetch('/api/playback/session',{
+      method:'POST',credentials:'same-origin',cache:'no-store',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:'{}'
+    });
+    if(!session.ok){
+      let message='Could not establish a secure playback session.';
+      try{const payload=await session.json();if(payload.error)message=payload.error}catch{}
+      throw new Error(message);
+    }
     const select=$('#sourceSelect');
     const selectLabel=$('#sourceSelectLabel');
     select.hidden=availableSources.length<2;
