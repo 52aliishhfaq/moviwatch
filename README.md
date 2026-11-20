@@ -37,7 +37,7 @@ The browser requests byte ranges from the Moviwatch API. Cloudflare Workers fetc
 
 For fragmented MP4, the initial segment remains 512 KiB; continuation segments are 8 MiB. Conventional MP4 files use 8 MiB range chunks. Keeping the first fragmented-MP4 segment small protects cold-start playback, while larger continuation chunks reduce the number of upstream Range requests.
 
-**Archive.org mirror intelligence:** the Worker reads Internet Archive item metadata (`server`, `workable_servers`, `d1`, and `d2`), tries available storage hosts for each byte range, measures successful transfer throughput, prefers previously faster mirrors, and temporarily cools down hosts after failed or timed-out requests. If item metadata is unavailable, the original public Archive.org URL remains the fallback.
+**Archive.org mirror handling:** the Worker reads Internet Archive item metadata (`server`, `workable_servers`, `d1`, and `d2`), tries available storage hosts for each byte range, measures successful transfer throughput, prefers previously faster mirrors, and temporarily cools down hosts after failed or timed-out requests. If item metadata is unavailable, the original public Archive.org URL remains the fallback.
 
 **Downloads:** Archive.org download clicks redirect to the official `archive.org/download/...` URL. Cloudflare does not relay or cache Archive.org download bytes. Playback remains proxied and edge-cached by the Worker. Google Drive downloads continue using the existing Worker attachment route.
 
