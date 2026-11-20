@@ -105,6 +105,7 @@ assertIncludes(worker, 'async function makePlaybackToken(env, movieId)', 'Playba
 assertIncludes(worker, 'async function validPlaybackToken(env, token)', 'Playback ticket verifier missing');
 assertIncludes(worker, 'claims.mid.toLowerCase() === movieId.toLowerCase()', 'Playback ticket must be bound to the requested movie');
 assertIncludes(worker, 'playbackContextAllowed(req, env, movieId)', 'Media endpoints must verify same-origin watch page context');
+assertIncludes(worker, 'cross-origin|must ', 'Cross-origin session attempts must be rejected as client errors');
 assertIncludes(worker, "path === '/api/playback/session'", 'Playback session endpoint missing');
 assertIncludes(worker, "HttpOnly; Secure; SameSite=Strict; Path=/api/", 'Playback session cookie must be HttpOnly, Secure and SameSite=Strict');
 assertIncludes(worker, "if (!await hasPlaybackAccess(req, env, download[3]))", 'Download endpoint must reject unbound requests');
