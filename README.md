@@ -23,7 +23,7 @@ Google Drive 1080p | https://drive.google.com/file/d/FILE_ID/view
 Archive.org 720p | https://archive.org/download/IDENTIFIER/video.mp4
 \`\`\`
 
-The first source is selected by default. Other options appear in the watch-page source selector. The download button always downloads the currently selected source through the same Worker endpoint used for streaming.
+The first source is selected by default. Other options appear in the watch-page source selector. Archive.org downloads redirect directly to Internet Archive; Google Drive downloads continue through the Worker attachment endpoint.
 
 **Google Drive:** Set General access to **Anyone with the link – Viewer**. Private files, sign-in redirects, malware confirmation screens, and quota pages cannot be converted into video by the proxy. Use a file URL, not a folder URL.
 
