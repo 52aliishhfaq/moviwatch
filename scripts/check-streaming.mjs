@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Script } from 'node:vm';
-import { sourceProvider, videoSourceUrl } from '../src/video-sources.js';
+import { archiveDownloadUrl, sourceProvider, videoSourceUrl } from '../src/video-sources.js';
 
 const worker = readFileSync('src/index.js', 'utf8');
 const sourceModule = readFileSync('src/video-sources.js', 'utf8');
@@ -30,6 +30,8 @@ assert.equal(sourceProvider(archiveDownload), 'archive.org');
 const archiveItemServer = 'https://ia801.us.archive.org/0/items/sample-item/movie.mp4';
 assert.equal(videoSourceUrl(archiveItemServer), archiveItemServer);
 assert.equal(sourceProvider(archiveItemServer), 'archive.org');
+assert.equal(archiveDownloadUrl(archiveItemServer), archiveDownload);
+assert.equal(archiveDownloadUrl(archiveDownload), archiveDownload);
 
 // Invalid links, folder URLs, metadata pages, and non-HTTPS sources are rejected.
 for (const bad of [
@@ -54,8 +56,15 @@ assertIncludes(worker, 'Anyone with the link (Viewer)', 'Private Drive guidance 
 
 // Edge streaming retains fMP4 startup detection, small initial chunks, range seeking,
 // and a prefetch of the immediate successor segment.
-assertIncludes(worker, 'const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024', '4 MiB follow-up chunks missing');
+assertIncludes(worker, 'const VIDEO_CHUNK_SIZE = 8 * 1024 * 1024', '8 MiB continuation chunks missing');
 assertIncludes(worker, 'const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024', '512 KiB fMP4 startup segment missing');
+assertIncludes(worker, 'https://archive.org/metadata/', 'Archive.org metadata discovery missing');
+assertIncludes(worker, 'metadata.d1', 'Archive.org d1 mirror missing');
+assertIncludes(worker, 'metadata.d2', 'Archive.org d2 mirror missing');
+assertIncludes(worker, 'archiveScores', 'Archive.org throughput scoring missing');
+assertIncludes(worker, 'ARCHIVE_COOLDOWN', 'Archive.org failure cooldown missing');
+assertIncludes(worker, 'ARCHIVE_FAST_MIRROR_BPS', 'Archive.org mirror health threshold missing');
+assertIncludes(worker, 'fetchVideoRangeFromMirrors', 'Archive.org per-range failover missing');
 assertIncludes(worker, 'const VIDEO_HEADER_PROBE_SIZE = 16 * 1024', 'Compact video header probe missing');
 assertIncludes(worker, 'mp4MoovEnd(bytes)', 'MP4 moov atom size detection missing');
 assertIncludes(worker, 'mp4HasMvex(bytes)', 'Fragmented MP4 detection missing');
@@ -82,7 +91,8 @@ assert.ok(!catalogue.includes("'url':") && !catalogue.includes("url:source.url")
 assertIncludes(worker, "const watch = path.split('/')", 'Watch proxy route missing');
 assertIncludes(worker, "const download = path.split('/')", 'Download proxy route missing');
 assertIncludes(worker, 'cachedVideoRange(', 'Proxy must use the edge chunk cache');
-assertIncludes(worker, 'content-disposition', 'Download attachment header missing');
+assertIncludes(worker, 'content-disposition', 'Google Drive Worker download attachment header missing');
+assertIncludes(worker, "Response.redirect(archiveDownloadUrl(source.url), 302)", 'Archive.org downloads must redirect directly to Archive.org');
 assertIncludes(worker, 'content-range', 'HTTP content-range support missing');
 assertIncludes(sourceModule, "return host==='archive.org'||host.endsWith('.archive.org')?'archive.org':'google-drive'", 'Archive provider detection missing');
 assert.ok(!/doodstream|playmogo|voe\.sx/i.test(worker), 'Legacy hosts must not remain in the Worker');
@@ -124,5 +134,8 @@ for (const file of ['public/index.html', 'public/watch.html', 'public/admin.html
 
 assertIncludes(readme, 'Drive and Archive.org byte-range streaming', 'README must describe the restored providers');
 assertIncludes(readme, 'cannot guarantee zero buffering', 'README must document realistic buffering limits');
+assertIncludes(readme, '8 MiB continuation chunks', 'README must document 8 MiB chunks');
+assertIncludes(readme, 'directly to Internet Archive', 'README must document direct Archive.org downloads');
+assertIncludes(readme, 'd1', 'README must document mirror failover');
 
 console.log('Drive/Archive URL, provider, cache, range, download, admin, watch and inline-script checks passed.');

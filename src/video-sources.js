@@ -18,4 +18,23 @@ export function videoSourceUrl(input) {
   }
   throw new Error('Only Google Drive and Archive.org video links are supported');
 }
+export function archiveDownloadUrl(input) {
+  const url = new URL(videoSourceUrl(input));
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts[0] === 'download' && parts.length >= 3) {
+    const direct = new URL('https://archive.org/download/' + parts.slice(1).join('/'));
+    direct.search = url.search;
+    return direct.toString();
+  }
+  const itemsIndex = parts.indexOf('items');
+  if (itemsIndex >= 0 && parts.length >= itemsIndex + 3) {
+    const identifier = parts[itemsIndex + 1];
+    if (!/^[A-Za-z0-9._-]{1,200}$/.test(identifier)) throw new Error('Invalid Archive.org item identifier');
+    const direct = new URL('https://archive.org/download/' + identifier + '/' + parts.slice(itemsIndex + 2).join('/'));
+    direct.search = url.search;
+    return direct.toString();
+  }
+  throw new Error('Use an Archive.org direct file URL to download this item');
+}
+
 export function sourceProvider(input){const host=new URL(input).hostname.toLowerCase();return host==='archive.org'||host.endsWith('.archive.org')?'archive.org':'google-drive'}
