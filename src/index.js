@@ -851,12 +851,24 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
   if (fileMatch && method === 'DELETE') {
     const current = await driveFileMetadata(sql, env, fileMatch[1]);
     if (!current.capabilities.canDelete) throw new Error('You do not have permission to move this Drive file to trash.');
-    await googleDriveJson(sql, env, '/drive/v3/files/' + encodeURIComponent(fileMatch[1]) +
-      '?supportsAllDrives=true&fields=id,trashed', {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ trashed: true })
-    });
+    if (current.driveId) {
+      // Shared Drive items do not use an individual user's trash. Deleting
+      // there is permanent and the UI asks for explicit confirmation.
+      const response = await googleDriveApiRequest(sql, env,
+        'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileMatch[1]) + '?supportsAllDrives=true',
+        { method: 'DELETE' });
+      if (!response.ok && response.status !== 204) {
+        const detail = await response.text().catch(() => '');
+        throw new Error('Google Drive delete failed (HTTP ' + response.status + '). ' + detail.slice(0, 160));
+      }
+    } else {
+      await googleDriveJson(sql, env, '/drive/v3/files/' + encodeURIComponent(fileMatch[1]) +
+        '?supportsAllDrives=true&fields=id,trashed', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ trashed: true })
+      });
+    }
     const affected = await sql`SELECT id FROM public.movies
       WHERE EXISTS (
         SELECT 1 FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) AS item
