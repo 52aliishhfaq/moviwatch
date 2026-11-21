@@ -3,6 +3,15 @@
   "name": "moviwatch",
   "main": "src/index.js",
   "compatibility_date": "2026-11-16",
+  "keep_vars": true,
+  "secrets": {
+    "required": [
+      "GOOGLE_CLIENT_ID",
+      "GOOGLE_CLIENT_SECRET",
+      "GOOGLE_REDIRECT_URI",
+      "GOOGLE_DRIVE_ENCRYPTION_KEY"
+    ]
+  },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
