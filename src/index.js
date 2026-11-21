@@ -351,10 +351,15 @@ async function verifyDriveOAuthState(token, env, expectedNonce) {
   } catch { return null; }
 }
 
-function googleDriveAdminRedirect(env, result) {
+function googleDriveAdminRedirect(env, result, clearCookie = '') {
   let origin = 'https://moviwatch.vercel.app';
   try { origin = new URL(env.GOOGLE_REDIRECT_URI).origin; } catch {}
-  return Response.redirect(new URL('/admin?drive=' + encodeURIComponent(result), origin), 302);
+  const headers = new Headers({
+    location: new URL('/admin?drive=' + encodeURIComponent(result), origin).toString(),
+    'cache-control': 'no-store'
+  });
+  if (clearCookie) headers.append('set-cookie', clearCookie);
+  return new Response(null, { status: 302, headers });
 }
 
 async function startGoogleDriveOAuth(env, sql) {
@@ -397,20 +402,14 @@ async function completeGoogleDriveOAuth(req, env) {
   const cookie = getCookieValue(req, 'moviwatch_google_oauth');
   const stateBody = await verifyDriveOAuthState(cookie, env, state);
   if (!stateBody) {
-    const response = googleDriveAdminRedirect(env, 'error');
-    response.headers.append('set-cookie', clearCookie);
-    return response;
+    return googleDriveAdminRedirect(env, 'error', clearCookie);
   }
   if (url.searchParams.has('error')) {
-    const response = googleDriveAdminRedirect(env, 'cancelled');
-    response.headers.append('set-cookie', clearCookie);
-    return response;
+    return googleDriveAdminRedirect(env, 'cancelled', clearCookie);
   }
   const code = url.searchParams.get('code') || '';
   if (!code || code.length > 4096 || !isGoogleDriveConfigured(env)) {
-    const response = googleDriveAdminRedirect(env, 'error');
-    response.headers.append('set-cookie', clearCookie);
-    return response;
+    return googleDriveAdminRedirect(env, 'error', clearCookie);
   }
 
   try {
@@ -466,14 +465,10 @@ async function completeGoogleDriveOAuth(req, env) {
       refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,
       refresh_token_iv=EXCLUDED.refresh_token_iv,scopes=EXCLUDED.scopes,updated_at=NOW()`;
     clearGoogleDriveAccessTokenCache();
-    const response = googleDriveAdminRedirect(env, 'connected');
-    response.headers.append('set-cookie', clearCookie);
-    return response;
+    return googleDriveAdminRedirect(env, 'connected', clearCookie);
   } catch (error) {
     console.error('Google Drive OAuth callback failed:', error?.message || error);
-    const response = googleDriveAdminRedirect(env, 'error');
-    response.headers.append('set-cookie', clearCookie);
-    return response;
+    return googleDriveAdminRedirect(env, 'error', clearCookie);
   }
 }
 
