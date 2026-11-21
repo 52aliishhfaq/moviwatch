@@ -241,6 +241,8 @@ console.log('Drive/Archive URL, provider, cache, native HTML5 playback, protecte
 assertIncludes(worker, "provider:'google-drive-private'", 'Private Drive sources must use an internal provider marker');
 assertIncludes(worker, 'googleDriveApiRequest(sqlFor(env), env, mediaUrl', 'Private Drive video ranges must be authorized by the Worker');
 assertIncludes(worker, 'fetchConfiguredVideoRange(source, nextStart, nextEnd, env, 0, true)', 'Private Drive continuation ranges must enter the progressive shared chunk cache');
+assertIncludes(worker, 'recordArchiveFailure(details.identifier, candidate.host)', 'Archive.org stream failures must cool down the failed mirror');
+assertIncludes(worker, "maxRetries = 2", 'Stream relay retries must be bounded');
 assertIncludes(worker, "pathname === '/api/google-drive/oauth/callback'", 'OAuth callback route missing');
 assertIncludes(worker, "path.startsWith('/api/admin/google-drive/')", 'Google Drive management must stay under the admin API gate');
 assertIncludes(worker, 'refresh_token_ciphertext', 'Google refresh tokens must be encrypted at rest');
@@ -347,4 +349,50 @@ async function readAll(reader) {
   await reader.cancel();
   assert.equal(continuationCalls, 0, 'Cancelled playback must not trigger an extra upstream range');
 }
+
+// A source can fail after sending part of a declared range. The relay resumes
+// from the first missing byte, so it never repeats or skips already-emitted data.
+{
+  let continuationCalls = 0;
+  const interrupted = new ReadableStream({
+    start(controller) {
+      controller.enqueue(Uint8Array.from([0]));
+      controller.error(new Error('simulated upstream connection reset'));
+    }
+  });
+  const relay = createRangeRelayStream({
+    firstPart: { range: { start: 0, end: 2, total: 3 }, body: interrupted },
+    end: 2,
+    total: 3,
+    fetchPart: async (start, end) => {
+      continuationCalls++;
+      assert.equal(start, 1, 'Resume must start at the first byte not already delivered');
+      assert.equal(end, 2);
+      return { range: { start: 1, end: 2, total: 3 }, body: byteStream([[1, 2]]) };
+    }
+  });
+  const reader = relay.getReader();
+  const output = await readAll(reader);
+  assert.deepEqual(output, [0, 1, 2]);
+  assert.equal(continuationCalls, 1);
+}
+{
+  const interrupted = new ReadableStream({
+    start(controller) {
+      controller.enqueue(Uint8Array.from([0]));
+      controller.error(new Error('simulated permanent reset'));
+    }
+  });
+  const relay = createRangeRelayStream({
+    firstPart: { range: { start: 0, end: 2, total: 3 }, body: interrupted },
+    end: 2,
+    total: 3,
+    maxRetries: 0,
+    fetchPart: async () => { throw new Error('maxRetries=0 must not retry'); }
+  });
+  const reader = relay.getReader();
+  assert.deepEqual([...((await reader.read()).value)], [0]);
+  await assert.rejects(() => reader.read(), /simulated upstream connection reset/);
+}
+
 console.log('Progressive range relay, upstream continuation, truncation, discontinuity and cancellation checks passed.');
