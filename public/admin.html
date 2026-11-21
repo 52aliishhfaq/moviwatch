@@ -33,7 +33,7 @@ button.danger{background:#9c3847;border-color:#9c3847;width:auto;padding:7px 10p
 @media(max-width:600px){main{margin:20px auto}.panel{padding:15px}.movie{align-items:flex-start}.actions{flex-direction:column}}
 
 /* Google Drive Manager */
-.drive-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.drive-controls{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end}.drive-row{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid #303b54}.drive-row .drive-name{flex:1;min-width:0}.drive-row small{display:block;color:#9ba8c1;overflow-wrap:anywhere}.drive-row button{width:auto;margin:0;padding:7px 10px}.drive-actions{display:flex;gap:6px;flex-wrap:wrap}.drive-selected{border:1px solid #6b7cff;border-radius:10px;padding:10px;margin:10px 0;background:#18233b}.drive-progress{height:9px;border-radius:99px;background:#27334b;overflow:hidden}.drive-progress>span{display:block;height:100%;width:0;background:#8190ff;transition:width .15s}.drive-hint{font-size:12px;color:#9ba8c1}.drive-status{padding:10px;border-radius:9px;background:#0e1627;color:#c5d0e5}.drive-buttons{display:flex;gap:8px;flex-wrap:wrap}.drive-buttons button{width:auto;flex:1;min-width:130px}.drive-breadcrumb{font-size:12px;color:#aabaff;overflow-wrap:anywhere}@media(max-width:600px){.drive-row{align-items:flex-start;flex-wrap:wrap}.drive-row .drive-name{flex-basis:calc(100% - 40px)}.drive-row .drive-actions{width:100%}.drive-row button{flex:1}.drive-controls{grid-template-columns:1fr}}
+.drive-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.drive-controls{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end}.drive-row{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid #303b54}.drive-row .drive-name{flex:1;min-width:0}.drive-row small{display:block;color:#9ba8c1;overflow-wrap:anywhere}.drive-row button{width:auto;margin:0;padding:7px 10px}.drive-actions{display:flex;gap:6px;flex-wrap:wrap}.drive-selected{border:1px solid #6b7cff;border-radius:10px;padding:10px;margin:10px 0;background:#18233b}.drive-progress{height:9px;border-radius:99px;background:#27334b;overflow:hidden}.drive-progress>span{display:block;height:100%;width:0;background:#8190ff;transition:width .15s}.drive-hint{font-size:12px;color:#9ba8c1}.drive-status{padding:10px;border-radius:9px;background:#0e1627;color:#c5d0e5}.drive-buttons{display:flex;gap:8px;flex-wrap:wrap}.drive-buttons button{width:auto;flex:1;min-width:130px}.drive-breadcrumb{font-size:12px;color:#aabaff;overflow-wrap:anywhere}.publish-drive-card{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.publish-drive-card .details{min-width:0;flex:1}.publish-drive-card small{display:block;color:#a7b3cb;overflow-wrap:anywhere}.drive-row .publish-file{background:#5365e8;border-color:#7180ff}.drive-workflow-hint{margin:8px 0;color:#aabaff;font-size:13px}@media(max-width:600px){.drive-row{align-items:flex-start;flex-wrap:wrap}.drive-row .drive-name{flex-basis:calc(100% - 40px)}.drive-row .drive-actions{width:100%}.drive-row button{flex:1}.drive-controls{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -112,6 +112,7 @@ button.danger{background:#9c3847;border-color:#9c3847;width:auto;padding:7px 10p
           <button id="driveAttach" type="button" disabled>Attach</button>
         </div>
         <p class="drive-hint">Attached files stream through Moviwatch’s protected Worker and shared 24-hour cache. Their Google Drive links are not shown to visitors.</p>
+        <p class="drive-workflow-hint">Easy publishing: click <strong>Publish</strong> beside a video, add its movie name and poster below, then click <strong>Publish movie</strong>.</p>
         <div id="driveFileList" style="margin-top:12px">Loading Drive files…</div>
         <button id="driveLoadMore" type="button" class="secondary hidden">Load more</button>
       </div>
@@ -127,10 +128,16 @@ button.danger{background:#9c3847;border-color:#9c3847;width:auto;padding:7px 10p
         <input id="poster" type="url" required placeholder="https://…">
         <label for="category">Category</label>
         <select id="category"><option>Action</option><option>Romantic</option></select>
-        <label for="sources">Google Drive / Archive.org video links</label>
-        <textarea id="sources" required placeholder="Google Drive 1080p | https://drive.google.com/file/d/FILE_ID/view
+        <div id="publishDriveSelection" class="drive-selected hidden" role="status" aria-live="polite">
+          <div class="publish-drive-card">
+            <div class="details"><strong id="publishDriveName">No Drive video selected</strong><small id="publishDriveMeta"></small></div>
+            <button id="clearPublishDrive" type="button" class="secondary" style="width:auto;margin:0">Remove</button>
+          </div>
+        </div>
+        <label for="sources">Additional video links (optional)</label>
+        <textarea id="sources" placeholder="Google Drive 1080p | https://drive.google.com/file/d/FILE_ID/view
 Archive.org 720p | https://archive.org/download/IDENTIFIER/video.mp4"></textarea>
-        <p class="source-help">One source per line. Format: Label | URL. Public Google Drive links and Archive.org direct links still work. For private Drive videos, select a file in Google Drive Manager and attach it to a movie below. Up to 8 sources per movie; the first source plays by default.</p>
+        <p class="source-help">Choose a private Drive video using the <strong>Publish</strong> button above. You can optionally add more sources here. Format: Label | URL. Up to 8 sources per movie; the first source plays by default.</p>
         <label><input id="published" type="checkbox" checked style="width:auto"> Published to visitors</label>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button id="save" style="flex:1">Save movie</button>
@@ -188,8 +195,9 @@ function resetForm(){
   editing=null;
   $('#movieForm').reset();
   $('#published').checked=true;
-  $('#formTitle').textContent='Add a movie';
-  $('#save').textContent='Save movie';
+  $('#formTitle').textContent='Publish a movie';
+  $('#save').textContent='Publish movie';
+  setPendingPublishFile(null);
   $('#cancel').classList.add('hidden');
   $('#formNotice').textContent='';
 }
@@ -241,7 +249,7 @@ function renderMovies(){
     list.append(row);
   }
 }
-let driveStatus=null,driveDrives=[],driveItems=[],driveFolderStack=[],driveSelected=null,driveNextPageToken='',driveBusy=false;
+let driveStatus=null,driveDrives=[],driveItems=[],driveFolderStack=[],driveSelected=null,driveNextPageToken='',driveBusy=false,pendingPublishFile=null;
 const DRIVE_CHUNK_BYTES=8*1024*1024;
 function driveMessage(message,error=false){$('#driveNotice').textContent=message||'';$('#driveNotice').style.color=error?'#ffaaaa':'#c5d0e5';}
 function formatDriveBytes(value){
@@ -257,6 +265,37 @@ function driveMovieOptions(){
   movies.forEach(movie=>select.add(new Option(movie.title,movie.id)));
   if(movies.some(movie=>movie.id===previous))select.value=previous;
 }
+function setPendingPublishFile(file){
+  pendingPublishFile=file||null;
+  const panel=$('#publishDriveSelection');
+  panel.classList.toggle('hidden',!pendingPublishFile);
+  $('#publishDriveName').textContent=pendingPublishFile?pendingPublishFile.name:'No Drive video selected';
+  $('#publishDriveMeta').textContent=pendingPublishFile?
+    [pendingPublishFile.mimeType,formatDriveBytes(pendingPublishFile.size),pendingPublishFile.modifiedTime?new Date(pendingPublishFile.modifiedTime).toLocaleString():''].filter(Boolean).join(' · '):'';
+  if(typeof renderDriveFiles==='function'&&Array.isArray(driveItems))renderDriveFiles();
+}
+function stageDriveFileForMovie(file){
+  if(!file||file.mimeType==='application/vnd.google-apps.folder')return;
+  const video=/^video\//i.test(file.mimeType||'')||/\.(mp4|m4v|mov|mkv|webm|avi|mpg|mpeg|mpe|3gp|3g2|ts|ogv|flv)$/i.test(file.name||'');
+  if(!video){driveMessage('Select a video file to publish.',true);return;}
+  if(editing&&!confirm('Discard the unsaved movie edits and start a new movie?'))return;
+  editing=null;
+  $('#movieForm').reset();
+  $('#published').checked=true;
+  $('#formTitle').textContent='Publish a movie';
+  $('#save').textContent='Publish movie';
+  $('#cancel').classList.add('hidden');
+  $('#formNotice').textContent='';
+  updateDriveSelected(file);
+  setPendingPublishFile(file);
+  $('#movieForm').scrollIntoView({behavior:'smooth',block:'start'});
+  $('#title').focus({preventScroll:true});
+  driveMessage('Video selected. Add the movie name, poster and category below, then click Publish movie.');
+}
+$('#clearPublishDrive').addEventListener('click',()=>{
+  setPendingPublishFile(null);
+  driveMessage('Drive video removed from the new movie form.');
+});
 function updateDriveSelected(file){
   driveSelected=file||null;
   $('#driveSelectedName').textContent=file?file.name:'No file selected';
@@ -347,6 +386,10 @@ function renderDriveFiles(){
       open.addEventListener('click',()=>{driveFolderStack.push({id:file.id,name:file.name});driveSelected=null;updateDriveSelected(null);loadDriveFiles(true).catch(e=>driveMessage(e.message,true));});
       actions.append(open);
     }else{
+      const publish=document.createElement('button');publish.className='publish-file';publish.type='button';publish.textContent=pendingPublishFile?.id===file.id?'Selected':'Publish';
+      publish.disabled=pendingPublishFile?.id===file.id;
+      publish.addEventListener('click',()=>stageDriveFileForMovie(file));
+      actions.append(publish);
       const select=document.createElement('button');select.className='secondary';select.type='button';select.textContent=driveSelected?.id===file.id?'Selected':'Select';
       select.addEventListener('click',()=>{updateDriveSelected(file);renderDriveFiles();});
       actions.append(select);
@@ -556,6 +599,7 @@ function editMovie(id){
   $('#category').value=movie.category;
   $('#sources').value=sourceLines(movie);
   $('#published').checked=!!movie.is_published;
+  setPendingPublishFile(null);
   $('#formTitle').textContent='Edit movie';
   $('#save').textContent='Update movie';
   $('#cancel').classList.remove('hidden');
@@ -580,9 +624,22 @@ $('#movieForm').addEventListener('submit',async event=>{
     title:$('#title').value,
     posterUrl:$('#poster').value,
     category:$('#category').value,
-    videoSources:parseSources($('#sources').value),
+    videoSources:(pendingPublishFile&&!editing?[{
+      label:pendingPublishFile.name,
+      provider:'google-drive-private',
+      fileId:pendingPublishFile.id,
+      driveId:pendingPublishFile.driveId||'',
+      modifiedTime:pendingPublishFile.modifiedTime||''
+    }]:[]).concat(parseSources($('#sources').value)),
     isPublished:$('#published').checked
   };
+  if(!body.videoSources.length){
+    $('#formNotice').textContent='Select a video with the Publish button above, or add at least one additional video link.';
+    return;
+  }
+  const saveButton=$('#save');
+  saveButton.disabled=true;
+  saveButton.textContent=editing?'Updating…':'Publishing…';
   try{
     await api(editing?'/api/admin/movies/'+editing:'/api/admin/movies',{
       method:editing?'PUT':'POST',
@@ -590,8 +647,9 @@ $('#movieForm').addEventListener('submit',async event=>{
     });
     resetForm();
     await refresh();
-    $('#formNotice').textContent='Saved successfully.';
+    $('#formNotice').textContent=body.isPublished?'Movie published successfully.':'Movie saved as hidden.';
   }catch(error){$('#formNotice').textContent=error.message;}
+  finally{saveButton.disabled=false;if(!editing)saveButton.textContent='Publish movie';}
 });
 handleDriveCallback();
 checkSession();
