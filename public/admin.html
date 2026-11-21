@@ -780,6 +780,7 @@ $('#movieForm').addEventListener('submit',async event=>{
       label:pendingPublishFile.name,
       provider:'google-drive-private',
       fileId:pendingPublishFile.id,
+      accountId:pendingPublishFile.accountId||driveAccountId,
       driveId:pendingPublishFile.driveId||'',
       modifiedTime:pendingPublishFile.modifiedTime||''
     }]:[]).concat(parseSources($('#sources').value)),
