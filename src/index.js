@@ -35,7 +35,7 @@ let seriesSchemaPromise = null;
 async function ensureSeriesSchema(sql) {
   if (!seriesSchemaPromise) {
     seriesSchemaPromise = (async () => {
-      await sql\`CREATE TABLE IF NOT EXISTS public.series (
+      await sql`CREATE TABLE IF NOT EXISTS public.series (
         id UUID PRIMARY KEY,
         title TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '',
@@ -45,7 +45,7 @@ async function ensureSeriesSchema(sql) {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )\`;
-      await sql\`CREATE TABLE IF NOT EXISTS public.episodes (
+      await sql`CREATE TABLE IF NOT EXISTS public.episodes (
         id UUID PRIMARY KEY,
         series_id UUID NOT NULL REFERENCES public.series(id) ON DELETE CASCADE,
         season_number INTEGER NOT NULL CHECK (season_number BETWEEN 1 AND 999),
@@ -58,8 +58,8 @@ async function ensureSeriesSchema(sql) {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(series_id, season_number, episode_number)
       )\`;
-      await sql\`CREATE INDEX IF NOT EXISTS idx_episodes_series_order ON public.episodes(series_id, season_number, episode_number)\`;
-      await sql\`CREATE INDEX IF NOT EXISTS idx_episodes_public_order ON public.episodes(is_published, series_id, season_number, episode_number)\`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_episodes_series_order ON public.episodes(series_id, season_number, episode_number)\`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_episodes_public_order ON public.episodes(is_published, series_id, season_number, episode_number)\`;
     })().catch((error) => { seriesSchemaPromise = null; throw error; });
   }
   await seriesSchemaPromise;
