@@ -846,7 +846,7 @@ async function refreshAttachedGoogleDriveReferences(ctx, sql, env, fileId, conne
 async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
   const sql = sqlFor(env);
   const requestUrl = new URL(req.url);
-  const body = ['POST','PUT','PATCH'].includes(method) ? await readBody(req) : {};
+  const body = ['POST','PUT','PATCH'].includes(method) && (req.headers.get('content-type') || '').toLowerCase().includes('application/json') ? await readBody(req) : {};
   const connectionId = String(requestUrl.searchParams.get('accountId') || body.accountId || 'primary');
   if (!/^(primary|[0-9a-f-]{36})$/i.test(connectionId)) throw new Error('Invalid Google Drive account ID.');
   if (path === '/api/admin/google-drive/accounts' && method === 'GET') {
