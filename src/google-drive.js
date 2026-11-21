@@ -31,10 +31,19 @@ async function aesKey(env, usages) {
 }
 
 export function isGoogleDriveConfigured(env) {
+  let redirectValid = false;
+  try {
+    const redirect = new URL(env.GOOGLE_REDIRECT_URI);
+    const localHttp = redirect.protocol === 'http:' &&
+      (redirect.hostname === 'localhost' || redirect.hostname === '127.0.0.1');
+    redirectValid = (redirect.protocol === 'https:' || localHttp) &&
+      redirect.pathname === '/api/google-drive/oauth/callback' &&
+      !redirect.username && !redirect.password && !redirect.hash;
+  } catch {}
   return Boolean(
     typeof env.GOOGLE_CLIENT_ID === 'string' && env.GOOGLE_CLIENT_ID.length > 10 &&
     typeof env.GOOGLE_CLIENT_SECRET === 'string' && env.GOOGLE_CLIENT_SECRET.length > 10 &&
-    typeof env.GOOGLE_REDIRECT_URI === 'string' && env.GOOGLE_REDIRECT_URI.startsWith('https://') &&
+    redirectValid &&
     typeof env.GOOGLE_DRIVE_ENCRYPTION_KEY === 'string' && /^[0-9a-f]{64}$/i.test(env.GOOGLE_DRIVE_ENCRYPTION_KEY)
   );
 }
