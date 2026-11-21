@@ -464,7 +464,11 @@ async function movieById(ctx, env, movieId) {
 }
 
 async function invalidateContentCaches(ctx, movieId) {
-  if (movieId) movieMetadataMemory.delete(movieId);
+  if (movieId) {
+    movieMetadataMemory.delete(movieId);
+    const headerPrefix = movieId + '|';
+    for (const key of videoHeaderMemory.keys()) if (key.startsWith(headerPrefix)) videoHeaderMemory.delete(key);
+  }
   // Defer each entrypoint factory call into its own promise. Promise.allSettled()
   // cannot catch a synchronous throw that happens while building an eager array.
   // A cache-purge problem must never turn an already-committed movie edit into
@@ -1244,7 +1248,7 @@ async function videoSourceFetch(source, method, headers, signal, budget = null) 
   throw new Error('Video-source redirect limit reached');
 }
 
-// Video edge cache: store complete 8 MiB continuation chunks as cacheable 200 responses.
+// Video edge cache: store complete 4 MiB continuation chunks as cacheable 200 responses.
 // The public response is reconstructed as a standards-compliant 206 response.
 const VIDEO_HEADER_PROBE_SIZE = 16 * 1024;
 const VIDEO_CACHE_TTL = 24 * 60 * 60;
@@ -1651,7 +1655,7 @@ async function archiveRouting(identifier, budget = null) {
       ].map(archiveHost).filter(Boolean))];
       if (hosts.length) value = { dir, hosts };
     } catch (error) {
-      console.warn('Archive.org mirror discovery failed:', error?.message || error);
+      // The final source/proxy error is logged by the owning request handler.
     }
     archiveMeta.set(identifier, {
       value,
@@ -1764,7 +1768,7 @@ async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeou
       lastError = error instanceof Error ? error : new Error('Video range request failed');
       if (details && candidate.host) recordArchiveFailure(details.identifier, candidate.host);
       if (i === candidates.length - 1) throw lastError;
-      console.warn('Archive.org mirror failed; switching storage host:', candidate.host || 'archive.org router', lastError.message);
+      // Avoid per-mirror log spam; the owning request logs only if all candidates fail.
     }
   }
   throw lastError || new Error('No storage host returned the requested video range');
