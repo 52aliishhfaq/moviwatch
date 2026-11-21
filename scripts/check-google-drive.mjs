@@ -14,6 +14,10 @@ const env = {
 
 assert.equal(drive.isGoogleDriveConfigured(env), true);
 assert.equal(drive.isGoogleDriveConfigured({}), false);
+assert.deepEqual(drive.googleDriveConfigurationIssues(env), []);
+assert.deepEqual(drive.googleDriveConfigurationIssues({}), [
+  'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI', 'GOOGLE_DRIVE_ENCRYPTION_KEY'
+]);
 assert.equal(drive.isGoogleDriveFileId('1AbCdEfGhIjKlMnOpQrStUvWxYz'), true);
 assert.equal(drive.isGoogleDriveFileId('not a file id'), false);
 assert.equal(
@@ -70,6 +74,12 @@ assert.ok(worker.includes('async function googleDriveUploadStatus'));
 assert.ok(worker.includes("'content-range': 'bytes */' + total"));
 assert.ok(worker.includes("path === '/api/admin/google-drive/oauth/start'"));
 assert.ok(worker.includes("path === '/api/admin/google-drive/files'"));
+assert.ok(worker.includes('configurationIssues: googleDriveConfigurationIssues(env)'));
+const wrangler = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
+assert.equal(wrangler.keep_vars, true, 'Dashboard vars must not be silently replaced during deploy');
+assert.deepEqual(wrangler.secrets.required, [
+  'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI', 'GOOGLE_DRIVE_ENCRYPTION_KEY'
+]);
 assert.ok(worker.includes("path === '/api/admin/google-drive/uploads'"));
 assert.ok(worker.includes("path === '/api/admin/google-drive/attach'"));
 assert.ok(worker.includes("provider:'google-drive-private'"));
