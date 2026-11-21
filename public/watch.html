@@ -28,10 +28,8 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 .meta{color:var(--muted);margin:8px 0 0;font-size:14px}
 .player-shell{position:relative;overflow:hidden;padding:12px;background:#0b1220;border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 80px #0006}
 movi-player{display:block;width:100%;aspect-ratio:16/9;min-height:0;height:auto;border-radius:10px;overflow:hidden;background:#05080e;--movi-accent:var(--accent);--movi-background:#05080e;--movi-panel:#111a2b;--movi-text:#f4f6fc}
-.loading{display:flex;align-items:center;gap:10px;color:#c7d1e5;padding:18px 4px}
-.loading[hidden]{display:none!important}
-.spinner{width:16px;height:16px;border:2px solid #52617c;border-top-color:#aabaff;border-radius:50%;animation:spin .8s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
+movi-player::part(error-screen){display:none!important}
+/* The player handles its own quiet loading state; no duplicate "Loading video" label. */
 .status{min-height:24px;margin:12px 4px 2px;color:var(--muted);font-size:13px}
 .status.error{color:#ff9d9d}
 .status:empty{display:none}
@@ -52,8 +50,7 @@ select{min-width:min(300px,100%);max-width:100%;height:42px;padding:0 38px 0 12p
 <a class="back" href="/">← Back to catalogue</a>
 <div class="heading"><h1 id="title">Loading movie…</h1><p class="meta" id="category"></p></div>
 <section class="player-shell" aria-label="Movie video player">
-  <movi-player id="video" controls playsinline preload="metadata" buffersize="32" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
-  <div id="loading" class="loading"><span class="spinner" aria-hidden="true"></span><span>Loading video…</span></div>
+  <movi-player id="video" controls playsinline preload="metadata" buffersize="32" sw="auto" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <button id="retry" class="retry" type="button">Retry stream</button>
 </section>
@@ -78,9 +75,9 @@ function setStatus(message,error=false){
   $('#status').textContent=message;
   $('#status').classList.toggle('error',error);
 }
-function setLoading(value){$('#loading').hidden=!value;}
+function setLoading(){/* Intentionally no external loading label: the player UI remains clean. */}
 function clearTimer(){if(startupTimer!==null){clearTimeout(startupTimer);startupTimer=null;}}
-function showError(message){if(activeRangeSource)activeRangeSource.setPlaybackActive(false);clearTimer();setLoading(false);setStatus(message,true);$('#retry').classList.add('show');}
+function showError(){if(activeRangeSource)activeRangeSource.setPlaybackActive(false);clearTimer();setLoading(false);setStatus('We could not start this video. Please try again.',true);$('#retry').classList.add('show');}
 function markPlayerReady(){
   startupReady=true;
   clearTimer();
@@ -141,7 +138,7 @@ function playSource(localIndex){
   }
   startupTimer=setTimeout(()=>{
     if(current===generation&&!startupReady){
-      showError('The player has not become ready within 30 seconds. Check that the source is public, supports byte ranges and has not reached its host quota.');
+      showError();
     }
   },30000);
 }
@@ -187,7 +184,7 @@ async function prepare(){
     playSource(0);
   }catch(error){
     setLoading(false);
-    setStatus(error.message||'Unable to prepare this video.',true);
+    setStatus('This movie is temporarily unavailable. Please try again.',true);
     $('#retry').classList.add('show');
   }
 }
@@ -209,17 +206,15 @@ video.addEventListener('statechange',event=>{
   }else if(state==='paused'){
     if(activeRangeSource)activeRangeSource.setPlaybackActive(false);
   }else if(state==='buffering'&&!video.paused){
-    setStatus('Buffering…');
+    setStatus('');
   }else if(state==='error'){
     showError('The player could not decode or fetch this media. Check the source and codec.');
   }
 });
 video.addEventListener('error',event=>{
-  const detail=event.detail;
-  const reason=detail instanceof Error?detail.message:
-    typeof detail==='string'?detail:
-    (typeof detail?.message==='string'?detail.message:'');
-  showError(reason?'Playback failed: '+reason:'Playback failed. Check the source link, permissions and supported codecs.');
+  // Do not leak low-level decoder/network internals into the customer UI.
+  // sw="auto" already attempted the built-in software fallback before this event.
+  showError();
 });
 $('#sourceSelect').addEventListener('change',event=>playSource(Number(event.target.value)));
 $('#retry').addEventListener('click',()=>playSource(Math.max(activeOptionIndex,0)));
