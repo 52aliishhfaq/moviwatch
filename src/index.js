@@ -90,12 +90,22 @@ async function hmac(secret, data) {
   const key = await crypto.subtle.importKey('raw', secret, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return new Uint8Array(await crypto.subtle.sign('HMAC', key, data));
 }
+async function signingSecret(env, purpose) {
+  if (!env.JWT_SECRET) throw new Error('JWT_SECRET is not configured');
+  return hmac(enc.encode(env.JWT_SECRET), enc.encode('moviwatch:' + purpose + ':v1'));
+}
+const playbackVerificationCache = new Map();
+const PLAYBACK_VERIFY_CACHE_TTL = 15000;
+function cachePlaybackClaims(token, claims) {
+  playbackVerificationCache.set(token, { claims, until: Math.min(Date.now() + PLAYBACK_VERIFY_CACHE_TTL, claims.exp * 1000) });
+  while (playbackVerificationCache.size > 512) playbackVerificationCache.delete(playbackVerificationCache.keys().next().value);
+}
 async function makeToken(env) {
   const now = Math.floor(Date.now() / 1000);
   const head = b64(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = b64(JSON.stringify({ sub: 'admin', iat: now, exp: now + SESSION }));
   const unsigned = head + '.' + payload;
-  return unsigned + '.' + b64(await hmac(enc.encode(env.JWT_SECRET), enc.encode(unsigned)));
+  return unsigned + '.' + b64(await hmac(await signingSecret(env, 'admin'), enc.encode(unsigned)));
 }
 async function validToken(env, token) {
   try {
@@ -105,7 +115,7 @@ async function validToken(env, token) {
     const body = JSON.parse(new TextDecoder().decode(unb64(p[1])));
     const now = Math.floor(Date.now() / 1000);
     if (head.alg !== 'HS256' || body.sub !== 'admin' || !Number.isInteger(body.exp) || body.exp <= now || body.iat > now + 60) return false;
-    const sig = await hmac(enc.encode(env.JWT_SECRET), enc.encode(p[0] + '.' + p[1]));
+    const sig = await hmac(await signingSecret(env, 'admin'), enc.encode(p[0] + '.' + p[1]));
     const got = unb64(p[2]);
     if (got.length !== sig.length) return false;
     let diff = 0;
@@ -135,11 +145,14 @@ async function makePlaybackToken(env, movieId) {
   const head = b64(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = b64(JSON.stringify({ sub: 'playback', mid: movieId, sid: b64(sid), iat: now, exp: now + PLAYBACK_SESSION }));
   const unsigned = head + '.' + payload;
-  return unsigned + '.' + b64(await hmac(enc.encode(env.JWT_SECRET), enc.encode(unsigned)));
+  return unsigned + '.' + b64(await hmac(await signingSecret(env, 'playback'), enc.encode(unsigned)));
 }
 async function validPlaybackToken(env, token) {
   try {
     if (!env.JWT_SECRET || typeof token !== 'string') return false;
+    const cached = playbackVerificationCache.get(token);
+    if (cached && cached.until > Date.now()) return cached.claims;
+    if (cached) playbackVerificationCache.delete(token);
     const parts = token.split('.');
     if (parts.length !== 3) return false;
     const head = JSON.parse(new TextDecoder().decode(unb64(parts[0])));
@@ -151,12 +164,14 @@ async function validPlaybackToken(env, token) {
         !Number.isInteger(body.exp) || body.exp <= now ||
         !Number.isInteger(body.iat) || body.iat > now + 60 ||
         body.exp - body.iat > PLAYBACK_SESSION) return false;
-    const expected = await hmac(enc.encode(env.JWT_SECRET), enc.encode(parts[0] + '.' + parts[1]));
+    const expected = await hmac(await signingSecret(env, 'playback'), enc.encode(parts[0] + '.' + parts[1]));
     const received = unb64(parts[2]);
     if (received.length !== expected.length) return false;
     let diff = 0;
     for (let i = 0; i < expected.length; i++) diff |= expected[i] ^ received[i];
-    return diff === 0 ? body : null;
+    if (diff !== 0) return null;
+    cachePlaybackClaims(token, body);
+    return body;
   } catch { return null; }
 }
 function isTrustedAppOrigin(req, env, value) {
@@ -312,8 +327,10 @@ function storedVideoSource(movie,optionIndex){
   if(typeof raw.url!=='string')return null;
   try{const url=videoSourceUrl(raw.url);return{...raw,url,provider:sourceProvider(url)}}catch{return null}
 }
-const CATALOGUE_CACHE_TTL = 30;
-const MOVIE_METADATA_CACHE_TTL = 30;
+const CATALOGUE_CACHE_TTL = 300;
+const MOVIE_METADATA_CACHE_TTL = 300;
+const movieMetadataMemory = new Map();
+const MOVIE_METADATA_MEMORY_TTL = 30000;
 
 async function publicMovies(env,category,query){
  const sql=sqlFor(env);
@@ -423,19 +440,26 @@ export class MovieMetadata extends WorkerEntrypoint {
 
 async function movieById(ctx, env, movieId) {
   if (!/^[0-9a-f-]{36}$/i.test(movieId)) return { movie: null, cacheStatus: 'BYPASS' };
+  const cached = movieMetadataMemory.get(movieId);
+  if (cached && cached.until > Date.now()) return { movie: cached.movie, cacheStatus: 'MEMORY' };
+  if (cached) movieMetadataMemory.delete(movieId);
   const metadataEntry = ctx.exports.MovieMetadata({ props: { movieId } });
   const response = await metadataEntry.fetch(
     new Request('https://moviwatch.internal/__movie_metadata__v3/' + encodeURIComponent(movieId))
   );
   if (!response.ok) throw new Error('Movie metadata lookup failed (HTTP ' + response.status + ')');
   const payload = await response.json();
+  const movie = payload.movie || null;
+  movieMetadataMemory.set(movieId, { movie, until: Date.now() + MOVIE_METADATA_MEMORY_TTL });
+  while (movieMetadataMemory.size > 256) movieMetadataMemory.delete(movieMetadataMemory.keys().next().value);
   return {
-    movie: payload.movie || null,
+    movie,
     cacheStatus: response.headers.get('cf-cache-status') || 'UNKNOWN'
   };
 }
 
 async function invalidateContentCaches(ctx, movieId) {
+  if (movieId) movieMetadataMemory.delete(movieId);
   // Defer each entrypoint factory call into its own promise. Promise.allSettled()
   // cannot catch a synchronous throw that happens while building an eager array.
   // A cache-purge problem must never turn an already-committed movie edit into
@@ -463,7 +487,7 @@ function driveOAuthStateCookie(nonce, verifier, env, connectionId = 'primary') {
     const now = Math.floor(Date.now() / 1000);
     const body = b64(JSON.stringify({ sub: 'google-drive-oauth', nonce, verifier, connectionId, iat: now, exp: now + 600 }));
     const unsigned = head + '.' + body;
-    return unsigned + '.' + b64(await hmac(enc.encode(env.JWT_SECRET), enc.encode(unsigned)));
+    return unsigned + '.' + b64(await hmac(await signingSecret(env, 'google-drive-oauth'), enc.encode(unsigned)));
   })();
 }
 
@@ -481,7 +505,7 @@ async function verifyDriveOAuthState(token, env, expectedNonce) {
         typeof body.connectionId !== 'string' || !/^(primary|[0-9a-f-]{36})$/i.test(body.connectionId) ||
         !Number.isInteger(body.iat) || body.iat > now + 60 ||
         !Number.isInteger(body.exp) || body.exp <= now || body.exp - body.iat > 600) return null;
-    const expected = await hmac(enc.encode(env.JWT_SECRET), enc.encode(parts[0] + '.' + parts[1]));
+    const expected = await hmac(await signingSecret(env, 'google-drive-oauth'), enc.encode(parts[0] + '.' + parts[1]));
     const received = unb64(parts[2]);
     if (received.length !== expected.length) return null;
     let diff = 0;
@@ -2018,8 +2042,13 @@ async function api(req, env, ctx) {
     const body = await readBody(req);
     const movieId = typeof body.movieId === 'string' ? body.movieId : '';
     if (!/^[0-9a-f-]{36}$/i.test(movieId)) return json({ error: 'A valid movie ID is required.' }, 400);
+    const existing = getCookieValue(req, playbackCookieName(movieId));
+    const existingClaims = existing ? await validPlaybackToken(env, existing) : null;
+    if (existingClaims && existingClaims.mid.toLowerCase() === movieId.toLowerCase()) {
+      return json({ ok: true, expiresIn: Math.max(0, existingClaims.exp - Math.floor(Date.now() / 1000)), reused: true });
+    }
     const token = await makePlaybackToken(env, movieId);
-    return json({ ok: true, expiresIn: PLAYBACK_SESSION }, 200, {
+    return json({ ok: true, expiresIn: PLAYBACK_SESSION, reused: false }, 200, {
       'set-cookie': playbackCookieName(movieId) + '=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/api/; Max-Age=' + PLAYBACK_SESSION
     });
   }
