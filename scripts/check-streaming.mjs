@@ -3,8 +3,10 @@ import { readFileSync } from 'node:fs';
 import { Script } from 'node:vm';
 import { archiveDownloadUrl, sourceProvider, videoSourceUrl } from '../src/video-sources.js';
 import { getVideoRangeWindow } from '../src/video-range-window.js';
+import { createRangeRelayStream } from '../src/video-stream.js';
 
 const worker = readFileSync('src/index.js', 'utf8');
+const videoStream = readFileSync('src/video-stream.js', 'utf8');
 const sourceModule = readFileSync('src/video-sources.js', 'utf8');
 const watch = readFileSync('public/watch.html', 'utf8');
 const admin = readFileSync('public/admin.html', 'utf8');
@@ -87,7 +89,24 @@ assertIncludes(worker, 'end = responseWindow.end;', 'The 206 response end must u
 assert.ok(!worker.includes('const nextChunkStart = chunk.end + 1'), 'Worker must not speculatively fetch a successor chunk during a seek');
 assertIncludes(worker, 'const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024', '1 MiB conventional MP4 startup segment missing');
 assertIncludes(worker, 'const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024', '512 KiB fMP4 startup segment missing');
-assertIncludes(worker, 'const starts = [0]', 'Cold-start prefetch must fetch only the first segment');
+assertIncludes(worker, "import { createRangeRelayStream } from './video-stream.js'", 'Progressive range relay must be wired into the Worker');
+assertIncludes(worker, 'createRangeRelayStream({', 'Cache chunks must be relayed without a whole-chunk arrayBuffer');
+assertIncludes(worker, 'const VIDEO_DIRECT_SEEK_THRESHOLD = 256 * 1024', 'Cold seeks must bypass large aligned-prefix waits');
+assertIncludes(worker, "['MISS', 'EXPIRED'].includes(firstChunk.cacheStatus)", 'Direct cold seek must require an explicit cache miss/bypass status');
+assertIncludes(worker, 'fetchConfiguredVideoRange(source, responseStart, responseEnd, env, 0, true, req.signal)', 'Cold cache misses must request the exact seek byte range for immediate playback');
+assertIncludes(worker, "x-moviwatch-cold-seek-direct': String(directSeek)", 'Cold-seek direct-path diagnostics missing');
+assertIncludes(worker, "x-moviwatch-cache-acquire-ms': String(cacheAcquireMs)", 'Cache acquisition timing diagnostics missing');
+assertIncludes(worker, "x-moviwatch-direct-seek-setup-ms': String(directSeekSetupMs)", 'Direct range setup timing diagnostics missing');
+assertIncludes(worker, "ctx.waitUntil(branches[1].pipeTo(new WritableStream({ write() {} }))", 'A separate background branch must finish filling the shared cache segment');
+
+assertIncludes(worker, 'fetchConfiguredVideoRange(source, chunkStart, requestedEnd, env, 0, true)', 'Cold chunk fills must stream directly from the upstream provider');
+assertIncludes(worker, "'x-moviwatch-stream-mode': streamMode", 'Progressive stream diagnostics missing');
+assertIncludes(worker, "'x-moviwatch-cache': firstChunk.cacheStatus", 'Cache status must survive the progressive relay');
+const chunkFillStart = worker.indexOf('async function fetchAndCacheVideoChunk');
+const chunkFillEnd = worker.indexOf('export class VideoHeader', chunkFillStart);
+assert.ok(chunkFillStart >= 0 && chunkFillEnd > chunkFillStart &&
+  !worker.slice(chunkFillStart, chunkFillEnd).includes('arrayBuffer()'),
+  'Cache segment fill must stream, not buffer, the entire upstream segment');
 assertIncludes(worker, 'const startupSize = fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE', 'Startup/continuation byte-range alignment missing');
 assertIncludes(worker, 'const VIDEO_CACHE_TTL = 24 * 60 * 60', '24-hour shared video cache TTL missing');
 assertIncludes(worker, "'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600'", 'Complete video chunks must remain cacheable for 24 hours');
@@ -109,7 +128,7 @@ assertIncludes(worker, 'const requestedEnd = end;', 'Original browser range end 
 assertIncludes(worker, "'cache-tag': 'video-chunks-' + movieId", 'Video chunks need a movie-level cache purge tag');
 assertIncludes(worker, "ctx.exports.VideoChunk({", 'Cached chunk entrypoint not used');
 assertIncludes(worker, "ctx.exports.VideoHeader({", 'Cached header entrypoint not used');
-assertIncludes(worker, "'x-moviwatch-cache': cacheStatus", 'Cache diagnostics header missing');
+assertIncludes(worker, "'x-moviwatch-cache': firstChunk.cacheStatus", 'Cache diagnostics header missing');
 assertIncludes(worker, "'accept-ranges': 'bytes'", 'Range support header missing');
 
 // Public source metadata carries an original array index, never an upstream URL.
@@ -222,7 +241,13 @@ console.log('Drive/Archive URL, provider, cache, native HTML5 playback, protecte
 // Google Drive Manager: OAuth, private references and management routes stay server-side.
 assertIncludes(worker, "provider:'google-drive-private'", 'Private Drive sources must use an internal provider marker');
 assertIncludes(worker, 'googleDriveApiRequest(sqlFor(env), env, mediaUrl', 'Private Drive video ranges must be authorized by the Worker');
-assertIncludes(worker, 'fetchConfiguredVideoRange(source, cursor, requestedEnd, env)', 'Private Drive bytes must enter the existing shared chunk cache');
+assertIncludes(worker, 'fetchConfiguredVideoRange(source, nextStart, nextEnd, env, 0, true, signal)', 'Private Drive continuation ranges must enter the progressive shared chunk cache');
+assertIncludes(worker, 'recordArchiveFailure(details.identifier, candidate.host)', 'Archive.org stream failures must cool down the failed mirror');
+assertIncludes(worker, 'AbortSignal.any([timeoutSignal, externalSignal])', 'Viewer cancellation must abort pending provider range requests');
+assertIncludes(worker, 'fetchConfiguredVideoRange(source, responseStart, responseEnd, env, 0, true, req.signal)', 'Direct cold seeks must be tied to the browser request cancellation signal');
+assertIncludes(videoStream, "maxRetries = 2", 'Stream relay retries must be bounded');
+assertIncludes(videoStream, "abortController.abort(reason)", 'Cancelled playback must abort a pending continuation fetch');
+assertIncludes(videoStream, "currentRange.start + currentBytes", 'A failed upstream stream must resume at the first missing byte');
 assertIncludes(worker, "pathname === '/api/google-drive/oauth/callback'", 'OAuth callback route missing');
 assertIncludes(worker, "path.startsWith('/api/admin/google-drive/')", 'Google Drive management must stay under the admin API gate');
 assertIncludes(worker, 'refresh_token_ciphertext', 'Google refresh tokens must be encrypted at rest');
@@ -232,3 +257,191 @@ assertIncludes(admin, 'id="googleDrivePanel"', 'Admin Google Drive Manager UI mi
 assertIncludes(worker, 'drive-private://', 'Admin API must preserve private Drive references without exposing them publicly');
 assertIncludes(admin, "'Content-Range':'bytes '+offset+'-'+end+'/'+file.size", 'Admin uploads must send explicit byte ranges');
 assert.ok(!/GOOGLE_CLIENT_SECRET|GOOGLE_DRIVE_ENCRYPTION_KEY|refresh_token=/.test(admin), 'Google OAuth secrets must never be embedded in the browser UI');
+
+
+// Progressive cache relay tests: first bytes are delivered before later ranges
+// are requested, partial upstream windows are stitched safely, and corrupt
+// Content-Range/body combinations fail closed.
+function byteStream(parts) {
+  return new ReadableStream({
+    start(controller) {
+      for (const part of parts) controller.enqueue(Uint8Array.from(part));
+      controller.close();
+    }
+  });
+}
+async function readAll(reader) {
+  const output = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) return output;
+    output.push(...value);
+  }
+}
+{
+  let continuationCalls = 0;
+  const relay = createRangeRelayStream({
+    firstPart: { range: { start: 0, end: 1, total: 4 }, body: byteStream([[0], [1]]) },
+    end: 3,
+    total: 4,
+    fetchPart: async (start, end) => {
+      continuationCalls++;
+      assert.equal(start, 2);
+      assert.equal(end, 3);
+      return { range: { start: 2, end: 3, total: 4 }, body: byteStream([[2, 3]]) };
+    }
+  });
+  const reader = relay.getReader();
+  assert.deepEqual([...((await reader.read()).value)], [0]);
+  assert.equal(continuationCalls, 0, 'First upstream bytes should reach the consumer before requesting the next range');
+  assert.deepEqual([...((await reader.read()).value)], [1]);
+  const last = await reader.read();
+  assert.deepEqual([...last.value], [2, 3]);
+  assert.equal(continuationCalls, 1);
+  assert.equal((await reader.read()).done, true);
+}
+{
+  let continuationCalls = 0;
+  const relay = createRangeRelayStream({
+    firstPart: { range: { start: 0, end: 0, total: 3 }, body: byteStream([[0]]) },
+    end: 2,
+    total: 3,
+    fetchPart: async (start) => {
+      continuationCalls++;
+      return { range: { start, end: 2, total: 3 }, body: byteStream([[1, 2]]) };
+    }
+  });
+  const reader = relay.getReader();
+  const first = await readAll(reader);
+  assert.deepEqual(first, [0, 1, 2]);
+  assert.equal(continuationCalls, 1);
+}
+{
+  let continuationCalls = 0;
+  const relay = createRangeRelayStream({
+    firstPart: { range: { start: 0, end: 1, total: 4 }, body: byteStream([[0]]) },
+    end: 1,
+    total: 4,
+    fetchPart: async (start, end) => {
+      continuationCalls++;
+      assert.equal(start, 1);
+      assert.equal(end, 1);
+      return { range: { start: 1, end: 1, total: 4 }, body: byteStream([[1]]) };
+    }
+  });
+  const reader = relay.getReader();
+  assert.deepEqual(await readAll(reader), [0, 1]);
+  assert.equal(continuationCalls, 1, 'A truncated upstream body must resume at the first missing byte');
+}
+{
+  const relay = createRangeRelayStream({
+    firstPart: { range: { start: 0, end: 0, total: 3 }, body: byteStream([[0]]) },
+    end: 2,
+    total: 3,
+    fetchPart: async () => ({
+      range: { start: 2, end: 2, total: 3 },
+      body: byteStream([[2]])
+    })
+  });
+  const reader = relay.getReader();
+  assert.deepEqual([...((await reader.read()).value)], [0]);
+  await assert.rejects(() => reader.read(), /non-contiguous or inconsistent byte range/);
+}
+{
+  let continuationCalls = 0;
+  const relay = createRangeRelayStream({
+    firstPart: { range: { start: 0, end: 1, total: 4 }, body: byteStream([[0], [1]]) },
+    end: 3,
+    total: 4,
+    fetchPart: async () => { continuationCalls++; throw new Error('cancelled relay fetched extra bytes'); }
+  });
+  const reader = relay.getReader();
+  await reader.read();
+  await reader.cancel();
+  assert.equal(continuationCalls, 0, 'Cancelled playback must not trigger an extra upstream range');
+}
+
+// A source can fail after sending part of a declared range. The relay resumes
+// from the first missing byte, so it never repeats or skips already-emitted data.
+{
+  let continuationCalls = 0;
+  let sentFirstByte = false;
+  const interrupted = new ReadableStream({
+    pull(controller) {
+      if (!sentFirstByte) {
+        sentFirstByte = true;
+        controller.enqueue(Uint8Array.from([0]));
+      } else {
+        controller.error(new Error('simulated upstream connection reset'));
+      }
+    }
+  });
+  const relay = createRangeRelayStream({
+    firstPart: { range: { start: 0, end: 2, total: 3 }, body: interrupted },
+    end: 2,
+    total: 3,
+    fetchPart: async (start, end) => {
+      continuationCalls++;
+      assert.equal(start, 1, 'Resume must start at the first byte not already delivered');
+      assert.equal(end, 2);
+      return { range: { start: 1, end: 2, total: 3 }, body: byteStream([[1, 2]]) };
+    }
+  });
+  const reader = relay.getReader();
+  const output = await readAll(reader);
+  assert.deepEqual(output, [0, 1, 2]);
+  assert.equal(continuationCalls, 1);
+}
+{
+  let sentFirstByte = false;
+  const interrupted = new ReadableStream({
+    pull(controller) {
+      if (!sentFirstByte) {
+        sentFirstByte = true;
+        controller.enqueue(Uint8Array.from([0]));
+      } else {
+        controller.error(new Error('simulated permanent reset'));
+      }
+    }
+  });
+  const relay = createRangeRelayStream({
+    firstPart: { range: { start: 0, end: 2, total: 3 }, body: interrupted },
+    end: 2,
+    total: 3,
+    maxRetries: 0,
+    fetchPart: async () => { throw new Error('maxRetries=0 must not retry'); }
+  });
+  const reader = relay.getReader();
+  assert.deepEqual([...((await reader.read()).value)], [0]);
+  await assert.rejects(() => reader.read(), /simulated permanent reset/);
+}
+
+
+// When a viewer cancels during an upstream continuation request, the relay
+// abort signal must reach that fetch so a discarded seek does not waste bytes.
+{
+  let continuationSignal = null;
+  let markFetchStarted;
+  const fetchStarted = new Promise((resolve) => { markFetchStarted = resolve; });
+  const relay = createRangeRelayStream({
+    firstPart: { range: { start: 0, end: 0, total: 2 }, body: byteStream([[0]]) },
+    end: 1,
+    total: 2,
+    fetchPart: async (_start, _end, signal) => {
+      continuationSignal = signal;
+      markFetchStarted();
+      return await new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('upstream continuation aborted')), { once: true });
+      });
+    }
+  });
+  const reader = relay.getReader();
+  assert.deepEqual([...((await reader.read()).value)], [0]);
+  const pending = reader.read();
+  await fetchStarted;
+  await reader.cancel('viewer seeked elsewhere');
+  assert.ok(continuationSignal?.aborted, 'Cancel must abort the pending upstream Range fetch');
+  await pending.catch(() => {});
+}
+
+console.log('Progressive range relay, upstream continuation, truncation, discontinuity and cancellation checks passed.');
