@@ -15,7 +15,7 @@ A movie catalogue with Google Drive and Archive.org byte-range streaming. The fr
 - Audio-track switching is shown only when the browser exposes multiple native `audioTracks`; browser support varies, and Chromium-based browsers may not expose this API.
 - HTTP Range support for playback, browser seeking, and HEAD metadata requests. Both playback and downloads stay behind the same-origin Cloudflare Worker; neither provider's raw media URL is returned to public clients.
 - Cloudflare Workers Cache stores complete 8 MiB video chunks for 24 hours through separately cached Worker entrypoints. Chunk keys include the source URL hash, movie, option index, source version, range start, and chunk size—not a viewer or browser ID—so the same cached bytes can be reused by other viewers.
-- Fragmented MP4 detection uses a compact header probe, a 512 KiB initial Worker segment, and 8 MiB continuation chunks in Cloudflare's shared cache; the player requests at most 1 MiB at a time and prefetches one upcoming piece during playback.
+- Fragmented MP4 detection uses a compact header probe, a 512 KiB initial Worker segment, and 8 MiB continuation chunks in Cloudflare's shared cache; the Worker warms the next cache chunk in the background while streaming.
 - Public catalogue responses expose only labels, providers, and source indexes. Raw Google Drive and Archive.org source URLs remain in the internal metadata path and are never sent to public watch pages.
 - Admin secrets stay in Cloudflare Worker Secrets.
 
@@ -110,7 +110,7 @@ The watch page uses the browser's native HTML5 `<video>` element with `controls`
 
 The native media element controls range requests and buffering. The Worker still streams only the requested byte ranges and can reuse its existing shared cache; the browser decides its own buffering and seek strategy.
 
-Cloudflare Workers continue to store complete 8 MiB video chunks for 24 hours. The player sends smaller 1 MiB ranges, and the Worker assembles those responses from the shared 8 MiB edge-cache chunks. Cache keys use the movie, source/version and byte position—not a viewer or browser ID—so later visitors can reuse the cached bytes instead of re-reading the same content from Drive or Archive.org. The first cold request in a Cloudflare cache location can still need an upstream fetch.
+Cloudflare Workers continue to store complete 8 MiB video chunks for 24 hours. The native browser sends HTTP Range requests, and the Worker assembles those requested bytes from shared 8 MiB edge-cache chunks. Cache keys use the movie, source/version and byte position—not a viewer or browser ID—so later visitors can reuse the cached bytes instead of re-reading the same content from Drive or Archive.org. The first cold request in a Cloudflare cache location can still need an upstream fetch.
 
 For fragmented MP4, the Worker's first cached segment remains 512 KiB; later Worker cache chunks remain 8 MiB. Conventional MP4 files use 8 MiB-aligned Worker chunks. The native browser player chooses the exact Range sizes it needs.
 
