@@ -1103,10 +1103,28 @@ async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverrid
     throw new Error('Invalid private Google Drive video source');
   }
   const signal = AbortSignal.timeout(timeoutOverride || Math.max(45000, Math.min(5 * 60 * 1000, 30000 + (end - start + 1) / (192 * 1024) * 2000)));
-  const upstream = await googleDriveApiRequest(sqlFor(env), env, source.url, {
-    headers: new Headers({ Range: 'bytes=' + start + '-' + end, 'Accept-Encoding': 'identity' }),
-    signal
-  });
+  const rangeHeaders = new Headers({ Range: 'bytes=' + start + '-' + end, 'Accept-Encoding': 'identity' });
+  let mediaUrl = source.url;
+  let upstream = null;
+  for (let hop = 0; hop <= 5; hop++) {
+    upstream = hop === 0
+      ? await googleDriveApiRequest(sqlFor(env), env, mediaUrl, { headers: rangeHeaders, signal })
+      : await fetch(mediaUrl, { method: 'GET', headers: rangeHeaders, signal, redirect: 'manual' });
+    if (![301, 302, 303, 307, 308].includes(upstream.status)) break;
+    const location = upstream.headers.get('location');
+    try { await upstream.body?.cancel(); } catch {}
+    if (!location || hop === 5) throw new Error('Google Drive media redirect limit reached.');
+    const redirected = new URL(location, mediaUrl);
+    const host = redirected.hostname.toLowerCase();
+    const trustedRedirect = host === 'drive.usercontent.google.com' ||
+      host === 'drive.google.com' || host === 'googleusercontent.com' ||
+      host.endsWith('.googleusercontent.com') || host.endsWith('.googleapis.com');
+    if (redirected.protocol !== 'https:' || !trustedRedirect) {
+      throw new Error('Google Drive returned an untrusted media redirect.');
+    }
+    mediaUrl = redirected.toString();
+  }
+  if (!upstream) throw new Error('Google Drive media request returned no response.');
   if (upstream.status === 416) {
     const unsatisfied = /^bytes \*\/([0-9]+)$/.exec(upstream.headers.get('content-range') || '');
     try { await upstream.body?.cancel(); } catch {}
