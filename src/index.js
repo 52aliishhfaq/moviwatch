@@ -3,6 +3,11 @@ import { Redis } from '@upstash/redis';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { videoSourceUrl, sourceProvider } from './video-sources.js';
 import {
+  VIDEO_CHUNK_SIZE, VIDEO_STARTUP_CHUNK_SIZE, VIDEO_FRAGMENT_START_CHUNK_SIZE,
+  parseByteRange, parseContentRange, mp4MoovEnd, mp4HasMvex,
+  videoChunkStartForOffset, videoChunkSizeAt
+} from './video-range.js';
+import {
   clearGoogleDriveAccessTokenCache,
   decryptGoogleDriveSecret,
   encryptGoogleDriveSecret,
@@ -1241,30 +1246,8 @@ async function videoSourceFetch(source, method, headers, signal, budget = null) 
 
 // Video edge cache: store complete 8 MiB continuation chunks as cacheable 200 responses.
 // The public response is reconstructed as a standards-compliant 206 response.
-const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024;
-// Keep cold-start transfers small; startup sizes are bounded overrides of the same chunk policy.
-const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024;
-// Fragmented MP4 keeps its initial moov + first media fragments even more compact.
-const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024;
 const VIDEO_HEADER_PROBE_SIZE = 16 * 1024;
 const VIDEO_CACHE_TTL = 24 * 60 * 60;
-
-function parseByteRange(value) {
-  if (typeof value !== 'string' || !value.startsWith('bytes=')) return null;
-  const spec = value.slice(6).trim();
-  if (spec.includes(',')) return { invalid: true };
-  const match = /^([0-9]*)-([0-9]*)$/.exec(spec);
-  if (!match || (!match[1] && !match[2])) return { invalid: true };
-  if (!match[1]) {
-    const suffix = Number(match[2]);
-    return Number.isSafeInteger(suffix) && suffix > 0 ? { suffix } : { invalid: true };
-  }
-  const start = Number(match[1]);
-  const end = match[2] ? Number(match[2]) : null;
-  if (!Number.isSafeInteger(start) || start < 0 ||
-      (end !== null && (!Number.isSafeInteger(end) || end < start))) return { invalid: true };
-  return { start, end };
-}
 
 function sniffVideoContainer(bytes) {
   // ISO-BMFF files can place free/wide boxes before the ftyp signature.
@@ -1284,14 +1267,6 @@ function sniffVideoContainer(bytes) {
   if (bytes.length >= 3 && String.fromCharCode(...bytes.subarray(0, 3)) === 'FLV') return 'flv';
   if (bytes.length >= 1 && bytes[0] === 0x47) return 'mpeg-ts-or-unknown';
   return 'unknown';
-}
-
-function parseContentRange(value) {
-  const match = new RegExp('^bytes ([0-9]+)-([0-9]+)/([0-9]+)$').exec(value || '');
-  if (!match) return null;
-  const start = Number(match[1]), end = Number(match[2]), total = Number(match[3]);
-  if (![start, end, total].every(Number.isSafeInteger) || end < start || total <= end) return null;
-  return { start, end, total };
 }
 
 async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, chunkStart, chunkSize = VIDEO_CHUNK_SIZE) {
@@ -1375,105 +1350,7 @@ async function getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourc
   return value;
 }
 
-function mp4MoovEnd(bytes) {
-  // Parse top-level ISO-BMFF boxes from the small cached file-header probe.
-  let offset = 0;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  for (let count = 0; count < 16 && offset + 8 <= bytes.byteLength; count++) {
-    let size = view.getUint32(offset);
-    const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
-    let headerSize = 8;
-    if (size === 1) {
-      if (offset + 16 > bytes.byteLength) return null;
-      const largeSize = view.getBigUint64(offset + 8);
-      if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return null;
-      size = Number(largeSize);
-      headerSize = 16;
-    } else if (size === 0) {
-      return null;
-    }
-    if (size < headerSize) return null;
-    if (type === 'moov') {
-      const end = offset + size;
-      return Number.isSafeInteger(end) && end <= 64 * 1024 * 1024 ? end : null;
-    }
-    if (offset + size > bytes.byteLength) return null;
-    offset += size;
-  }
-  return null;
-}
-
-function mp4HasMvex(bytes) {
-  // A fragmented MP4 has an mvex box as a direct child of its initial moov.
-  // Return false when the complete moov is not present in the tiny probe.
-  let offset = 0;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  for (let count = 0; count < 16 && offset + 8 <= bytes.byteLength; count++) {
-    let size = view.getUint32(offset);
-    const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
-    let headerSize = 8;
-    if (size === 1) {
-      if (offset + 16 > bytes.byteLength) return false;
-      const largeSize = view.getBigUint64(offset + 8);
-      if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return false;
-      size = Number(largeSize);
-      headerSize = 16;
-    } else if (size === 0) return false;
-    if (size < headerSize || offset + size > bytes.byteLength) return false;
-    if (type === 'moov') {
-      const moovEnd = offset + size;
-      let child = offset + headerSize;
-      while (child + 8 <= moovEnd) {
-        let childSize = view.getUint32(child);
-        const childType = String.fromCharCode(bytes[child + 4], bytes[child + 5], bytes[child + 6], bytes[child + 7]);
-        let childHeader = 8;
-        if (childSize === 1) {
-          if (child + 16 > moovEnd) return false;
-          const largeSize = view.getBigUint64(child + 8);
-          if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return false;
-          childSize = Number(largeSize);
-          childHeader = 16;
-        } else if (childSize === 0) return false;
-        if (childSize < childHeader || child + childSize > moovEnd) return false;
-        if (childType === 'mvex') return true;
-        child += childSize;
-      }
-      return false;
-    }
-    offset += size;
-  }
-  return false;
-}
-
-function videoChunkStartForOffset(offset, fragmented) {
-  const startupSize = fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE;
-  if (offset < startupSize) return 0;
-  return startupSize + Math.floor((offset - startupSize) / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
-}
-
-function videoChunkSizeAt(chunkStart, fragmented) {
-  if (chunkStart !== 0) return VIDEO_CHUNK_SIZE;
-  return fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE;
-}
-
-async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverride = 0, budget = null) {
-  if (source?.provider !== 'google-drive-private') {
-    return fetchVideoRangeFromMirrors(source.url, start, end, timeoutOverride, budget);
-  }
-  if (!isGoogleDriveFileId(source.fileId) || source.url !== googleDriveMediaUrl(source.fileId)) {
-    throw new Error('Invalid private Google Drive video source');
-  }
-  const signal = AbortSignal.timeout(timeoutOverride || Math.max(45000, Math.min(5 * 60 * 1000, 30000 + (end - start + 1) / (192 * 1024) * 2000)));
-  const rangeHeaders = new Headers({ Range: 'bytes=' + start + '-' + end, 'Accept-Encoding': 'identity' });
-  let mediaUrl = source.url;
-  let upstream = null;
-  for (let hop = 0; hop <= 5; hop++) {
-    upstream = hop === 0
-      ? await googleDriveApiRequest(sqlFor(env), env, mediaUrl, { headers: rangeHeaders, signal }, source.accountId || 'primary', budget)
-      : (consumeUpstreamBudget(budget), await fetch(mediaUrl, { method: 'GET', headers: rangeHeaders, signal, redirect: 'manual' }));
-    if (![301, 302, 303, 307, 308].includes(upstream.status)) break;
-    const location = upstream.headers.get('location');
-    try { await upstream.body?.cancel(); } catch {}
+y { await upstream.body?.cancel(); } catch {}
     if (!location || hop === 5) throw new Error('Google Drive media redirect limit reached.');
     const redirected = new URL(location, mediaUrl);
     const host = redirected.hostname.toLowerCase();
