@@ -58,15 +58,15 @@ assertIncludes(worker, 'Anyone with the link (Viewer)', 'Private Drive guidance 
 
 // Edge streaming retains fMP4 startup detection, small initial chunks, range seeking,
 // and a prefetch of the immediate successor segment.
-assertIncludes(worker, 'const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024', '4 MiB continuation chunks missing');
+assertIncludes(rangeModule, 'export const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024', '4 MiB continuation chunks missing');
 assertIncludes(worker, 'const VIDEO_UPSTREAM_FETCH_LIMIT = 6', 'Hard per-chunk upstream fetch budget missing');
 assert.ok(!worker.includes('requests > 128'), 'The legacy 128-range retry loop must stay removed');
 assertIncludes(worker, 'short-range-no-cache', 'Short upstream ranges must bypass shared chunk cache');
 assert.ok(!worker.includes('bytes.set(piece, offset)'), 'Legacy chunk buffer reassembly must stay removed');
-assertIncludes(worker, 'const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024', '1 MiB conventional MP4 startup segment missing');
-assertIncludes(worker, 'const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024', '512 KiB fMP4 startup segment missing');
+assertIncludes(rangeModule, 'export const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024', '1 MiB conventional MP4 startup segment missing');
+assertIncludes(rangeModule, 'export const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024', '512 KiB fMP4 startup segment missing');
 assertIncludes(worker, 'const starts = [0]', 'Cold-start prefetch must fetch only the first segment');
-assertIncludes(worker, 'const startupSize = fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE', 'Startup/continuation byte-range alignment missing');
+assertIncludes(rangeModule, 'const startupSize = fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE', 'Startup/continuation byte-range alignment missing');
 assertIncludes(worker, 'const VIDEO_CACHE_TTL = 24 * 60 * 60', '24-hour shared video cache TTL missing');
 assertIncludes(worker, "'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600'", 'Complete video chunks must remain cacheable for 24 hours');
 assertIncludes(worker, 'props: cachedSourceProps(source, normalizedSourceVersion)', 'Video cache keys must use source identity and version, not viewer identity');
@@ -79,8 +79,8 @@ assertIncludes(worker, 'ARCHIVE_COOLDOWN', 'Archive.org failure cooldown missing
 assertIncludes(worker, 'ARCHIVE_FAST_MIRROR_BPS', 'Archive.org mirror health threshold missing');
 assertIncludes(worker, 'fetchVideoRangeFromMirrors', 'Archive.org per-range failover missing');
 assertIncludes(worker, 'const VIDEO_HEADER_PROBE_SIZE = 16 * 1024', 'Compact video header probe missing');
-assertIncludes(worker, 'mp4MoovEnd(bytes)', 'MP4 moov atom size detection missing');
-assertIncludes(worker, 'mp4HasMvex(bytes)', 'Fragmented MP4 detection missing');
+assertIncludes(rangeModule, 'export function mp4MoovEnd(bytes)', 'MP4 moov atom size detection missing');
+assertIncludes(rangeModule, 'export function mp4HasMvex(bytes)', 'Fragmented MP4 detection missing');
 assertIncludes(worker, 'videoChunkStartForOffset', 'Seek offset mapping must be imported into the Worker');
 assertIncludes(rangeModule, 'export function videoChunkStartForOffset', 'Testable seek offset mapper missing from the pure module');
 assertIncludes(rangeModule, 'export function videoChunkSizeAt', 'Testable chunk sizing helper missing from the pure module');
