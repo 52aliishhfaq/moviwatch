@@ -6,7 +6,6 @@ import { archiveDownloadUrl, sourceProvider, videoSourceUrl } from '../src/video
 const worker = readFileSync('src/index.js', 'utf8');
 const sourceModule = readFileSync('src/video-sources.js', 'utf8');
 const watch = readFileSync('public/watch.html', 'utf8');
-const rangeSource = readFileSync('public/player-range-source.js', 'utf8');
 const admin = readFileSync('public/admin.html', 'utf8');
 const config = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
 const vercel = JSON.parse(readFileSync('vercel.json', 'utf8'));
@@ -104,6 +103,7 @@ assertIncludes(downloadRoute, 'new FixedLengthStream(contentLength)', 'Downloads
 assertIncludes(downloadRoute, 'response.body.pipeTo(fixedLength.writable)', 'Downloads must remain streamed through the fixed-length body');
 assertIncludes(downloadRoute, "headers.set('content-length', String(contentLength))", 'Download Content-Length header must match the enforced stream size');
 assertIncludes(worker, 'cachedVideoRange(', 'Proxy must use the edge chunk cache');
+assertIncludes(worker, "if (req.headers.has('If-Range') && source.provider !== 'google-drive-private')", 'Private Drive If-Range requests must stay on the authenticated shared-cache path');
 assertIncludes(worker, 'content-disposition', 'Google Drive Worker download attachment header missing');
 assert.ok(!worker.includes("Response.redirect(archiveDownloadUrl("), 'Protected downloads must not redirect users to provider URLs');
 assertIncludes(worker, "const PLAYBACK_COOKIE = 'moviwatch_playback'", 'HttpOnly playback session cookie missing');
@@ -127,54 +127,27 @@ assertIncludes(worker, 'content-range', 'HTTP content-range support missing');
 assertIncludes(sourceModule, "return host==='archive.org'||host.endsWith('.archive.org')?'archive.org':'google-drive'", 'Archive provider detection missing');
 assert.ok(!/doodstream|playmogo|voe\.sx/i.test(worker), 'Legacy hosts must not remain in the Worker');
 
-// Vercel / Cloudflare routing and responsive player controls.
-assertIncludes(watch, 'id="video"', 'Movi Player element missing');
-assertIncludes(watch, "const streamUrl='/api/watch/'", 'Player source must use the Worker range endpoint');
-assertIncludes(watch, 'new window.MoviwatchRangeSource(streamUrl', 'Player must use the controlled range adapter');
-assertIncludes(watch, 'video.sourceAdapter=activeRangeSource', 'Movi Player must receive the custom range source');
-assert.ok(!watch.includes('downloadNow') && !watch.includes('Download Now'), 'The lightweight watch page should not show a download UI');
+// Native HTML5 player: no custom player library, WASM, or browser range adapter.
+assertIncludes(watch, '<video id="video" controls playsinline preload="none"', 'Native HTML5 video element with controls and lazy preload missing');
+assertIncludes(watch, "video.src='/api/watch/'", 'Native video must use the protected same-origin Worker range endpoint');
+assertIncludes(watch, "video.src='/api/watch/'+encodeURIComponent(movieId)+'/'+encodeURIComponent(source.source_index)", 'Native video source must be bound to the selected movie/source');
 assertIncludes(watch, "body:JSON.stringify({movieId})", 'Watch page must request a movie-bound playback session');
 assertIncludes(watch, "credentials:'same-origin'", 'Watch page must send the HttpOnly session cookie on same-origin requests');
-
-assert.ok(!watch.includes('source.download_url') && !watch.includes('directUrl.toString()'), 'Watch page must not expose direct provider URLs');
-assertIncludes(watch, "select.hidden=availableSources.length<2", 'Single-source selector must be hidden');
-assertIncludes(watch, "$('#sourceBar').hidden=availableSources.length<2", 'Only show source switching when there are multiple sources');
-assert.ok(!watch.includes('class="hint"'), 'Remove the verbose player helper paragraph');
+assertIncludes(watch, 'id="downloadNow"', 'Protected Download Now action missing');
+assertIncludes(watch, "'/api/download/'+encodeURIComponent(movieId)+'/'+encodeURIComponent(source.source_index)", 'Download Now must use protected Worker attachment route');
+assertIncludes(worker.slice(downloadStart, downloadEnd), 'content-disposition', 'Download should remain an attachment served by Worker');
+assert.ok(!watch.includes('movi-player') && !watch.includes('MoviwatchRangeSource') &&
+  !watch.includes('player-range-source.js') && !watch.includes('element.slim.global.js') &&
+  !watch.includes('movi.wasm'), 'The watch page must not load or depend on Movi-Player or its range adapter');
+assert.ok(!watch.includes('download_url') && !watch.includes('directUrl.toString()'), 'Watch page must not expose provider URLs');
 assertIncludes(watch, 'id="sourceSelect"', 'Multiple source selector missing');
-assertIncludes(watch, 'const PLAYER_BUFFER_SIZE_MB=12', '12 MiB lightweight player memory limit missing');
-assertIncludes(watch, 'const PLAYER_RANGE_CHUNK_SIZE=1024*1024', '1 MiB player request size missing');
-assertIncludes(watch, 'const PLAYER_PREFETCH_AHEAD=1', 'Lightweight player should prefetch only one range ahead');
-assertIncludes(watch, 'preload="none" buffersize="12"', 'Video data must remain unloaded until the viewer presses Play, with a 12 MiB buffer cap');
-assertIncludes(watch, 'sw="auto"', 'Player must silently fall back from hardware to software decoding');
-assert.ok(!watch.includes('Loading video…') && !watch.includes('id="loading"'), 'Do not show the duplicate loading-video label');
-assertIncludes(watch, "We could not start this video. Please try again.", 'Player failures must use a concise customer-facing message');
-assertIncludes(watch, 'movi-player::part(error-screen)', 'Hide raw internal decoder error overlay in favour of app recovery UI');
-assertIncludes(watch, 'element.slim.global.js', 'Use the smaller Movi-Player slim bundle');
-assertIncludes(watch, 'persist="volume audiolang"', 'Remember volume and selected audio language');
-assertIncludes(watch, 'id="bigPlay"', 'Minimal custom play button missing');
-assertIncludes(watch, 'id="audioSelect"', 'Conditional audio language selector missing');
-assertIncludes(watch, 'video.getAudioLangs()', 'Use the supported language-keyed audio track API');
-assertIncludes(watch, 'video.selectAudioLang(lang)', 'Use the supported audio language switch API');
-assertIncludes(watch, 'currentAudioTracks.length<2', 'Hide audio selector when the source is not dual-audio');
-assertIncludes(watch, 'const PLAYER_BUFFER_SIZE_MB=12', 'Custom player browser cache and engine memory cap missing');
-assertIncludes(watch, 'let playerLibrariesReady=false,playerLibraryError=false,mediaAuthorized=false', 'Playback controls must be gated by the signed playback session');
-assertIncludes(watch, "if(currentAudioTracks.length<2)", 'Audio menu must be hidden unless the source has multiple audio tracks');
-assertIncludes(watch, "const switched=await video.selectAudioLang(lang)", 'Audio switching must call the supported element API');
-assert.ok(!watch.includes('wasmurl='), 'Allow the slim build to use its built-in native fallback');
-assert.ok(!watch.includes(' id="video" controls'), 'Do not render the heavy built-in settings/control UI');
-assertIncludes(watch, "video.preload='none'", 'Player source must keep native preload disabled until the user plays');
-assertIncludes(watch, "video.setAttribute('buffersize',String(PLAYER_BUFFER_SIZE_MB))", 'Player fallback buffer cap must be applied on every source selection');
-assertIncludes(watch, "activeRangeSource.setPlaybackActive(true)", 'Player must enable prefetch while playing');
-assertIncludes(watch, "activeRangeSource.setPlaybackActive(false)", 'Player must stop speculative prefetch when paused or stopped');
-assertIncludes(rangeSource, 'const CHUNK_SIZE = 1024 * 1024', 'Range adapter must request at most 1 MiB per piece');
-assertIncludes(rangeSource, 'const DEFAULT_MAX_CACHE_BYTES = 32 * 1024 * 1024', 'Range adapter must retain a bounded 32 MiB LRU cache');
-assertIncludes(rangeSource, 'const DEFAULT_PREFETCH_AHEAD = 2', 'Range adapter must prefetch two chunks ahead');
-assertIncludes(rangeSource, "Range: 'bytes=' + start + '-' + end", 'Range adapter must issue explicit HTTP byte ranges');
-assertIncludes(rangeSource, 'this._prefetchAfter(lastIndex)', 'Range adapter must warm upcoming segments after active reads');
-assertIncludes(rangeSource, 'this._cancelSpeculative()', 'Range adapter must cancel speculative reads on pause/seek');
-assertIncludes(watch, "video.addEventListener('statechange'", 'Buffering state must use Movi Player statechange events');
-assertIncludes(watch, "video.addEventListener('loadeddata'", 'Player startup must use its supported loadeddata event');
-assert.ok(!watch.includes('video.load();'), 'Movi Player loads on src assignment; avoid redundant native load() calls');
+assertIncludes(watch, 'select.hidden=availableSources.length<2', 'Single-source selector must be hidden');
+assertIncludes(watch, 'getNativeAudioTracks()', 'Native audio track feature detection missing');
+assertIncludes(watch, 'list[index].enabled=index===selected', 'Audio selector must switch native AudioTrack.enabled state');
+assertIncludes(watch, "if(!list||list.length<2)", 'Audio selector must be hidden unless native video exposes multiple tracks');
+assertIncludes(watch, "video.addEventListener('loadedmetadata',bindNativeAudioTrackEvents)", 'Native audio tracks must be discovered after metadata loads');
+assertIncludes(watch, 'preload="none"', 'Native video must not preload media before the viewer plays');
+assertIncludes(watch, 'controlslist="nodownload"', 'Use native browser controls without a duplicate browser download action');
 assertIncludes(watch, 'aspect-ratio:16/9', 'Responsive 16:9 player shell missing');
 assertIncludes(watch, '/manifest.webmanifest', 'Watch page PWA manifest missing');
 assert.ok(!/doodstream|playmogo|voe\.sx/i.test(watch), 'Legacy providers must not remain on the watch page');
@@ -195,7 +168,6 @@ for (const name of ['PublicCatalogue', 'MovieMetadata', 'VideoChunk', 'VideoHead
 }
 
 // Browser inline scripts in all pages are syntactically valid.
-new Script(rangeSource, { filename: 'public/player-range-source.js' });
 for (const file of ['public/index.html', 'public/watch.html', 'public/admin.html']) {
   const html = readFileSync(file, 'utf8');
   const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
@@ -208,14 +180,14 @@ for (const file of ['public/index.html', 'public/watch.html', 'public/admin.html
 assertIncludes(readme, 'Drive and Archive.org byte-range streaming', 'README must describe the restored providers');
 assertIncludes(readme, 'cannot guarantee zero buffering', 'README must document realistic buffering limits');
 assertIncludes(readme, '8 MiB continuation chunks', 'README must document 8 MiB chunks');
-assertIncludes(readme, '12 MiB', 'README must document the bounded lightweight player memory buffer');
+assertIncludes(readme, 'Native HTML5', 'README must document native HTML5 playback');
 assertIncludes(readme, '24 hours', 'README must document the shared edge cache TTL');
-assertIncludes(readme, 'not shared between browsers', 'README must distinguish private player memory from shared edge caching');
+assertIncludes(readme, 'browser decides its own buffering', 'README must document native browser-controlled buffering');
 assertIncludes(readme, 'https://archive.org/download/IDENTIFIER/FILENAME', 'README must document canonical direct Archive.org downloads');
 assertIncludes(readme, 'd1', 'README must document mirror failover');
 
 assertIncludes(readme, 'A watch page obtains a short-lived signed playback session', 'README must describe the new playback authorization');
-console.log('Drive/Archive URL, provider, cache, range, protected playback, admin, lightweight watch player, dual-audio switching and inline-script checks passed.');
+console.log('Drive/Archive URL, provider, cache, native HTML5 playback, protected Range/download, native audio-track selection, admin and inline-script checks passed.');
 
 // Google Drive Manager: OAuth, private references and management routes stay server-side.
 assertIncludes(worker, "provider:'google-drive-private'", 'Private Drive sources must use an internal provider marker');

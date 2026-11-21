@@ -10,8 +10,6 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="/assets/moviwatch-app-icon.svg">
 <link rel="apple-touch-icon" href="/assets/moviwatch-app-icon-180.png">
-<link rel="preconnect" href="https://drive.usercontent.google.com">
-<link rel="preconnect" href="https://archive.org">
 <title>Watch · Moviwatch</title>
 <style>
 :root{color-scheme:dark;--bg:#080d18;--panel:#111a2b;--line:#26334a;--muted:#9eabc4;--accent:#7185ff}
@@ -27,34 +25,19 @@ main{width:min(1160px,calc(100% - 40px));margin:30px auto 64px}
 .heading{margin-bottom:16px}
 h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px}
 .meta{color:var(--muted);margin:8px 0 0;font-size:14px}
-.player-shell{position:relative;overflow:hidden;padding:10px;background:#05080e;border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 60px #0005}
+.player-shell{overflow:hidden;padding:10px;background:#05080e;border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 60px #0005}
 .video-stage{position:relative;aspect-ratio:16/9;background:#000;border-radius:9px;overflow:hidden}
-movi-player{display:block;width:100%;height:100%;min-height:0;aspect-ratio:16/9;background:#000;--movi-accent:var(--accent);--movi-background:#05080e;--movi-panel:#111a2b;--movi-text:#f4f6fc}
-movi-player::part(error-screen){display:none!important}
-.big-play{position:absolute;inset:0;display:grid;place-items:center;width:100%;height:100%;border:0;background:linear-gradient(transparent,#0005);color:#fff;cursor:pointer}
-.big-play span{display:grid;place-items:center;width:76px;height:76px;border:1px solid #ffffff80;border-radius:50%;background:#111a2bdc;font-size:28px;box-shadow:0 8px 36px #0009;backdrop-filter:blur(8px)}
-.big-play:hover span{background:#6478f4}
-.big-play[hidden]{display:none}
-.status{min-height:0;margin:8px 4px 0;color:var(--muted);font-size:12px}
+video{display:block;width:100%;height:100%;background:#000;object-fit:contain}
+.status{margin:9px 4px 0;color:var(--muted);font-size:12px}
 .status.error{color:#ff9d9d}
 .status:empty{display:none}
-.player-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding:4px 2px}
-.control-button{display:inline-grid;place-items:center;flex:0 0 auto;width:38px;height:36px;border:1px solid #35425c;border-radius:8px;background:#111a2b;color:#f4f6fc;font:inherit;font-size:16px;cursor:pointer}
-.control-button:hover{background:#1c2a43;border-color:#6578f5}
-.control-button:disabled{opacity:.45;cursor:not-allowed}
-.time-label{flex:0 0 auto;min-width:82px;color:#d9e0f1;font-size:12px;font-variant-numeric:tabular-nums;text-align:center}
-.progress-control{flex:1 1 140px;min-width:80px;accent-color:#788aff;cursor:pointer}
-.volume-control{display:flex;align-items:center;gap:6px}
-.volume-control input{width:76px;accent-color:#788aff}
-.audio-control{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
-.audio-control[hidden]{display:none}
-.audio-control select,.source-bar select{min-width:110px;max-width:210px;height:36px;padding:0 28px 0 9px;background:#0d1627;color:#f4f6fc;border:1px solid #40506d;border-radius:8px;font:inherit;font-size:12px}
-.source-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 10px}
-.source-bar [hidden]{display:none!important}
-.source-bar label{font-weight:700;font-size:12px;color:var(--muted)}
-.retry{display:none;margin:8px 4px 2px;border:1px solid #53658a;border-radius:8px;background:#1b2941;color:#fff;padding:9px 14px;font:inherit;cursor:pointer}
-.retry.show{display:inline-flex}
-.series-browser,.episode-context,.episode-navigation{margin:16px 0;padding:16px;background:#111a2b;border:1px solid var(--line);border-radius:12px}
+.source-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}
+.source-bar label,.audio-control{font-weight:700;font-size:12px;color:var(--muted)}
+select{min-width:150px;max-width:100%;height:38px;padding:0 30px 0 10px;background:#0d1627;color:#f4f6fc;border:1px solid #40506d;border-radius:8px;font:inherit;font-size:13px}
+.download-now{display:inline-flex;min-height:40px;align-items:center;justify-content:center;padding:9px 16px;border:1px solid #8294ff;border-radius:9px;background:#6578f5;color:#fff;text-decoration:none;font-weight:700}
+.download-now:hover{background:#5368e8}
+.audio-control{display:flex;align-items:center;gap:8px}
+.episode-context,.episode-navigation,.series-browser{margin:16px 0;padding:16px;background:#111a2b;border:1px solid var(--line);border-radius:12px}
 .series-poster{display:block;width:100%;max-height:280px;object-fit:cover;object-position:center 28%;border-radius:9px;margin:0 0 14px}
 .series-browser h2{margin:0 0 6px;font-size:20px}
 .series-description{margin:0 0 14px;color:var(--muted);font-size:14px}
@@ -65,9 +48,7 @@ movi-player::part(error-screen){display:none!important}
 .episode-context{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
 .episode-context a,.episode-navigation a{color:#bdc8ff;text-decoration:none;font-weight:700}
 .episode-navigation{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
-.episode-navigation a[aria-disabled="true"]{opacity:.35;pointer-events:none}
-@media(max-width:650px){.series-browser,.episode-context,.episode-navigation{padding:12px}.episode-list{grid-template-columns:1fr}}
-@media(max-width:650px){header{height:58px;padding:0 14px}main{width:calc(100% - 24px);margin:20px auto 40px}.player-shell{padding:0;border-radius:12px}.source-bar{align-items:stretch;flex-direction:column}.source-bar select{width:100%}}
+@media(max-width:650px){header{height:58px;padding:0 14px}main{width:calc(100% - 24px);margin:20px auto 40px}.player-shell{padding:0;border-radius:10px}.source-bar{align-items:stretch;flex-direction:column}.source-bar select,.source-bar .download-now{width:100%}.episode-list{grid-template-columns:1fr}.series-browser,.episode-context,.episode-navigation{padding:12px}}
 </style>
 </head>
 <body>
@@ -79,26 +60,19 @@ movi-player::part(error-screen){display:none!important}
   <a id="seriesBack" href="/">← Back to series</a>
   <strong id="episodeLabel"></strong>
 </div>
-<section id="playerShell" class="player-shell" aria-label="Video player">
+<section id="playerShell" class="player-shell" aria-label="Native HTML5 video player">
   <div class="video-stage">
-    <movi-player id="video" playsinline preload="none" buffersize="12" sw="auto" objectfit="contain" nohotkeys persist="volume audiolang" persistkey="moviwatch"></movi-player>
-    <button id="bigPlay" class="big-play" type="button" aria-label="Play movie" disabled><span>▶</span></button>
-  </div>
-  <div class="player-controls" aria-label="Playback controls">
-    <button id="playPause" class="control-button" type="button" aria-label="Play" disabled>▶</button>
-    <span id="currentTime" class="time-label">0:00</span>
-    <input id="progress" class="progress-control" type="range" min="0" max="1000" value="0" aria-label="Seek" disabled>
-    <span id="duration" class="time-label">0:00</span>
-    <label class="volume-control" aria-label="Volume"><span aria-hidden="true">🔊</span><input id="volume" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume" disabled></label>
-    <label id="audioControl" class="audio-control" hidden><span>Audio</span><select id="audioSelect" aria-label="Audio language"></select></label>
-    <button id="fullscreen" class="control-button" type="button" aria-label="Fullscreen" disabled>⛶</button>
+    <video id="video" controls playsinline preload="none" controlslist="nodownload" disablepictureinpicture></video>
   </div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
-  <button id="retry" class="retry" type="button">Retry stream</button>
 </section>
 <div id="sourceBar" class="source-bar" hidden>
-  <label id="sourceSelectLabel" for="sourceSelect">Source</label>
-  <select id="sourceSelect" aria-label="Choose video source" disabled></select>
+  <label id="sourceSelectLabel" for="sourceSelect" hidden>Video source</label>
+  <select id="sourceSelect" aria-label="Choose video source" hidden></select>
+  <label id="audioControl" class="audio-control" for="audioSelect" hidden>Audio
+    <select id="audioSelect" aria-label="Audio language"></select>
+  </label>
+  <a id="downloadNow" class="download-now" href="#" hidden>Download Now</a>
 </div>
 <nav id="episodeNavigation" class="episode-navigation" aria-label="Episode navigation" hidden>
   <a id="previousEpisode" href="#" hidden>← Previous episode</a>
@@ -113,154 +87,80 @@ movi-player::part(error-screen){display:none!important}
   <div id="episodeList" class="episode-list"></div>
 </section>
 </main>
-<script id="moviPlayerLibrary" defer src="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.slim.global.js" crossorigin="anonymous"></script>
-<script id="moviRangeLibrary" defer src="/player-range-source.js"></script>
 <script>
 const $=selector=>document.querySelector(selector);
-const PLAYER_BUFFER_SIZE_MB=12;
-const PLAYER_RANGE_CHUNK_SIZE=1024*1024;
-const PLAYER_PREFETCH_AHEAD=1;
 const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||new URLSearchParams(location.search).get('id')||'');
 const video=$('#video');
-let availableSources=[],activeOptionIndex=-1,startupTimer=null,generation=0,startupReady=false,activeRangeSource=null;
-let playerLibrariesReady=false,playerLibraryError=false,mediaAuthorized=false,currentAudioTracks=[];
+let availableSources=[],activeOptionIndex=-1,audioTrackList=null;
 
 function setStatus(message,error=false){
   $('#status').textContent=message;
   $('#status').classList.toggle('error',error);
 }
-function clearTimer(){if(startupTimer!==null){clearTimeout(startupTimer);startupTimer=null;}}
-function showError(){
-  if(activeRangeSource)activeRangeSource.setPlaybackActive(false);
-  clearTimer();
-  $('#bigPlay').hidden=false;
-  $('#bigPlay').disabled=false;
-  $('#playPause').textContent='▶';
-  $('#playPause').setAttribute('aria-label','Retry playback');
-  setStatus('We could not start this video. Please try again.',true);
-  $('#retry').classList.add('show');
-}
-function formatTime(value){
-  if(!Number.isFinite(value)||value<0)return '0:00';
-  const total=Math.floor(value),hours=Math.floor(total/3600),minutes=Math.floor((total%3600)/60),seconds=total%60;
-  return hours?hours+':'+String(minutes).padStart(2,'0')+':'+String(seconds).padStart(2,'0'):minutes+':'+String(seconds).padStart(2,'0');
-}
-function updateTime(){
-  const duration=Number(video.duration)||0,current=Number(video.currentTime)||0;
-  $('#currentTime').textContent=formatTime(current);
-  $('#duration').textContent=formatTime(duration);
-  $('#progress').disabled=!duration;
-  if(duration&&!seekingProgress)$('#progress').value=String(Math.round(Math.min(1,current/duration)*1000));
-}
-let seekingProgress=false;
-function updatePlayControls(){
-  const playing=!video.paused&&!video.ended;
-  $('#playPause').textContent=playing?'Ⅱ':'▶';
-  $('#playPause').setAttribute('aria-label',playing?'Pause':'Play');
-  $('#bigPlay').hidden=playing;
-}
-function markPlayerReady(){
-  startupReady=true;
-  clearTimer();
+function watchPath(id){return '/watch/'+encodeURIComponent(id)}
+function setActiveSource(index){
+  const source=availableSources[index];
+  if(!source)return;
+  activeOptionIndex=index;
+  const select=$('#sourceSelect');
+  if(!select.hidden)select.value=String(index);
+  video.pause();
+  video.preload='none';
+  // Media bytes are requested only by the browser's native media engine.
+  // The same-origin Worker enforces the signed playback cookie and byte ranges.
+  video.src='/api/watch/'+encodeURIComponent(movieId)+'/'+encodeURIComponent(source.source_index);
+  $('#downloadNow').href='/api/download/'+encodeURIComponent(movieId)+'/'+encodeURIComponent(source.source_index);
   setStatus('');
-  $('#retry').classList.remove('show');
-  updatePlayControls();
-  updateTime();
-  refreshAudioTracks();
+  refreshNativeAudioTracks();
 }
-function refreshAudioTracks(){
-  let tracks=[];
+function getNativeAudioTracks(){
   try{
-    // The custom element intentionally exposes language-keyed track helpers.
-    // Numeric track IDs belong to its internal MoviPlayer instance.
-    if(typeof video.getAudioLangs==='function')tracks=video.getAudioLangs()||[];
-  }catch{}
-  currentAudioTracks=Array.isArray(tracks)?tracks.filter(track=>track&&typeof track==='object'):[];
+    const list=video.audioTracks;
+    if(!list||!Number.isFinite(Number(list.length)))return null;
+    return list;
+  }catch{return null;}
+}
+function refreshNativeAudioTracks(){
+  const list=getNativeAudioTracks();
   const control=$('#audioControl'),select=$('#audioSelect');
   select.replaceChildren();
-  if(currentAudioTracks.length<2){
+  if(!list||list.length<2){
     control.hidden=true;
+    audioTrackList=list;
     return;
   }
-  currentAudioTracks.forEach((track,index)=>{
-    const lang=String(track.lang||'').trim();
-    const label=String(track.label||'').trim()||lang.toUpperCase()||('Audio '+(index+1));
-    // Language codes are the stable selection key exposed by <movi-player>.
-    if(!lang)return;
-    const option=new Option(label,lang,Boolean(track.active),Boolean(track.active));
-    select.add(option);
-  });
-  if(select.options.length<2){
-    control.hidden=true;
-    return;
+  audioTrackList=list;
+  for(let index=0;index<list.length;index++){
+    const track=list[index];
+    const lang=String(track.language||'').trim();
+    const label=String(track.label||'').trim();
+    const name=label||(lang?lang.toUpperCase():'Audio '+(index+1));
+    select.add(new Option(name,String(index),Boolean(track.enabled),Boolean(track.enabled)));
   }
-  const active=currentAudioTracks.find(track=>track.active&&track.lang);
-  if(active)select.value=String(active.lang);
-  control.hidden=false;
+  const active=Array.from({length:list.length},(_,index)=>list[index]).findIndex(track=>track.enabled);
+  if(active>=0)select.value=String(active);
+  control.hidden=select.options.length<2;
 }
-async function selectAudioTrack(language){
-  const lang=String(language||'');
-  if(!lang||typeof video.selectAudioLang!=='function'){
-    setStatus('Audio switching is not available for this file.',true);
-    return;
+function bindNativeAudioTrackEvents(){
+  const list=getNativeAudioTracks();
+  if(!list||list===audioTrackList)return;
+  audioTrackList=list;
+  for(const eventName of ['addtrack','removetrack','change']){
+    try{list.addEventListener(eventName,refreshNativeAudioTracks);}catch{}
   }
+  refreshNativeAudioTracks();
+}
+function selectNativeAudioTrack(value){
+  const list=getNativeAudioTracks();
+  const selected=Number(value);
+  if(!list||!Number.isInteger(selected)||selected<0||selected>=list.length)return;
   try{
-    const switched=await video.selectAudioLang(lang);
-    if(!switched)setStatus('This audio track could not be selected on this source.',true);
-    else setStatus('');
-    refreshAudioTracks();
+    for(let index=0;index<list.length;index++)list[index].enabled=index===selected;
+    refreshNativeAudioTracks();
   }catch{
-    setStatus('This audio track could not be selected on this source.',true);
+    setStatus('This browser cannot switch audio tracks for this video.',true);
   }
 }
-function playSource(localIndex,playAfterLoad=true){
-  const source=availableSources[localIndex];
-  if(!source||!playerLibrariesReady||!mediaAuthorized||!window.MoviwatchRangeSource)return;
-    activeOptionIndex=localIndex;
-  $('#sourceSelect').value=String(localIndex);
-  clearTimer();
-  const current=++generation;
-  startupReady=false;
-  setStatus('Loading movie…');
-  $('#retry').classList.remove('show');
-  $('#audioControl').hidden=true;
-  currentAudioTracks=[];
-  if(activeRangeSource){
-    try{video.pause();}catch{}
-    activeRangeSource.close();
-    activeRangeSource=null;
-  }
-  video.preload='none';
-  video.setAttribute('buffersize',String(PLAYER_BUFFER_SIZE_MB));
-  const streamUrl='/api/watch/'+encodeURIComponent(movieId)+'/'+source.source_index;
-  activeRangeSource=new window.MoviwatchRangeSource(streamUrl,{
-    chunkSize:PLAYER_RANGE_CHUNK_SIZE,
-    maxCacheBytes:PLAYER_BUFFER_SIZE_MB*1024*1024,
-    prefetchAhead:PLAYER_PREFETCH_AHEAD
-  });
-  // The protected Worker URL remains the only media source seen by the player.
-  video.sourceAdapter=activeRangeSource;
-  $('#bigPlay').hidden=true;
-  if(playAfterLoad){
-    const playPromise=video.play();
-    if(playPromise&&typeof playPromise.catch==='function')playPromise.catch(()=>{});
-  }else{
-    $('#bigPlay').hidden=false;
-    setStatus('');
-  }
-  startupTimer=setTimeout(()=>{
-    if(current===generation&&!startupReady)showError();
-  },30000);
-}
-function startPlayback(){
-  if(!playerLibrariesReady||!mediaAuthorized||playerLibraryError)return;
-  if(!activeRangeSource)playSource(Math.max(activeOptionIndex,0),true);
-  else{
-    const result=video.play();
-    if(result&&typeof result.catch==='function')result.catch(()=>showError());
-  }
-}
-function watchPath(id){return '/watch/'+encodeURIComponent(id)}
 function renderSeriesPage(content){
   $('#playerShell').hidden=true;
   $('#sourceBar').hidden=true;
@@ -306,85 +206,6 @@ function renderEpisodeContext(content){
   if(content.next_episode){next.href=watchPath(content.next_episode.id);next.textContent=content.next_episode.title+' →';}
   $('#episodeNavigation').hidden=!content.previous_episode&&!content.next_episode;
 }
-function setPlayerLibraryState(){
-  const scripts=['#moviPlayerLibrary','#moviRangeLibrary'];
-  const loaded=scripts.every(selector=>$(selector)?.dataset.loaded==='true');
-  const failed=scripts.some(selector=>$(selector)?.dataset.failed==='true');
-  if(failed){
-    playerLibraryError=true;
-    setStatus('The lightweight player could not load. Please refresh and try again.',true);
-    $('#bigPlay').disabled=true;$('#playPause').disabled=true;
-    return;
-  }
-  playerLibrariesReady=loaded;
-  const unavailable=!loaded||!mediaAuthorized;
-  $('#bigPlay').disabled=unavailable;
-  $('#playPause').disabled=unavailable;
-  if(loaded)setStatus('');
-}
-function watchLibraryEvent(event){
-  event.currentTarget.dataset.loaded='true';
-  setPlayerLibraryState();
-}
-function watchLibraryError(event){
-  event.currentTarget.dataset.failed='true';
-  setPlayerLibraryState();
-}
-['#moviPlayerLibrary','#moviRangeLibrary'].forEach(selector=>{
-  const script=$(selector);
-  script.addEventListener('load',watchLibraryEvent,{once:true});
-  script.addEventListener('error',watchLibraryError,{once:true});
-  if(selector==='#moviPlayerLibrary'&&customElements.get('movi-player'))script.dataset.loaded='true';
-  if(selector==='#moviRangeLibrary'&&window.MoviwatchRangeSource)script.dataset.loaded='true';
-});
-setPlayerLibraryState();
-$('#bigPlay').addEventListener('click',startPlayback);
-$('#playPause').addEventListener('click',()=>{
-  if(!activeRangeSource){startPlayback();return;}
-  if(video.paused||video.ended)startPlayback();else video.pause();
-});
-$('#progress').addEventListener('input',()=>{
-  seekingProgress=true;
-  const duration=Number(video.duration)||0;
-  $('#currentTime').textContent=formatTime(duration*(Number($('#progress').value)/1000));
-});
-$('#progress').addEventListener('change',()=>{
-  const duration=Number(video.duration)||0;
-  if(duration)video.currentTime=duration*(Number($('#progress').value)/1000);
-  seekingProgress=false;
-  updateTime();
-});
-$('#volume').addEventListener('input',()=>{video.volume=Number($('#volume').value);});
-$('#audioSelect').addEventListener('change',event=>selectAudioTrack(event.target.value));
-$('#fullscreen').addEventListener('click',async()=>{
-  try{
-    if(document.fullscreenElement)await document.exitFullscreen();
-    else await $('#playerShell').requestFullscreen();
-  }catch{}
-});
-$('#sourceSelect').addEventListener('change',event=>playSource(Number(event.target.value),true));
-$('#retry').addEventListener('click',()=>playSource(Math.max(activeOptionIndex,0),true));
-video.addEventListener('play',()=>{if(activeRangeSource)activeRangeSource.setPlaybackActive(true);updatePlayControls();});
-video.addEventListener('pause',()=>{if(activeRangeSource)activeRangeSource.setPlaybackActive(false);updatePlayControls();});
-video.addEventListener('ended',()=>{if(activeRangeSource)activeRangeSource.setPlaybackActive(false);updatePlayControls();});
-video.addEventListener('loadeddata',markPlayerReady);
-video.addEventListener('loadedmetadata',()=>{markPlayerReady();updateTime();});
-video.addEventListener('durationchange',updateTime);
-video.addEventListener('timeupdate',updateTime);
-video.addEventListener('trackschange',event=>refreshAudioTracks(event));
-video.addEventListener('audioTrackChange',()=>refreshAudioTracks());
-video.addEventListener('audiotrackchange',()=>refreshAudioTracks());
-video.addEventListener('statechange',event=>{
-  const detail=event.detail,state=typeof detail==='string'?detail.toLowerCase():
-    (typeof detail?.state==='string'?detail.state.toLowerCase():(typeof detail?.status==='string'?detail.status.toLowerCase():''));
-  if(state==='ready'||state==='playing')markPlayerReady();
-  else if(state==='paused')updatePlayControls();
-  else if(state==='buffering'&&!video.paused)setStatus('Buffering…');
-  else if(state==='error')showError();
-});
-video.addEventListener('error',showError);
-video.addEventListener('contextmenu',event=>event.preventDefault());
-$('#volume').value='1';
 async function prepare(){
   try{
     const response=await fetch('/api/content/'+encodeURIComponent(movieId),{cache:'no-store',headers:{Accept:'application/json'},credentials:'same-origin'});
@@ -399,7 +220,7 @@ async function prepare(){
     if(content.poster_url)video.poster=content.poster_url;
     renderEpisodeContext(content);
     availableSources=Array.isArray(content.video_sources)?content.video_sources:[];
-    if(!availableSources.length)throw new Error('No Google Drive or Archive.org source is configured for this episode.');
+    if(!availableSources.length)throw new Error('No Google Drive or Archive.org source is configured for this video.');
     const session=await fetch('/api/playback/session',{
       method:'POST',credentials:'same-origin',cache:'no-store',
       headers:{'Content-Type':'application/json','Accept':'application/json'},
@@ -410,30 +231,38 @@ async function prepare(){
       try{const payload=await session.json();if(payload.error)message=payload.error}catch{}
       throw new Error(message);
     }
-    mediaAuthorized=true;
     const select=$('#sourceSelect'),selectLabel=$('#sourceSelectLabel');
     select.replaceChildren();
-    availableSources.forEach((source,index)=>select.add(new Option(
-      (source.label||'Source '+(index+1))+' · '+(source.provider==='archive.org'?'Archive.org':'Google Drive'),
-      String(index)
-    )));
+    availableSources.forEach((source,index)=>{
+      select.add(new Option((source.label||'Source '+(index+1))+' · '+(source.provider==='archive.org'?'Archive.org':'Google Drive'),String(index)));
+    });
     select.hidden=availableSources.length<2;
     selectLabel.hidden=availableSources.length<2;
-    $('#sourceBar').hidden=availableSources.length<2;
-    select.disabled=availableSources.length<2;
-    activeOptionIndex=0;
-    setStatus('Ready to watch');
-    $('#bigPlay').disabled=!playerLibrariesReady;
-    $('#playPause').disabled=!playerLibrariesReady;
+    $('#sourceBar').hidden=false;
+    $('#downloadNow').hidden=false;
+    if(availableSources.length>1){
+      select.hidden=false;selectLabel.hidden=false;
+    }
+    setActiveSource(0);
   }catch(error){
-    mediaAuthorized=false;
     setStatus(error.message||'This content is temporarily unavailable. Please try again.',true);
-    $('#bigPlay').hidden=true;
-    $('#bigPlay').disabled=true;
-    $('#playPause').disabled=true;
-    $('#retry').classList.add('show');
+    $('#downloadNow').hidden=true;
   }
 }
+video.addEventListener('loadedmetadata',bindNativeAudioTrackEvents);
+video.addEventListener('loadeddata',refreshNativeAudioTracks);
+video.addEventListener('error',()=>{
+  const code=video.error?.code;
+  const message=code===2?'The video connection was interrupted. Please retry.':
+    code===3?'This browser could not decode the video format.':
+    code===4?'This video format is not supported by this browser.':'We could not play this video. Please try again.';
+  setStatus(message,true);
+});
+video.addEventListener('waiting',()=>setStatus('Buffering…'));
+video.addEventListener('playing',()=>setStatus(''));
+video.addEventListener('canplay',()=>setStatus(''));
+$('#sourceSelect').addEventListener('change',event=>setActiveSource(Number(event.target.value)));
+$('#audioSelect').addEventListener('change',event=>selectNativeAudioTrack(event.target.value));
 prepare();
 </script>
 <link rel="stylesheet" href="/pwa-install.css">

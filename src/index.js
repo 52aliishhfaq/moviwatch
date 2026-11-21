@@ -2286,7 +2286,7 @@ async function api(req, env, ctx) {
 
     // Serve HEAD and ordinary full-file GET through the same 8 MiB edge cache.
     // Only If-Range stays on the origin path because it depends on origin validators.
-    if (req.headers.has('If-Range')) {
+    if (req.headers.has('If-Range') && source.provider !== 'google-drive-private') {
       const headers = new Headers();
       for (const name of ['Range', 'If-Range']) {
         const value = req.headers.get(name);

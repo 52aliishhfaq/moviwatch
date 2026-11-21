@@ -9,11 +9,13 @@ A movie catalogue with Google Drive and Archive.org byte-range streaming. The fr
 - Multiple Google Drive accounts connected simultaneously; every private source and resumable upload remains attached to its originating account.
 - Password-protected admin dashboard at \`/admin\`.
 - Add up to 8 labeled source links per movie from Google Drive and Archive.org.
-- Lightweight Movi-Player slim build with compact custom watch controls, lazy media attachment, and an audio-language selector shown only for dual/multi-audio files.
-- The watch page uses `preload=none`, a 12 MiB per-browser LRU cache, 1 MiB HTTP range reads, and one-piece playback prefetch; the larger FFmpeg WASM is kept as a separate cacheable asset by the slim bundle.
+- Native HTML5 `<video controls>` playback with no third-party player bundle or custom browser range adapter.
+- Native browser controls support play/pause, seeking, volume and fullscreen; `preload=none` delays media reads until playback is requested.
+- Protected **Download Now** link uses the same-origin Worker attachment endpoint and short-lived playback authorization.
+- Audio-track switching is shown only when the browser exposes multiple native `audioTracks`; browser support varies, and Chromium-based browsers may not expose this API.
 - HTTP Range support for playback, browser seeking, and HEAD metadata requests. Both playback and downloads stay behind the same-origin Cloudflare Worker; neither provider's raw media URL is returned to public clients.
 - Cloudflare Workers Cache stores complete 8 MiB video chunks for 24 hours through separately cached Worker entrypoints. Chunk keys include the source URL hash, movie, option index, source version, range start, and chunk size—not a viewer or browser ID—so the same cached bytes can be reused by other viewers.
-- Fragmented MP4 detection uses a compact header probe, a 512 KiB initial Worker segment, and 8 MiB continuation chunks in Cloudflare's shared cache; the player requests at most 1 MiB at a time and prefetches one upcoming piece during playback.
+- Fragmented MP4 detection uses a compact header probe, a 512 KiB initial Worker segment, and 8 MiB continuation chunks in Cloudflare's shared cache; the Worker warms the next cache chunk in the background while streaming.
 - Public catalogue responses expose only labels, providers, and source indexes. Raw Google Drive and Archive.org source URLs remain in the internal metadata path and are never sent to public watch pages.
 - Admin secrets stay in Cloudflare Worker Secrets.
 
@@ -26,7 +28,7 @@ Google Drive 1080p | https://drive.google.com/file/d/FILE_ID/view
 Archive.org 720p | https://archive.org/download/IDENTIFIER/video.mp4
 \`\`\`
 
-The first source is selected by default. When multiple options exist, the watch page shows a source selector. Download Now always uses the protected Worker attachment endpoint, including for Archive.org sources; the browser never receives a provider URL.
+The first source is selected by default. When multiple options exist, the watch page shows a source selector. The native video `src` points only to the same-origin `/api/watch/:movieId/:sourceIndex` Worker route. **Download Now** uses the protected `/api/download/:movieId/:sourceIndex` attachment endpoint, including for Archive.org sources; the browser never receives a provider URL.
 
 **Google Drive:** Set General access to **Anyone with the link – Viewer**. Private files, sign-in redirects, malware confirmation screens, and quota pages cannot be converted into video by the proxy. Use a file URL, not a folder URL.
 
@@ -96,15 +98,21 @@ Create a series in the Admin dashboard with one title, poster, category and desc
 
 The Worker creates `public.series` and `public.episodes` additively when the Admin first loads the Series Manager (or when the public catalogue is first requested). Existing `public.movies` rows are not migrated or overwritten. The same tables are included in `schema.sql` for new installations.
 
+## Native HTML5 playback
+
+The watch page has no external player library. It uses a standard `<video controls playsinline preload="none">`, a protected Worker video URL and a separate **Download Now** attachment link. A source is attached only after the page loads metadata and obtains a movie-bound playback session. Switching sources updates the native video's `src` to another protected Worker route. Seeking and buffering are performed by the browser using HTTP Range requests; the Worker continues to provide private Google Drive/Archive.org access and shared 8 MiB/24-hour caching.
+
+Audio selection is progressive enhancement: the page detects `HTMLMediaElement.audioTracks` and displays a language selector only when the browser exposes two or more tracks. This API is not available in every browser, including many Chromium-based environments, so embedded dual-audio switching cannot be guaranteed there with native `<video>` alone. Native browser codec/container support also applies; MP4 with H.264 video and AAC audio is the safest cross-browser choice. MKV and other less-supported containers may require conversion or another playback engine.
+
 ## Pakistan/mobile streaming behavior
 
-The watch page uses Movi Player's slim build and custom `SourceAdapter` to split requested byte reads into HTTP Range requests of at most 1 MiB. The media source is not attached until the viewer presses Play (`preload=none`). The adapter deduplicates in-flight reads and keeps an LRU cache capped at 12 MiB in the current browser tab; older pieces are evicted as playback advances. The custom UI is limited to play/pause, seek, volume, fullscreen and an audio selector that appears only when two or more audio languages are detected. This cache is private to that browser, is not shared between browsers, and is not visible to other visitors. A demuxer may still need several 1 MiB pieces to inspect the container and decode the first frame, so a 1 MiB request size does not mean that exactly 1 MiB total is always enough to start playback.
+The watch page uses the browser's native HTML5 `<video>` element with `controls`, `playsinline` and `preload=none`. The browser requests byte ranges directly from the same-origin Cloudflare Worker `/api/watch/:movieId/:sourceIndex` route; the Worker validates the short-lived, movie-bound playback session and serves proper HTTP 206 Range responses through its existing shared 8 MiB edge cache. There is no Movi-Player bundle, FFmpeg WASM, or custom browser range adapter. Browser-native decoder and container support now determines which formats play.
 
-Once playback is active, each completed read warms one next 1 MiB piece in the background. Pausing or ending playback stops speculative prefetch, a seek cancels stale speculative requests, and the next demuxer read fetches the new position. The player does not download the whole movie.
+The native media element controls range requests and buffering. The Worker still streams only the requested byte ranges and can reuse its existing shared cache; the browser decides its own buffering and seek strategy.
 
-Cloudflare Workers continue to store complete 8 MiB video chunks for 24 hours. The player sends smaller 1 MiB ranges, and the Worker assembles those responses from the shared 8 MiB edge-cache chunks. Cache keys use the movie, source/version and byte position—not a viewer or browser ID—so later visitors can reuse the cached bytes instead of re-reading the same content from Drive or Archive.org. The first cold request in a Cloudflare cache location can still need an upstream fetch.
+Cloudflare Workers continue to store complete 8 MiB video chunks for 24 hours. The native browser sends HTTP Range requests, and the Worker assembles those requested bytes from shared 8 MiB edge-cache chunks. Cache keys use the movie, source/version and byte position—not a viewer or browser ID—so later visitors can reuse the cached bytes instead of re-reading the same content from Drive or Archive.org. The first cold request in a Cloudflare cache location can still need an upstream fetch.
 
-For fragmented MP4, the Worker's first cached segment remains 512 KiB; later Worker cache chunks remain 8 MiB. Conventional MP4 files use 8 MiB-aligned Worker chunks. This keeps the shared edge-cache design efficient while making the player-side network requests smaller and keeping a bounded rolling cache in browser memory.
+For fragmented MP4, the Worker's first cached segment remains 512 KiB; later Worker cache chunks remain 8 MiB. Conventional MP4 files use 8 MiB-aligned Worker chunks. The native browser player chooses the exact Range sizes it needs.
 
 **Archive.org mirror handling:** the Worker reads Internet Archive item metadata (`server`, `workable_servers`, `d1`, and `d2`), tries available storage hosts for each byte range, measures successful transfer throughput, prefers previously faster mirrors, and temporarily cools down hosts after failed or timed-out requests. If item metadata is unavailable, the original public Archive.org URL remains the fallback.
 
