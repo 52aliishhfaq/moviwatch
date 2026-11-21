@@ -1836,16 +1836,34 @@ async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeou
         if (!upstream.body) throw new Error('Archive.org returned an empty video stream');
         let body = upstream.body;
         if (details && candidate.host) {
+          const reader = upstream.body.getReader();
           let streamedBytes = 0;
-          body = body.pipeThrough(new TransformStream({
-            transform(value, controller) {
-              streamedBytes += value.byteLength;
-              controller.enqueue(value);
+          body = new ReadableStream({
+            async pull(controller) {
+              try {
+                const { done, value } = await reader.read();
+                if (done) {
+                  const expectedBytes = range.end - range.start + 1;
+                  if (streamedBytes !== expectedBytes) {
+                    recordArchiveFailure(details.identifier, candidate.host);
+                    controller.error(new Error('Archive.org mirror ended before its Content-Range was complete'));
+                    return;
+                  }
+                  recordArchiveSuccess(details.identifier, candidate.host, streamedBytes, Date.now() - began);
+                  controller.close();
+                  return;
+                }
+                streamedBytes += value.byteLength;
+                controller.enqueue(value);
+              } catch (error) {
+                recordArchiveFailure(details.identifier, candidate.host);
+                controller.error(error);
+              }
             },
-            flush() {
-              recordArchiveSuccess(details.identifier, candidate.host, streamedBytes, Date.now() - began);
+            cancel(reason) {
+              return reader.cancel(reason);
             }
-          }));
+          });
         }
         return { range, body, upstreamType };
       }
