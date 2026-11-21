@@ -182,7 +182,7 @@ assertIncludes(readme, 'cannot guarantee zero buffering', 'README must document 
 assertIncludes(readme, '8 MiB continuation chunks', 'README must document 8 MiB chunks');
 assertIncludes(readme, 'Native HTML5', 'README must document native HTML5 playback');
 assertIncludes(readme, '24 hours', 'README must document the shared edge cache TTL');
-assertIncludes(readme, 'browser controls its own media buffer', 'README must document native browser-controlled buffering');
+assertIncludes(readme, 'browser decides its own buffering', 'README must document native browser-controlled buffering');
 assertIncludes(readme, 'https://archive.org/download/IDENTIFIER/FILENAME', 'README must document canonical direct Archive.org downloads');
 assertIncludes(readme, 'd1', 'README must document mirror failover');
 
