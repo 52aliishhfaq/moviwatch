@@ -2352,6 +2352,39 @@ async function api(req, env, ctx) {
       }
     }
     const sql = sqlFor(env);
+    if (path === '/api/admin/catalogue-diagnostics' && method === 'GET') {
+      const rows = await sql`SELECT current_database() AS database_name,
+        current_schema() AS schema_name,
+        (SELECT COUNT(*)::int FROM public.movies) AS movie_count,
+        to_regclass('public.series')::text AS series_table,
+        to_regclass('public.episodes')::text AS episodes_table,
+        has_schema_privilege(current_user, 'public', 'CREATE') AS can_create_public_objects`;
+      let seriesCount = null, episodeCount = null, seriesReadError = null;
+      if (rows[0]?.series_table && rows[0]?.episodes_table) {
+        try {
+          const counts = await sql`SELECT
+            (SELECT COUNT(*)::int FROM public.series) AS series_count,
+            (SELECT COUNT(*)::int FROM public.episodes) AS episode_count`;
+          seriesCount = Number(counts[0]?.series_count || 0);
+          episodeCount = Number(counts[0]?.episode_count || 0);
+        } catch (error) {
+          seriesReadError = (error instanceof Error ? error.message : 'Series tables could not be read').slice(0, 200);
+        }
+      }
+      return json({
+        database: rows[0]?.database_name || null,
+        schema: rows[0]?.schema_name || null,
+        movieCount: Number(rows[0]?.movie_count || 0),
+        seriesTables: {
+          seriesExists: Boolean(rows[0]?.series_table),
+          episodesExists: Boolean(rows[0]?.episodes_table),
+          canCreatePublicObjects: rows[0]?.can_create_public_objects === true,
+          seriesCount,
+          episodeCount,
+          readError: seriesReadError
+        }
+      });
+    }
     if (path === '/api/admin/series' || path.startsWith('/api/admin/series/') || path.startsWith('/api/admin/episodes/')) {
       await ensureSeriesSchema(sql);
       if (path === '/api/admin/series' && method === 'GET') {
