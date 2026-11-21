@@ -5,6 +5,7 @@ import { archiveDownloadUrl, sourceProvider, videoSourceUrl } from '../src/video
 
 const worker = readFileSync('src/index.js', 'utf8');
 const sourceModule = readFileSync('src/video-sources.js', 'utf8');
+const rangeModule = readFileSync('src/video-range.js', 'utf8');
 const watch = readFileSync('public/watch.html', 'utf8');
 const admin = readFileSync('public/admin.html', 'utf8');
 const config = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
@@ -61,7 +62,7 @@ assertIncludes(worker, 'const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024', '4 MiB contin
 assertIncludes(worker, 'const VIDEO_UPSTREAM_FETCH_LIMIT = 6', 'Hard per-chunk upstream fetch budget missing');
 assert.ok(!worker.includes('requests > 128'), 'The legacy 128-range retry loop must stay removed');
 assertIncludes(worker, 'short-range-no-cache', 'Short upstream ranges must bypass shared chunk cache');
-assertIncludes(worker, 'bytes.set(piece, offset)', 'Legacy chunk reassembly path must not return');
+assert.ok(!worker.includes('bytes.set(piece, offset)'), 'Legacy chunk buffer reassembly must stay removed');
 assertIncludes(worker, 'const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024', '1 MiB conventional MP4 startup segment missing');
 assertIncludes(worker, 'const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024', '512 KiB fMP4 startup segment missing');
 assertIncludes(worker, 'const starts = [0]', 'Cold-start prefetch must fetch only the first segment');
@@ -80,8 +81,9 @@ assertIncludes(worker, 'fetchVideoRangeFromMirrors', 'Archive.org per-range fail
 assertIncludes(worker, 'const VIDEO_HEADER_PROBE_SIZE = 16 * 1024', 'Compact video header probe missing');
 assertIncludes(worker, 'mp4MoovEnd(bytes)', 'MP4 moov atom size detection missing');
 assertIncludes(worker, 'mp4HasMvex(bytes)', 'Fragmented MP4 detection missing');
-assertIncludes(worker, 'videoChunkStartForOffset(offset, fragmented)', 'Seek offset mapping missing');
-assertIncludes(worker, 'videoChunkSizeAt(chunkStart, fragmented)', 'Adaptive chunk sizing missing');
+assertIncludes(worker, 'videoChunkStartForOffset', 'Seek offset mapping must be imported into the Worker');
+assertIncludes(rangeModule, 'export function videoChunkStartForOffset', 'Testable seek offset mapper missing from the pure module');
+assertIncludes(rangeModule, 'export function videoChunkSizeAt', 'Testable chunk sizing helper missing from the pure module');
 assertIncludes(worker, 'cursor >= midpoint', 'Next-segment prefetch must wait until half of the current chunk is consumed');
 assertIncludes(worker, 'startNextPrefetch(currentChunk)', 'Bounded successor prefetch helper missing');
 assertIncludes(worker, "if (req.method === 'HEAD')", 'HEAD requests must not warm video chunks');
