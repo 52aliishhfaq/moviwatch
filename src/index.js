@@ -1212,6 +1212,8 @@ async function videoSourceFetch(source, method, headers, signal) {
 // Public 206 responses are capped at the active chunk boundary so open-ended
 // browser ranges never stream the complete remainder of a movie in one response.
 const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024;
+// On a cold seek, avoid waiting for a large aligned prefix before the first byte.
+const VIDEO_DIRECT_SEEK_THRESHOLD = 256 * 1024;
 // Keep cold-start transfers small; continuation chunks remain large for cache efficiency.
 const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024;
 // Fragmented MP4 keeps its initial moov + first media fragments even more compact.
@@ -1861,7 +1863,7 @@ async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeou
   throw lastError || new Error('No storage host returned the requested video range');
 }
 
-async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHeader, sourceVersion = '') {
+async function cachedVideoRange(req, env, ctx, source, movieId, optionIndex, rangeHeader, sourceVersion = '') {
   const parsed = parseByteRange(rangeHeader);
   if (!parsed || parsed.invalid) {
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */*', 'accept-ranges': 'bytes' } });
@@ -1916,7 +1918,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
       headers: { 'content-range': 'bytes */' + firstChunk.unsatisfiedTotal, 'accept-ranges': 'bytes' }
     });
   }
-  if (firstChunk.total !== total || firstChunk.end < end) {
+  if (firstChunk.total !== total || firstChunk.end < end || !firstChunk.body) {
     try { await firstChunk.body?.cancel(); } catch {}
     throw new Error('Video source size or cache segment changed during streaming');
   }
@@ -1925,8 +1927,41 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   const responseEnd = end;
   const contentLength = responseEnd - responseStart + 1;
   let skipRemaining = responseStart - firstChunk.start;
+  let streamBody = firstChunk.body;
+  let streamMode = firstChunk.cacheStatus === 'HIT' ? 'edge-cache' : 'progressive-cache-fill';
+  let directSeek = false;
+
+  // On a cold seek deep inside a cache chunk, warm the aligned shared object
+  // in parallel while a second exact upstream Range starts at the desired byte.
+  // This duplicates bytes only for cold deep seeks; subsequent viewers reuse cache.
+  if (firstChunk.cacheStatus !== 'HIT' && skipRemaining > VIDEO_DIRECT_SEEK_THRESHOLD) {
+    try {
+      const direct = await fetchConfiguredVideoRange(source, responseStart, responseEnd, env, 0, true);
+      if (!direct.range || direct.range.start !== responseStart ||
+          direct.range.total !== total || direct.range.end < responseStart ||
+          direct.range.end > responseEnd || !direct.body) {
+        try { await direct.body?.cancel(); } catch {}
+        throw new Error('Direct seek source returned an invalid byte range');
+      }
+      streamBody = createRangeRelayStream({
+        firstPart: direct,
+        end: responseEnd,
+        total,
+        fetchPart: (nextStart, nextEnd) =>
+          fetchConfiguredVideoRange(source, nextStart, nextEnd, env, 0, true),
+        maxRequests: 128
+      });
+      try { await firstChunk.body.cancel(); } catch {}
+      skipRemaining = 0;
+      directSeek = true;
+      streamMode = 'cold-seek-direct';
+    } catch (error) {
+      console.warn('Direct cold-seek stream failed; using the warming edge chunk:', error?.message || error);
+    }
+  }
+
   let responseRemaining = contentLength;
-  const reader = firstChunk.body.getReader();
+  const reader = streamBody.getReader();
   const body = new ReadableStream({
     async pull(controller) {
       try {
@@ -1967,7 +2002,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
       'x-moviwatch-container': container,
       'x-moviwatch-fragmented': String(fragmented),
       'x-moviwatch-stream-profile': fragmented ? 'single-file-fmp4' : 'range-stream',
-      'x-moviwatch-stream-mode': 'progressive-upstream',
+      'x-moviwatch-stream-mode': streamMode,
       'cross-origin-resource-policy': 'same-origin',
       'content-length': String(contentLength),
       'content-range': 'bytes ' + responseStart + '-' + responseEnd + '/' + total,
@@ -1988,7 +2023,9 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
       'x-moviwatch-startup-chunk-size': String(videoChunkSizeAt(0, fragmented)),
       'x-moviwatch-header-cache': header.cacheStatus,
       'x-moviwatch-startup-prefetch-chunks': '0',
-      'x-moviwatch-startup-prefetch-ms': '0'
+      'x-moviwatch-startup-prefetch-ms': '0',
+      'x-moviwatch-cold-seek-direct': String(directSeek),
+      'x-moviwatch-direct-seek-threshold': String(VIDEO_DIRECT_SEEK_THRESHOLD)
     }
   });
 }
@@ -2148,7 +2185,7 @@ async function api(req, env, ctx) {
       // chunk zero so an immediate GET can reuse it without a second Drive read.
       if (method === 'HEAD') {
         const probe = await cachedVideoRange(
-          req, ctx, source, download[3], optionIndex, 'bytes=0-0', movie.updated_at
+          req, env, ctx, source, download[3], optionIndex, 'bytes=0-0', movie.updated_at
         );
         if (probe.status !== 206) {
           try { await probe.body?.cancel(); } catch {}
@@ -2189,7 +2226,7 @@ async function api(req, env, ctx) {
       // resumable downloads and standard HTTP 206 responses.
       const requestedRange = req.headers.get('Range');
       const response = await cachedVideoRange(
-        req, ctx, source, download[3], optionIndex,
+          req, env, ctx, source, download[3], optionIndex,
         requestedRange || 'bytes=0-', movie.updated_at
       );
       if (response.status === 416) return response;
@@ -2297,7 +2334,7 @@ async function api(req, env, ctx) {
     try {
       if (method === 'HEAD') {
         const probe = await cachedVideoRange(
-          req, ctx, source, watch[3], optionIndex, 'bytes=0-0', movie.updated_at
+          req, env, ctx, source, watch[3], optionIndex, 'bytes=0-0', movie.updated_at
         );
         if (probe.status !== 206) {
           try { await probe.body?.cancel(); } catch {}
@@ -2314,7 +2351,7 @@ async function api(req, env, ctx) {
       }
 
       const response = await cachedVideoRange(
-        req, ctx, source, watch[3], optionIndex,
+          req, env, ctx, source, watch[3], optionIndex,
         req.headers.get('Range') || 'bytes=0-', movie.updated_at
       );
       if ((response.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
