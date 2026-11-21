@@ -458,11 +458,11 @@ async function verifyDriveOAuthState(token, env, expectedNonce) {
   } catch { return null; }
 }
 
-function googleDriveAdminRedirect(env, result, clearCookie = '') {
+function googleDriveAdminRedirect(env, result, clearCookie = '', accountId = '') {
   let origin = 'https://moviwatch.vercel.app';
   try { origin = new URL(env.GOOGLE_REDIRECT_URI).origin; } catch {}
   const headers = new Headers({
-    location: new URL('/admin?drive=' + encodeURIComponent(result), origin).toString(),
+    location: new URL('/admin?drive=' + encodeURIComponent(result) + (accountId ? '&accountId=' + encodeURIComponent(accountId) : ''), origin).toString(),
     'cache-control': 'no-store'
   });
   if (clearCookie) headers.append('set-cookie', clearCookie);
@@ -573,7 +573,7 @@ async function completeGoogleDriveOAuth(req, env) {
       refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,
       refresh_token_iv=EXCLUDED.refresh_token_iv,scopes=EXCLUDED.scopes,updated_at=NOW()`;
     clearGoogleDriveAccessTokenCache();
-    return googleDriveAdminRedirect(env, 'connected', clearCookie);
+    return googleDriveAdminRedirect(env, 'connected', clearCookie, stateBody.connectionId);
   } catch (error) {
     console.error('Google Drive OAuth callback failed:', error?.message || error);
     return googleDriveAdminRedirect(env, 'error', clearCookie);
