@@ -96,6 +96,12 @@ assert.ok(!catalogue.includes("download_url:") && !catalogue.includes("url:sourc
 
 assertIncludes(worker, "const watch = path.split('/')", 'Watch proxy route missing');
 assertIncludes(worker, "const download = path.split('/')", 'Download proxy route missing');
+const downloadStart = worker.indexOf("const download = path.split('/')");
+const downloadEnd = worker.indexOf("const watch = path.split('/')", downloadStart);
+const downloadRoute = worker.slice(downloadStart, downloadEnd);
+assertIncludes(downloadRoute, 'new FixedLengthStream(contentLength)', 'Downloads must expose a runtime-enforced Content-Length');
+assertIncludes(downloadRoute, 'response.body.pipeTo(fixedLength.writable)', 'Downloads must remain streamed through the fixed-length body');
+assertIncludes(downloadRoute, "headers.set('content-length', String(contentLength))", 'Download Content-Length header must match the enforced stream size');
 assertIncludes(worker, 'cachedVideoRange(', 'Proxy must use the edge chunk cache');
 assertIncludes(worker, 'content-disposition', 'Google Drive Worker download attachment header missing');
 assert.ok(!worker.includes("Response.redirect(archiveDownloadUrl("), 'Protected downloads must not redirect users to provider URLs');
@@ -137,6 +143,10 @@ assertIncludes(watch, 'const PLAYER_BUFFER_SIZE_MB=32', '32 MiB player memory li
 assertIncludes(watch, 'const PLAYER_RANGE_CHUNK_SIZE=1024*1024', '1 MiB player request size missing');
 assertIncludes(watch, 'const PLAYER_PREFETCH_AHEAD=2', 'Two-range player prefetch setting missing');
 assertIncludes(watch, 'preload="metadata" buffersize="32"', 'Player must keep metadata preload while applying the bounded 32 MiB range buffer');
+assertIncludes(watch, 'sw="auto"', 'Player must silently fall back from hardware to software decoding');
+assert.ok(!watch.includes('Loading video…') && !watch.includes('id="loading"'), 'Do not show the duplicate loading-video label');
+assertIncludes(watch, "We could not start this video. Please try again.", 'Player failures must use a concise customer-facing message');
+assertIncludes(watch, 'movi-player::part(error-screen)', 'Hide raw internal decoder error overlay in favour of app recovery UI');
 assertIncludes(watch, "video.preload='metadata'", 'Player source switch must preserve conservative native fallback preload');
 assertIncludes(watch, "video.setAttribute('buffersize',String(PLAYER_BUFFER_SIZE_MB))", 'Player fallback buffer cap must be applied on every source selection');
 assertIncludes(watch, "activeRangeSource.setPlaybackActive(true)", 'Player must enable prefetch while playing');
