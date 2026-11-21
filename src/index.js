@@ -2521,7 +2521,7 @@ async function secureResponse(response, request) {
   if (!isHtml || request.method === 'HEAD') return secured;
   return new HTMLRewriter().on('script', {
     element(element) {
-      if (!element.hasAttribute('src')) element.setAttribute('nonce', nonce);
+      if (element.getAttribute('src') === null) element.setAttribute('nonce', nonce);
     }
   }).transform(secured);
 }
@@ -2535,7 +2535,7 @@ export default {
         response = await api(req, env, ctx);
       } else if (url.pathname === '/admin.html') {
         response = Response.redirect(new URL('/admin', url), 302);
-      } else if (url.pathname === '/admin') {
+      } else if ((url.pathname === '/admin' || url.pathname === '/admin/')) {
         response = await env.ASSETS.fetch(new Request(new URL('/admin.html', url), req));
       } else {
         const watchMatch = /^\/watch\/([^/]+)\\/?$/.exec(url.pathname);
