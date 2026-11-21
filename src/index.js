@@ -11,6 +11,7 @@ import {
   googleDriveApiRequest,
   googleDriveConnection,
   googleDriveConnections,
+  googleDriveTokenAad,
   googleDriveConfigurationIssues,
   googleDriveFileIdFromMediaUrl,
   googleDriveMediaUrl,
@@ -556,7 +557,7 @@ async function completeGoogleDriveOAuth(req, env) {
       if (previous[0]) {
         refreshToken = await decryptGoogleDriveSecret(
           env, previous[0].refresh_token_ciphertext, previous[0].refresh_token_iv,
-          'moviwatch-google-drive-refresh-token-v1'
+          googleDriveTokenAad(stateBody.connectionId)
         );
       }
     }
@@ -564,7 +565,7 @@ async function completeGoogleDriveOAuth(req, env) {
       throw new Error('Google did not return an offline refresh token. Disconnect the app from your Google Account and reconnect with consent.');
     }
     const encrypted = await encryptGoogleDriveSecret(
-      env, refreshToken, 'moviwatch-google-drive-refresh-token-v1'
+      env, refreshToken, googleDriveTokenAad(stateBody.connectionId)
     );
     await sql`INSERT INTO public.google_drive_connections
       (id,account_email,refresh_token_ciphertext,refresh_token_iv,scopes,connected_at,updated_at)
