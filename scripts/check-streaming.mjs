@@ -131,7 +131,7 @@ assertIncludes(sourceModule, "return host==='archive.org'||host.endsWith('.archi
 assert.ok(!/doodstream|playmogo|voe\.sx/i.test(worker), 'Legacy hosts must not remain in the Worker');
 
 // Native HTML5 player: no custom player library, WASM, or browser range adapter.
-assertIncludes(watch, '<video id="video" controls playsinline preload="none"', 'Native HTML5 video element with controls and lazy preload missing');
+assertIncludes(watch, '<video id="video" controls playsinline preload="metadata" controlslist="nodownload">', 'Native HTML5 video element with metadata preload and native controls missing');
 assertIncludes(watch, "video.src='/api/watch/'", 'Native video must use the protected same-origin Worker range endpoint');
 assertIncludes(watch, "video.src='/api/watch/'+encodeURIComponent(movieId)+'/'+encodeURIComponent(source.source_index)", 'Native video source must be bound to the selected movie/source');
 assertIncludes(watch, "body:JSON.stringify({movieId})", 'Watch page must request a movie-bound playback session');
@@ -149,7 +149,13 @@ assertIncludes(watch, 'getNativeAudioTracks()', 'Native audio track feature dete
 assertIncludes(watch, 'list[index].enabled=index===selected', 'Audio selector must switch native AudioTrack.enabled state');
 assertIncludes(watch, "if(!list||list.length<2)", 'Audio selector must be hidden unless native video exposes multiple tracks');
 assertIncludes(watch, "video.addEventListener('loadedmetadata',bindNativeAudioTrackEvents)", 'Native audio tracks must be discovered after metadata loads');
-assertIncludes(watch, 'preload="none"', 'Native video must not preload media before the viewer plays');
+assertIncludes(watch, 'preload="metadata"', 'Native video should load metadata before playback');
+assertIncludes(watch, "video.preload='metadata'", 'Selected source must retain metadata preload');
+assertIncludes(watch, 'const sessionRequest=startSession()', 'Playback session lookup must run in parallel with content lookup');
+assertIncludes(watch, 'id="retryBtn"', 'Retry playback control missing');
+assertIncludes(watch, 'pendingResume', 'Playback recovery/resume state missing');
+assertIncludes(watch, 'moviwatch:pos:', 'Playback position persistence missing');
+assertIncludes(watch, 'automaticFallbackUsed', 'Alternate source fallback must be bounded');
 assertIncludes(watch, 'controlslist="nodownload"', 'Use native browser controls without a duplicate browser download action');
 assertIncludes(watch, 'aspect-ratio:16/9', 'Responsive 16:9 player shell missing');
 assertIncludes(watch, '/manifest.webmanifest', 'Watch page PWA manifest missing');
