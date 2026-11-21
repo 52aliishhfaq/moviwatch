@@ -68,7 +68,7 @@ assertIncludes(rangeModule, 'export const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 
 assertIncludes(worker, 'const starts = [0]', 'Cold-start prefetch must fetch only the first segment');
 assertIncludes(rangeModule, 'const startupSize = fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE', 'Startup/continuation byte-range alignment missing');
 assertIncludes(worker, 'const VIDEO_CACHE_TTL = 24 * 60 * 60', '24-hour shared video cache TTL missing');
-assertIncludes(worker, "'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600'", 'Complete video chunks must remain cacheable for 24 hours');
+assertIncludes(worker, "headers.set('cache-control', 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600')", 'Complete video chunks must remain cacheable for 24 hours');
 assertIncludes(worker, 'props: cachedSourceProps(source, normalizedSourceVersion)', 'Video cache keys must use source identity and version, not viewer identity');
 assertIncludes(worker, 'function cachedSourceProps(source, normalizedSourceVersion)', 'Typed private Drive sources must participate in stable shared cache keys');
 assertIncludes(worker, 'https://archive.org/metadata/', 'Archive.org metadata discovery missing');
