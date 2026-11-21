@@ -4,3 +4,10 @@ REDIS_REST_TOKEN="YOUR_UPSTASH_REST_TOKEN"
 ADMIN_PASSWORD_HASH="64_HEX_CHAR_HMAC"
 ADMIN_PASSWORD_PEPPER="64_HEX_CHAR_RANDOM_SECRET"
 JWT_SECRET="at-least-32-random-characters"
+
+# Optional Google Drive Manager (leave unset to disable the manager)
+GOOGLE_CLIENT_ID="YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com"
+GOOGLE_CLIENT_SECRET="YOUR_GOOGLE_OAUTH_CLIENT_SECRET"
+GOOGLE_REDIRECT_URI="https://moviwatch.vercel.app/api/google-drive/oauth/callback"
+GOOGLE_DRIVE_ENCRYPTION_KEY="64_HEX_CHAR_RANDOM_SECRET"
+
