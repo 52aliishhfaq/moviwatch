@@ -195,7 +195,7 @@ Archive.org 720p | https://archive.org/download/IDENTIFIER/video.mp4"></textarea
 </main>
 <script>
 const $=selector=>document.querySelector(selector);
-let movies=[],editing=null;
+let movies=[],editing=null,driveAccounts=[],driveAccountId='primary',pendingEpisodeFile=null,seriesData=[];
 
 async function api(path,options={}){
   const response=await fetch(path,{
@@ -250,7 +250,7 @@ async function refresh(){
     const stats=statsData.stats||{};
     $('#stats').textContent=(stats.total||0)+' total · '+(stats.published||0)+' published · '+(stats.action||0)+' Action · '+(stats.romantic||0)+' Romantic';
     renderMovies();
-    refreshDriveStatus();
+    await Promise.all([refreshDriveStatus(),loadSeries()]);
   }catch(error){$('#formNotice').textContent=error.message;}
 }
 function renderMovies(){
@@ -309,6 +309,7 @@ function setPendingPublishFile(file){
 }
 function stageDriveFileForMovie(file){
   if(!file||file.mimeType==='application/vnd.google-apps.folder')return;
+  file={...file,accountId:driveAccountId};
   const video=/^video\//i.test(file.mimeType||'')||/\.(mp4|m4v|mov|mkv|webm|avi|mpg|mpeg|mpe|3gp|3g2|ts|ogv|flv)$/i.test(file.name||'');
   if(!video){driveMessage('Select a video file to publish.',true);return;}
   if(editing&&!confirm('Discard the unsaved movie edits and start a new movie?'))return;
@@ -344,7 +345,14 @@ function updateDriveSelected(file){
 }
 async function refreshDriveStatus(){
   try{
-    driveStatus=await api('/api/admin/google-drive/status');
+    const accountResult=await api('/api/admin/google-drive/accounts');
+    driveAccounts=accountResult.accounts||[];
+    if(!driveAccounts.some(item=>item.id===driveAccountId))driveAccountId=driveAccounts[0]?.id||'primary';
+    const accountSelect=$('#driveAccountSelector');
+    accountSelect.replaceChildren();
+    driveAccounts.forEach(account=>accountSelect.add(new Option(account.email,account.id)));
+    if(driveAccounts.some(item=>item.id===driveAccountId))accountSelect.value=driveAccountId;
+    driveStatus=await api('/api/admin/google-drive/status?accountId='+encodeURIComponent(driveAccountId));
     $('#driveBadge').textContent=driveStatus.connected?'Connected':'Not connected';
     if(!driveStatus.configured){
       const issues=Array.isArray(driveStatus.configurationIssues)?driveStatus.configurationIssues:[];
@@ -360,13 +368,15 @@ async function refreshDriveStatus(){
     $('#driveConnect').disabled=false;
     $('#driveDisconnect').textContent='Disconnect';
     if(!driveStatus.connected){
-      $('#driveStatus').textContent='Connect the Google account that owns the movies. The refresh token is encrypted before it is stored.';
+      $('#driveStatus').textContent='Selected Google account is not connected. Connect it or choose another account.';
+      $('#driveConnect').textContent='Connect this account';
       $('#driveDisconnect').classList.add('hidden');
       $('#driveTools').classList.add('hidden');
       return;
     }
     $('#driveStatus').textContent='Connected account: '+driveStatus.accountEmail;
-    $('#driveConnect').textContent='Reconnect account';
+    $('#driveConnect').textContent='Reconnect selected account';
+    $('#driveAddAccount').classList.remove('hidden');
     $('#driveDisconnect').classList.remove('hidden');
     $('#driveTools').classList.remove('hidden');
     await loadDriveDrives();
@@ -375,17 +385,29 @@ async function refreshDriveStatus(){
 $('#driveConnect').addEventListener('click',async()=>{
   try{
     driveMessage('Opening Google authorization…');
-    const result=await api('/api/admin/google-drive/oauth/start',{method:'POST',body:JSON.stringify({})});
+    const result=await api('/api/admin/google-drive/oauth/start',{method:'POST',body:JSON.stringify({accountId:driveAccountId})});
     location.assign(result.authorizationUrl);
   }catch(error){driveMessage(error.message,true);}
 });
+$('#driveAddAccount').addEventListener('click',async()=>{
+  try{
+    driveMessage('Opening Google authorization for an additional account…');
+    const result=await api('/api/admin/google-drive/oauth/start',{method:'POST',body:JSON.stringify({addAccount:true})});
+    location.assign(result.authorizationUrl);
+  }catch(error){driveMessage(error.message,true);}
+});
+$('#driveAccountSelector').addEventListener('change',()=>{
+  driveAccountId=$('#driveAccountSelector').value||'primary';
+  driveDrives=[];driveItems=[];driveFolderStack=[];driveSelected=null;updateDriveSelected(null);
+  refreshDriveStatus();
+});
 $('#driveDisconnect').addEventListener('click',async()=>{
-  if(!confirm('Disconnect the Google Drive account from Moviwatch?'))return;
-  try{await api('/api/admin/google-drive/disconnect',{method:'DELETE'});driveMessage('Google Drive disconnected.');await refreshDriveStatus();}
+  if(!confirm('Disconnect '+(driveStatus?.accountEmail||'this Google Drive account')+'? Existing videos linked to it will stop playing until it is reconnected.'))return;
+  try{await api('/api/admin/google-drive/disconnect?accountId='+encodeURIComponent(driveAccountId),{method:'DELETE'});driveMessage('Google Drive account disconnected.');await refreshDriveStatus();}
   catch(error){driveMessage(error.message,true);}
 });
 async function loadDriveDrives(){
-  const result=await api('/api/admin/google-drive/drives');
+  const result=await api('/api/admin/google-drive/drives?accountId='+encodeURIComponent(driveAccountId));
   driveDrives=result.drives||[];
   const select=$('#driveSelector'),previous=select.value;
   select.replaceChildren();
@@ -442,7 +464,7 @@ async function loadDriveFiles(reset){
   if(reset){driveItems=[];driveNextPageToken='';}
   $('#driveFileList').textContent='Loading Drive files…';
   try{
-    const params=new URLSearchParams({parentId:driveParentId()});
+    const params=new URLSearchParams({parentId:driveParentId(),accountId:driveAccountId});
     const drive=currentDrive();if(drive.id!=='root')params.set('driveId',drive.id);
     const query=$('#driveSearch').value.trim();if(query)params.set('q',query);
     if(!reset&&driveNextPageToken)params.set('pageToken',driveNextPageToken);
@@ -462,7 +484,7 @@ $('#driveBack').addEventListener('click',()=>{
 $('#driveNewFolder').addEventListener('click',async()=>{
   const name=prompt('New folder name:');if(!name)return;
   try{
-    await api('/api/admin/google-drive/folders',{method:'POST',body:JSON.stringify({name,parentId:driveParentId()})});
+    await api('/api/admin/google-drive/folders',{method:'POST',body:JSON.stringify({name,parentId:driveParentId(),accountId:driveAccountId})});
     await loadDriveFiles(true);driveMessage('Folder created.');
   }catch(error){driveMessage(error.message,true);}
 });
@@ -470,7 +492,7 @@ $('#driveRename').addEventListener('click',async()=>{
   if(!driveSelected)return;
   const name=prompt('New file name:',driveSelected.name);if(!name||name===driveSelected.name)return;
   try{
-    const result=await api('/api/admin/google-drive/files/'+encodeURIComponent(driveSelected.id),{method:'PATCH',body:JSON.stringify({name})});
+    const result=await api('/api/admin/google-drive/files/'+encodeURIComponent(driveSelected.id)+'?accountId='+encodeURIComponent(driveAccountId),{method:'PATCH',body:JSON.stringify({name})});
     driveSelected=result.file;await loadDriveFiles(true);updateDriveSelected(result.file);driveMessage('File renamed.');
   }catch(error){driveMessage(error.message,true);}
 });
@@ -479,8 +501,8 @@ $('#driveTrash').addEventListener('click',async()=>{
   const destructive=driveSelected.driveId?'PERMANENTLY DELETE from this Shared Drive':'move to Google Drive trash';
   if(!confirm('This will '+destructive+' "'+driveSelected.name+'". Any Moviwatch movie source attached to this file will be detached. Continue?'))return;
   try{
-    const result=await api('/api/admin/google-drive/files/'+encodeURIComponent(driveSelected.id),{method:'DELETE'});
-    updateDriveSelected(null);await loadDriveFiles(true);await refresh();driveMessage('File moved to trash. Detached from '+result.detachedMovies+' movie(s).');
+    const result=await api('/api/admin/google-drive/files/'+encodeURIComponent(driveSelected.id)+'?accountId='+encodeURIComponent(driveAccountId),{method:'DELETE'});
+    updateDriveSelected(null);await loadDriveFiles(true);await refresh();driveMessage('File deleted. Detached from '+result.detachedMovies+' movie(s) and '+(result.detachedEpisodes||0)+' episode(s).');
   }catch(error){driveMessage(error.message,true);}
 });
 $('#driveLoadMore').addEventListener('click',()=>loadDriveFiles(false).catch(error=>driveMessage(error.message,true)));
@@ -504,11 +526,11 @@ async function uploadDriveFile(replace){
   try{
     const pending=readPendingDriveUpload();
     const samePending=pending&&pending.fileName===file.name&&pending.totalBytes===file.size&&
-      pending.lastModified===file.lastModified&&pending.replaceFileId===replaceFileId;
+      pending.lastModified===file.lastModified&&pending.replaceFileId===replaceFileId&&pending.accountId===driveAccountId;
     let init,offset=0;
     if(samePending){
       try{
-        const remote=await api('/api/admin/google-drive/uploads/'+encodeURIComponent(pending.uploadId));
+        const remote=await api('/api/admin/google-drive/uploads/'+encodeURIComponent(pending.uploadId)+'?accountId='+encodeURIComponent(driveAccountId));
         if(remote.state==='active'){
           init={uploadId:pending.uploadId,chunkSize:DRIVE_CHUNK_BYTES};
           offset=remote.nextByte;
@@ -528,11 +550,11 @@ async function uploadDriveFile(replace){
       init=await api('/api/admin/google-drive/uploads',{method:'POST',body:JSON.stringify({
         fileName:file.name,totalBytes:file.size,mimeType:file.type||'application/octet-stream',
         parentId:driveParentId(),driveId:currentDrive().id==='root'?'':currentDrive().id,
-        replaceFileId
+        replaceFileId,accountId:driveAccountId
       })});
       writePendingDriveUpload({
         uploadId:init.uploadId,fileName:file.name,totalBytes:file.size,
-        lastModified:file.lastModified,replaceFileId
+        lastModified:file.lastModified,replaceFileId,accountId:driveAccountId
       });
       offset=init.nextByte||0;
       status.textContent='Uploading '+file.name+'…';
@@ -544,7 +566,7 @@ async function uploadDriveFile(replace){
         const end=Math.min(file.size,offset+init.chunkSize)-1;
         const blob=file.slice(offset,end+1);
         try{
-          const response=await fetch('/api/admin/google-drive/uploads/'+encodeURIComponent(init.uploadId),{
+          const response=await fetch('/api/admin/google-drive/uploads/'+encodeURIComponent(init.uploadId)+'?accountId='+encodeURIComponent(driveAccountId),{
             method:'PUT',credentials:'same-origin',
             headers:{'Content-Range':'bytes '+offset+'-'+end+'/'+file.size,'Content-Type':'application/octet-stream'},
             body:blob
@@ -573,7 +595,7 @@ async function uploadDriveFile(replace){
 
         // Request the real upload cursor. A lost response must not cause
         // an already-received chunk to be sent again at the old offset.
-        const remote=await api('/api/admin/google-drive/uploads/'+encodeURIComponent(init.uploadId));
+        const remote=await api('/api/admin/google-drive/uploads/'+encodeURIComponent(init.uploadId)+'?accountId='+encodeURIComponent(driveAccountId));
         if(remote.state==='complete'){
           clearPendingDriveUpload();
           status.textContent='Upload complete: '+file.name+' · '+formatDriveBytes(file.size);
@@ -613,7 +635,7 @@ async function handleDriveCallback(){
 function sourceLines(movie){
   return (movie.video_sources||[])
     .filter(source=>source&&typeof source.url==='string'&&['google-drive','archive.org','google-drive-private'].includes(source.provider))
-    .map(source=>(source.label||source.provider)+' | '+source.url)
+    .map(source=>(source.label||source.provider)+' | '+source.url+(source.provider==='google-drive-private'?' | '+(source.accountId||source.account_id||'primary'):''))
     .join('\n');
 }
 function editMovie(id){
@@ -640,7 +662,8 @@ function parseSources(value){
   return value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean).map((line,index)=>{
     const separator=line.indexOf('|');
     if(separator<0)return{label:'Source '+(index+1),url:line};
-    return{label:line.slice(0,separator).trim(),url:line.slice(separator+1).trim()};
+    const parts=line.split('|').map(value=>value.trim());
+    return{label:parts[0],url:parts[1]||'',accountId:parts[2]||'primary'};
   });
 }
 $('#movieForm').addEventListener('submit',async event=>{
