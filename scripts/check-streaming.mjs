@@ -127,7 +127,7 @@ assertIncludes(worker, 'const requestedEnd = end;', 'Original browser range end 
 assertIncludes(worker, "'cache-tag': 'video-chunks-' + movieId", 'Video chunks need a movie-level cache purge tag');
 assertIncludes(worker, "ctx.exports.VideoChunk({", 'Cached chunk entrypoint not used');
 assertIncludes(worker, "ctx.exports.VideoHeader({", 'Cached header entrypoint not used');
-assertIncludes(worker, "'x-moviwatch-cache': cacheStatus", 'Cache diagnostics header missing');
+assertIncludes(worker, "'x-moviwatch-cache': firstChunk.cacheStatus", 'Cache diagnostics header missing');
 assertIncludes(worker, "'accept-ranges': 'bytes'", 'Range support header missing');
 
 // Public source metadata carries an original array index, never an upstream URL.
