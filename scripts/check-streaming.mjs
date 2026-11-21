@@ -143,7 +143,7 @@ assert.ok(!watch.includes('download_url') && !watch.includes('directUrl.toString
 assertIncludes(watch, 'id="sourceSelect"', 'Multiple source selector missing');
 assertIncludes(watch, 'select.hidden=availableSources.length<2', 'Single-source selector must be hidden');
 assertIncludes(watch, 'getNativeAudioTracks()', 'Native audio track feature detection missing');
-assertIncludes(watch, 'track.enabled=index===selected', 'Audio selector must switch native AudioTrack.enabled state');
+assertIncludes(watch, 'list[index].enabled=index===selected', 'Audio selector must switch native AudioTrack.enabled state');
 assertIncludes(watch, "if(!list||list.length<2)", 'Audio selector must be hidden unless native video exposes multiple tracks');
 assertIncludes(watch, "video.addEventListener('loadedmetadata',bindNativeAudioTrackEvents)", 'Native audio tracks must be discovered after metadata loads');
 assertIncludes(watch, 'preload="none"', 'Native video must not preload media before the viewer plays');
