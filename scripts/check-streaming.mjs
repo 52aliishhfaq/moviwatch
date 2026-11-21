@@ -365,10 +365,15 @@ async function readAll(reader) {
 // from the first missing byte, so it never repeats or skips already-emitted data.
 {
   let continuationCalls = 0;
+  let sentFirstByte = false;
   const interrupted = new ReadableStream({
-    start(controller) {
-      controller.enqueue(Uint8Array.from([0]));
-      controller.error(new Error('simulated upstream connection reset'));
+    pull(controller) {
+      if (!sentFirstByte) {
+        sentFirstByte = true;
+        controller.enqueue(Uint8Array.from([0]));
+      } else {
+        controller.error(new Error('simulated upstream connection reset'));
+      }
     }
   });
   const relay = createRangeRelayStream({
@@ -388,10 +393,15 @@ async function readAll(reader) {
   assert.equal(continuationCalls, 1);
 }
 {
+  let sentFirstByte = false;
   const interrupted = new ReadableStream({
-    start(controller) {
-      controller.enqueue(Uint8Array.from([0]));
-      controller.error(new Error('simulated permanent reset'));
+    pull(controller) {
+      if (!sentFirstByte) {
+        sentFirstByte = true;
+        controller.enqueue(Uint8Array.from([0]));
+      } else {
+        controller.error(new Error('simulated permanent reset'));
+      }
     }
   });
   const relay = createRangeRelayStream({
