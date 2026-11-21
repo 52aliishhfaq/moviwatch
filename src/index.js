@@ -748,6 +748,67 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
     return json({ ok: true });
   }
 
+  if (path === '/api/admin/google-drive/diagnostics' && method === 'GET') {
+    const connection = await googleDriveConnection(sql);
+    const configurationIssues = googleDriveConfigurationIssues(env);
+    const dbRows = await sql`SELECT current_database() AS database_name,
+      current_schema() AS schema_name,
+      (SELECT COUNT(*)::int FROM public.movies) AS movie_count`;
+    const result = {
+      configured: configurationIssues.length === 0,
+      configurationIssues,
+      connected: Boolean(connection),
+      accountEmail: connection?.account_email || null,
+      grantedScopes: connection?.scopes || '',
+      connectedAt: connection?.connected_at || null,
+      database: {
+        name: dbRows[0]?.database_name || null,
+        schema: dbRows[0]?.schema_name || null,
+        movieCount: Number(dbRows[0]?.movie_count || 0)
+      }
+    };
+    if (configurationIssues.length || !connection) {
+      return json({ ...result, ok: false, stage: 'configuration_or_connection' });
+    }
+    let token;
+    try {
+      token = await googleDriveAccessToken(sql, env);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown token error';
+      const stage = /cannot be decrypted/i.test(message) ? 'refresh_token_decryption' :
+        /expired or was revoked|invalid_grant/i.test(message) ? 'refresh_token_rejected' :
+        /could not refresh/i.test(message) ? 'oauth_token_refresh' : 'refresh_token_access';
+      return json({ ...result, ok: false, stage, diagnosticError: message.slice(0, 260) });
+    }
+    let response;
+    try {
+      response = await fetch('https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)', {
+        headers: { Authorization: 'Bearer ' + token }
+      });
+    } catch {
+      return json({ ...result, ok: false, stage: 'google_api_network', diagnosticError: 'Could not reach Google Drive API.' });
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const errors = Array.isArray(payload.error?.errors) ? payload.error.errors : [];
+      return json({
+        ...result,
+        ok: false,
+        stage: 'google_drive_api',
+        googleHttpStatus: response.status,
+        googleStatus: payload.error?.status || null,
+        googleReason: errors[0]?.reason || null,
+        diagnosticError: (payload.error?.message || 'Google Drive API rejected the request.').slice(0, 260)
+      });
+    }
+    return json({
+      ...result,
+      ok: true,
+      stage: 'ready',
+      googleAccountEmail: payload.user?.emailAddress || null
+    });
+  }
+
   if (!isGoogleDriveConfigured(env)) {
     return json({ error: 'Google Drive is not configured. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI and GOOGLE_DRIVE_ENCRYPTION_KEY to Cloudflare Worker Secrets.' }, 503);
   }
