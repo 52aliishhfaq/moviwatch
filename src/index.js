@@ -499,6 +499,12 @@ function driveQueryEscape(value) {
   return String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
+function isDriveVideoFile(file) {
+  if (!file || file.mimeType === 'application/vnd.google-apps.folder') return false;
+  if (typeof file.mimeType === 'string' && file.mimeType.toLowerCase().startsWith('video/')) return true;
+  return /\.(mp4|m4v|mov|mkv|webm|avi|mpg|mpeg|mpe|3gp|3g2|ts|ogv|flv)$/i.test(file.name || '');
+}
+
 async function driveFileMetadata(sql, env, fileId) {
   if (!isGoogleDriveFileId(fileId)) throw new Error('Invalid Google Drive file ID.');
   const fields = 'id,name,mimeType,size,modifiedTime,parents,driveId,trashed,webViewLink,capabilities(canEdit,canDelete,canDownload,canRename)';
@@ -894,7 +900,7 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
     const movieId = typeof body.movieId === 'string' ? body.movieId : '';
     if (!/^[0-9a-f-]{36}$/i.test(movieId)) throw new Error('Choose a valid movie.');
     const file = await driveFileMetadata(sql, env, String(body.fileId || ''));
-    if (file.mimeType === 'application/vnd.google-apps.folder') throw new Error('Select a video file, not a folder.');
+    if (!isDriveVideoFile(file)) throw new Error('Choose a video file (MP4, MKV, MOV, WebM, AVI, or another video MIME type).');
     if (file.capabilities.canDownload === false) throw new Error('This Google Drive file cannot be downloaded by the connected account.');
     const rows = await sql`SELECT videos FROM public.movies WHERE id=${movieId} LIMIT 1`;
     if (!rows[0]) return json({ error: 'Movie not found.' }, 404);
