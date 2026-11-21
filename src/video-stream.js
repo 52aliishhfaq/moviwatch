@@ -11,13 +11,15 @@ export function createRangeRelayStream({
   end,
   total,
   fetchPart,
-  maxRequests = 128
+  maxRequests = 128,
+  maxRetries = 2
 }) {
   if (!firstPart?.range || !firstPart.body ||
       typeof firstPart.body.getReader !== 'function' ||
       typeof fetchPart !== 'function' ||
       !Number.isSafeInteger(end) || !Number.isSafeInteger(total) ||
-      !Number.isInteger(maxRequests) || maxRequests < 1) {
+      !Number.isInteger(maxRequests) || maxRequests < 1 ||
+      !Number.isInteger(maxRetries) || maxRetries < 0) {
     throw new TypeError('Invalid progressive range relay configuration');
   }
 
@@ -29,6 +31,7 @@ export function createRangeRelayStream({
   let currentBytes = 0;
   let nextOffset = firstPart.range.start;
   let requests = 1;
+  let retries = 0;
   let closed = false;
 
   const validatePart = (part, expectedStart) => {
@@ -60,7 +63,12 @@ export function createRangeRelayStream({
               if (++requests > maxRequests) {
                 throw new Error('Video source returned too many small byte ranges');
               }
-              currentPart = await fetchPart(nextOffset, requestedEnd);
+              try {
+                currentPart = await fetchPart(nextOffset, requestedEnd);
+              } catch (error) {
+                if (++retries > maxRetries) throw error;
+                continue;
+              }
               if (currentPart?.unsatisfiedTotal !== undefined) {
                 throw new Error('Video source ended before the cached segment was complete');
               }
@@ -72,16 +80,43 @@ export function createRangeRelayStream({
             currentBytes = 0;
           }
 
-          const { done, value } = await currentReader.read();
+          let readResult;
+          try {
+            readResult = await currentReader.read();
+          } catch (error) {
+            const expectedBytes = currentRange.end - currentRange.start + 1;
+            const resumeAt = currentBytes >= expectedBytes
+              ? currentRange.end + 1
+              : currentRange.start + currentBytes;
+            try { await currentReader.cancel(error); } catch {}
+            currentReader = null;
+            currentPart = null;
+            currentRange = null;
+            currentBytes = 0;
+            nextOffset = resumeAt;
+            if (nextOffset > requestedEnd) continue;
+            if (++retries > maxRetries) throw error;
+            continue;
+          }
+          const { done, value } = readResult;
           if (done) {
             const expectedBytes = currentRange.end - currentRange.start + 1;
             if (currentBytes !== expectedBytes) {
-              throw new Error('Video source ended before the requested byte range was complete');
+              const error = new Error('Video source ended before the requested byte range was complete');
+              const resumeAt = currentRange.start + currentBytes;
+              currentReader = null;
+              currentPart = null;
+              currentRange = null;
+              currentBytes = 0;
+              nextOffset = resumeAt;
+              if (++retries > maxRetries) throw error;
+              continue;
             }
             nextOffset = currentRange.end + 1;
             currentReader = null;
             currentRange = null;
             currentBytes = 0;
+            retries = 0;
             if (nextOffset > requestedEnd) {
               closed = true;
               controller.close();
