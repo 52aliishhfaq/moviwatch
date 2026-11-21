@@ -1,11 +1,10 @@
 const enc = new TextEncoder();
 
-const DRIVE_CONNECTION_ID = 'primary';
 const DRIVE_TOKEN_AAD = 'moviwatch-google-drive-refresh-token-v1';
 
 let schemaPromise = null;
-let accessTokenCache = null;
-let accessTokenRefresh = null;
+let accessTokenCache = new Map();
+let accessTokenRefresh = new Map();
 
 function base64Url(bytes) {
   let raw = '';
@@ -82,13 +81,18 @@ export async function ensureGoogleDriveSchema(sql) {
         session_ciphertext TEXT NOT NULL,
         session_iv TEXT NOT NULL,
         expires_at TIMESTAMPTZ NOT NULL,
+        connection_id TEXT NOT NULL DEFAULT 'primary',
         state TEXT NOT NULL DEFAULT 'active',
         file_id TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
+      await sql`ALTER TABLE public.google_drive_uploads
+        ADD COLUMN IF NOT EXISTS connection_id TEXT NOT NULL DEFAULT 'primary'`;
       await sql`CREATE INDEX IF NOT EXISTS idx_google_drive_uploads_active
         ON public.google_drive_uploads (state, expires_at)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_google_drive_uploads_connection
+        ON public.google_drive_uploads (connection_id, state, expires_at)`;
     })().catch((error) => {
       schemaPromise = null;
       throw error;
@@ -118,32 +122,45 @@ export async function decryptGoogleDriveSecret(env, ciphertext, iv, aad) {
   return new TextDecoder().decode(plaintext);
 }
 
-export async function googleDriveConnection(sql) {
+export async function googleDriveConnection(sql, connectionId = 'primary') {
+  if (typeof connectionId !== 'string' || !/^(primary|[0-9a-f-]{36})$/i.test(connectionId)) {
+    throw new Error('Invalid Google Drive account ID.');
+  }
   await ensureGoogleDriveSchema(sql);
-  const rows = await sql`SELECT account_email, scopes, connected_at, updated_at
-    FROM public.google_drive_connections WHERE id=${DRIVE_CONNECTION_ID} LIMIT 1`;
+  const rows = await sql`SELECT id, account_email, scopes, connected_at, updated_at
+    FROM public.google_drive_connections WHERE id=${connectionId} LIMIT 1`;
   return rows[0] || null;
 }
 
-export async function googleDriveAccessToken(sql, env) {
+export async function googleDriveConnections(sql) {
+  await ensureGoogleDriveSchema(sql);
+  return await sql`SELECT id, account_email, scopes, connected_at, updated_at
+    FROM public.google_drive_connections ORDER BY connected_at ASC, account_email ASC`;
+}
+
+export async function googleDriveAccessToken(sql, env, connectionId = 'primary') {
+  if (typeof connectionId !== 'string' || !/^(primary|[0-9a-f-]{36})$/i.test(connectionId)) {
+    throw new Error('Invalid Google Drive account ID.');
+  }
   if (!isGoogleDriveConfigured(env)) {
     throw new Error('Google Drive is not configured yet. Add the Google OAuth and encryption secrets in Cloudflare.');
   }
   await ensureGoogleDriveSchema(sql);
   const rows = await sql`SELECT account_email, refresh_token_ciphertext, refresh_token_iv, scopes, updated_at
-    FROM public.google_drive_connections WHERE id=${DRIVE_CONNECTION_ID} LIMIT 1`;
+    FROM public.google_drive_connections WHERE id=${connectionId} LIMIT 1`;
   const connection = rows[0];
   if (!connection) throw new Error('Connect a Google Drive account from the Moviwatch Admin panel first.');
 
   const updatedAt = connection.updated_at instanceof Date
     ? connection.updated_at.getTime()
     : new Date(connection.updated_at).getTime();
-  if (accessTokenCache && accessTokenCache.updatedAt === updatedAt && accessTokenCache.expiresAt > Date.now() + 60000) {
-    return accessTokenCache.token;
+  const cached = accessTokenCache.get(connectionId);
+  if (cached && cached.updatedAt === updatedAt && cached.expiresAt > Date.now() + 60000) {
+    return cached.token;
   }
-  if (accessTokenRefresh) return accessTokenRefresh;
+  if (accessTokenRefresh.has(connectionId)) return accessTokenRefresh.get(connectionId);
 
-  accessTokenRefresh = (async () => {
+  const refreshPromise = (async () => {
     let refreshToken;
     try {
       refreshToken = await decryptGoogleDriveSecret(
@@ -178,38 +195,43 @@ export async function googleDriveAccessToken(sql, env) {
       const encrypted = await encryptGoogleDriveSecret(env, payload.refresh_token, DRIVE_TOKEN_AAD);
       await sql`UPDATE public.google_drive_connections
         SET refresh_token_ciphertext=${encrypted.ciphertext}, refresh_token_iv=${encrypted.iv}, updated_at=NOW()
-        WHERE id=${DRIVE_CONNECTION_ID}`;
+        WHERE id=${connectionId}`;
       cacheUpdatedAt = Date.now();
     }
 
-    accessTokenCache = {
+    accessTokenCache.set(connectionId, {
       token: payload.access_token,
       expiresAt: Date.now() + Math.max(60, Number(payload.expires_in) || 3600) * 1000,
       updatedAt: cacheUpdatedAt
-    };
+    });
     return payload.access_token;
   })().finally(() => {
-    accessTokenRefresh = null;
+    accessTokenRefresh.delete(connectionId);
   });
-
-  return accessTokenRefresh;
+  accessTokenRefresh.set(connectionId, refreshPromise);
+  return refreshPromise;
 }
 
-export async function googleDriveApiRequest(sql, env, target, options = {}) {
+export async function googleDriveApiRequest(sql, env, target, options = {}, connectionId = 'primary') {
   const url = new URL(target);
   if (url.protocol !== 'https:' || url.origin !== 'https://www.googleapis.com' ||
       !(url.pathname.startsWith('/drive/v3/') || url.pathname.startsWith('/upload/drive/v3/'))) {
     throw new Error('Blocked an unexpected Google Drive API destination.');
   }
-  const token = await googleDriveAccessToken(sql, env);
+  const token = await googleDriveAccessToken(sql, env, connectionId);
   const headers = new Headers(options.headers || {});
   headers.set('Authorization', 'Bearer ' + token);
   return fetch(url, { ...options, headers, redirect: 'manual' });
 }
 
-export function clearGoogleDriveAccessTokenCache() {
-  accessTokenCache = null;
-  accessTokenRefresh = null;
+export function clearGoogleDriveAccessTokenCache(connectionId = null) {
+  if (connectionId) {
+    accessTokenCache.delete(connectionId);
+    accessTokenRefresh.delete(connectionId);
+    return;
+  }
+  accessTokenCache.clear();
+  accessTokenRefresh.clear();
 }
 
 export function isGoogleDriveFileId(value) {
