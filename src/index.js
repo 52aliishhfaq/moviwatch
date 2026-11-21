@@ -31,6 +31,40 @@ const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(d
   status,
   headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', ...headers }
 });
+let seriesSchemaPromise = null;
+async function ensureSeriesSchema(sql) {
+  if (!seriesSchemaPromise) {
+    seriesSchemaPromise = (async () => {
+      await sql\`CREATE TABLE IF NOT EXISTS public.series (
+        id UUID PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        poster_url TEXT NOT NULL,
+        category TEXT NOT NULL,
+        is_published BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )\`;
+      await sql\`CREATE TABLE IF NOT EXISTS public.episodes (
+        id UUID PRIMARY KEY,
+        series_id UUID NOT NULL REFERENCES public.series(id) ON DELETE CASCADE,
+        season_number INTEGER NOT NULL CHECK (season_number BETWEEN 1 AND 999),
+        episode_number INTEGER NOT NULL CHECK (episode_number BETWEEN 1 AND 9999),
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        videos JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(videos) = 'array'),
+        is_published BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(series_id, season_number, episode_number)
+      )\`;
+      await sql\`CREATE INDEX IF NOT EXISTS idx_episodes_series_order ON public.episodes(series_id, season_number, episode_number)\`;
+      await sql\`CREATE INDEX IF NOT EXISTS idx_episodes_public_order ON public.episodes(is_published, series_id, season_number, episode_number)\`;
+    })().catch((error) => { seriesSchemaPromise = null; throw error; });
+  }
+  await seriesSchemaPromise;
+}
+
 const sqlFor = (env) => {
   if (!env.DATABASE_URL) throw new Error('DATABASE_URL is missing');
   return neon(env.DATABASE_URL);
@@ -218,6 +252,54 @@ function movieInput(body){
     return {label:(typeof item?.label==='string'&&item.label.trim()?item.label.trim():fallback+' '+(index+1)).slice(0,60),url,provider};
   });
   return{title,poster:poster.href,category:body.category,sources,published:body.isPublished!==false};
+}
+function safePosterUrl(value) {
+  let poster; try { poster = new URL(value); } catch { throw new Error('Poster must be an HTTPS URL'); }
+  if (poster.protocol !== 'https:' || poster.href.length > 2048 || poster.username || poster.password) throw new Error('Poster must be an HTTPS URL');
+  return poster.href;
+}
+function seriesInput(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Series details are required');
+  const title = typeof body.title === 'string' ? body.title.trim() : '';
+  if (!title || title.length > 200) throw new Error('Series name is required (max 200 characters)');
+  if (!CATEGORIES.has(body.category)) throw new Error('Category must be Action or Romantic');
+  const poster = safePosterUrl(body.posterUrl);
+  const description = typeof body.description === 'string' ? body.description.trim().slice(0, 5000) : '';
+  return { title, poster, category: body.category, description, published: body.isPublished !== false };
+}
+function episodeInput(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Episode details are required');
+  const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : '';
+  if (!title || title.length > 200) throw new Error('Episode name is required (max 200 characters)');
+  const season = Number(body.seasonNumber), episode = Number(body.episodeNumber);
+  if (!Number.isInteger(season) || season < 1 || season > 999) throw new Error('Season number must be between 1 and 999');
+  if (!Number.isInteger(episode) || episode < 1 || episode > 9999) throw new Error('Episode number must be between 1 and 9999');
+  if (!Array.isArray(body.videoSources) || body.videoSources.length < 1 || body.videoSources.length > 8) throw new Error('Add 1 to 8 episode video sources');
+  const sources = body.videoSources.map((item,index) => {
+    const label = (typeof item?.label === 'string' && item.label.trim() ? item.label.trim() : 'Video ' + (index + 1)).slice(0,60);
+    const privateId = item?.provider === 'google-drive-private' ? item.fileId : (typeof item?.url === 'string' && item.url.startsWith('drive-private://') ? item.url.slice(15) : '');
+    if (privateId) {
+      if (!isGoogleDriveFileId(privateId)) throw new Error('Invalid private Google Drive file reference');
+      const accountId = typeof item.accountId === 'string' && /^(primary|[0-9a-f-]{36})$/i.test(item.accountId) ? item.accountId : 'primary';
+      return { label, provider: 'google-drive-private', file_id: privateId, account_id: accountId,
+        drive_id: isGoogleDriveFileId(item.driveId) ? item.driveId : null,
+        modified_time: typeof item.modifiedTime === 'string' ? item.modifiedTime : null };
+    }
+    const url = videoSourceUrl(item?.url);
+    return { label, url, provider: sourceProvider(url) };
+  });
+  return { title, season, episode, description: typeof body.description === 'string' ? body.description.trim().slice(0,5000) : '', sources, published: body.isPublished !== false };
+}
+function publicVideoSources(videoSources) {
+  return (Array.isArray(videoSources) ? videoSources : []).flatMap((source) => {
+    try {
+      if (source?.provider === 'google-drive-private' && isGoogleDriveFileId(source.file_id)) {
+        return [{ label: (source.label || 'Google Drive').slice(0,60), provider: source.provider, source_index: 0 }];
+      }
+      const url = videoSourceUrl(source.url), provider = sourceProvider(url);
+      return [{ label: (source.label || provider).slice(0,60), provider, source_index: 0 }];
+    } catch { return []; }
+  });
 }
 function storedVideoSource(movie,optionIndex){
   if(!movie||!Number.isInteger(optionIndex)||optionIndex<0||optionIndex>7)return null;
