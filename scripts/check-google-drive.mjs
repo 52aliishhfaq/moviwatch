@@ -64,7 +64,7 @@ const admin = readFileSync('public/admin.html', 'utf8');
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
 assert.ok(worker.includes("scope: 'openid email https://www.googleapis.com/auth/drive'"));
 assert.ok(worker.includes("code_challenge_method: 'S256'"));
-assert.ok(worker.includes('encryptGoogleDriveSecret(env, refreshToken'));
+assert.ok(worker.includes('encryptGoogleDriveSecret(\n      env, refreshToken'));
 assert.ok(worker.includes('session_ciphertext'));
 assert.ok(worker.includes('async function googleDriveUploadStatus'));
 assert.ok(worker.includes("'content-range': 'bytes */' + total"));
