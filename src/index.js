@@ -1210,8 +1210,9 @@ async function videoSourceFetch(source, method, headers, signal) {
 // Video edge cache: store complete 8 MiB continuation chunks as cacheable 200 responses.
 // The public response is reconstructed as a standards-compliant 206 response.
 const VIDEO_CHUNK_SIZE = 8 * 1024 * 1024;
-// Fragmented MP4 keeps its initial moov + first media fragments compact.
-// Fetch a smaller first block so playback does not wait for a large initial transfer.
+// Keep cold-start transfers small; continuation chunks remain large for cache efficiency.
+const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024;
+// Fragmented MP4 keeps its initial moov + first media fragments even more compact.
 const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024;
 const VIDEO_HEADER_PROBE_SIZE = 16 * 1024;
 const VIDEO_CACHE_TTL = 24 * 60 * 60;
@@ -1402,16 +1403,14 @@ function mp4HasMvex(bytes) {
 }
 
 function videoChunkStartForOffset(offset, fragmented) {
-  if (fragmented) {
-    if (offset < VIDEO_FRAGMENT_START_CHUNK_SIZE) return 0;
-    return VIDEO_FRAGMENT_START_CHUNK_SIZE +
-      Math.floor((offset - VIDEO_FRAGMENT_START_CHUNK_SIZE) / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
-  }
-  return Math.floor(offset / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
+  const startupSize = fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE;
+  if (offset < startupSize) return 0;
+  return startupSize + Math.floor((offset - startupSize) / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
 }
 
 function videoChunkSizeAt(chunkStart, fragmented) {
-  return fragmented && chunkStart === 0 ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_CHUNK_SIZE;
+  if (chunkStart !== 0) return VIDEO_CHUNK_SIZE;
+  return fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE;
 }
 
 async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverride = 0) {
@@ -1602,14 +1601,16 @@ export class VideoChunk extends WorkerEntrypoint {
     const sourceAccountId = props.sourceAccountId || 'primary';
     const source = { url: sourceUrl, provider: sourceProviderName, fileId: sourceFileId, accountId: sourceAccountId };
 
-    const alignedStandardChunk = chunkSize === VIDEO_CHUNK_SIZE &&
-      (chunkStart % VIDEO_CHUNK_SIZE === 0 ||
-        (chunkStart >= VIDEO_FRAGMENT_START_CHUNK_SIZE &&
-          (chunkStart - VIDEO_FRAGMENT_START_CHUNK_SIZE) % VIDEO_CHUNK_SIZE === 0));
-    const initialFragmentChunk = chunkStart === 0 && chunkSize === VIDEO_FRAGMENT_START_CHUNK_SIZE;
+    const alignedContinuationChunk = chunkSize === VIDEO_CHUNK_SIZE &&
+      ((chunkStart >= VIDEO_STARTUP_CHUNK_SIZE &&
+        (chunkStart - VIDEO_STARTUP_CHUNK_SIZE) % VIDEO_CHUNK_SIZE === 0) ||
+       (chunkStart >= VIDEO_FRAGMENT_START_CHUNK_SIZE &&
+        (chunkStart - VIDEO_FRAGMENT_START_CHUNK_SIZE) % VIDEO_CHUNK_SIZE === 0));
+    const initialStartupChunk = chunkStart === 0 &&
+      (chunkSize === VIDEO_STARTUP_CHUNK_SIZE || chunkSize === VIDEO_FRAGMENT_START_CHUNK_SIZE);
     if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex > 7 ||
         !Number.isSafeInteger(chunkStart) || chunkStart < 0 ||
-        !(alignedStandardChunk || initialFragmentChunk) ||
+        !(alignedContinuationChunk || initialStartupChunk) ||
         typeof sourceUrl !== 'string' || sourceUrl.length > 2048) {
       return json({ error: 'Invalid internal video chunk parameters' }, 400);
     }
@@ -1883,20 +1884,9 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
 
   if (startupPrefetch) {
     const prefetchStarted = Date.now();
-    // Load the compact fMP4 first segment and the following 8 MiB media
-    // segment concurrently. For conventional MP4, retain 8 MiB-aligned chunks
-    // and prefetch every chunk required to reach the moov index.
-    const starts = [];
-    let nextStart = 0;
-    const moovEnd = header.moovEnd || VIDEO_CHUNK_SIZE;
-    while (nextStart < moovEnd && starts.length < 8) {
-      starts.push(nextStart);
-      nextStart += videoChunkSizeAt(nextStart, fragmented);
-    }
-    if (!starts.length) starts.push(0);
-    if (fragmented && starts.length < 9 && VIDEO_FRAGMENT_START_CHUNK_SIZE < total) {
-      starts.push(VIDEO_FRAGMENT_START_CHUNK_SIZE);
-    }
+    // Fetch only the small first segment on the critical path. The next
+    // continuation segment is warmed asynchronously as the response streams.
+    const starts = [0];
 
     const chunkPromises = starts.map((chunkStart) =>
       getVideoChunk(
