@@ -85,7 +85,7 @@ assertIncludes(worker, 'videoChunkStartForOffset', 'Seek offset mapping must be 
 assertIncludes(rangeModule, 'export function videoChunkStartForOffset', 'Testable seek offset mapper missing from the pure module');
 assertIncludes(rangeModule, 'export function videoChunkSizeAt', 'Testable chunk sizing helper missing from the pure module');
 assertIncludes(worker, 'cursor >= midpoint', 'Next-segment prefetch must wait until half of the current chunk is consumed');
-assertIncludes(worker, 'startNextPrefetch(currentChunk)', 'Bounded successor prefetch helper missing');
+assertIncludes(worker, 'const startNextPrefetch = (currentChunk) =>', 'Bounded successor prefetch helper missing');
 assertIncludes(worker, "if (req.method === 'HEAD')", 'HEAD requests must not warm video chunks');
 assertIncludes(worker, "const uncachedProbePiece", 'Small browser probes must bypass the shared video cache');
 assertIncludes(worker, 'ctx.waitUntil(Promise.allSettled([nextPromise]))', 'Next-segment prefetch must not block playback');
