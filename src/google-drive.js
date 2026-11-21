@@ -30,7 +30,14 @@ async function aesKey(env, usages) {
   return crypto.subtle.importKey('raw', encryptionKeyBytes(env), { name: 'AES-GCM' }, false, usages);
 }
 
-export function isGoogleDriveConfigured(env) {
+export function googleDriveConfigurationIssues(env) {
+  const issues = [];
+  if (typeof env.GOOGLE_CLIENT_ID !== 'string' || env.GOOGLE_CLIENT_ID.length <= 10) {
+    issues.push('GOOGLE_CLIENT_ID');
+  }
+  if (typeof env.GOOGLE_CLIENT_SECRET !== 'string' || env.GOOGLE_CLIENT_SECRET.length <= 10) {
+    issues.push('GOOGLE_CLIENT_SECRET');
+  }
   let redirectValid = false;
   try {
     const redirect = new URL(env.GOOGLE_REDIRECT_URI);
@@ -40,12 +47,16 @@ export function isGoogleDriveConfigured(env) {
       redirect.pathname === '/api/google-drive/oauth/callback' &&
       !redirect.username && !redirect.password && !redirect.hash;
   } catch {}
-  return Boolean(
-    typeof env.GOOGLE_CLIENT_ID === 'string' && env.GOOGLE_CLIENT_ID.length > 10 &&
-    typeof env.GOOGLE_CLIENT_SECRET === 'string' && env.GOOGLE_CLIENT_SECRET.length > 10 &&
-    redirectValid &&
-    typeof env.GOOGLE_DRIVE_ENCRYPTION_KEY === 'string' && /^[0-9a-f]{64}$/i.test(env.GOOGLE_DRIVE_ENCRYPTION_KEY)
-  );
+  if (!redirectValid) issues.push('GOOGLE_REDIRECT_URI');
+  if (typeof env.GOOGLE_DRIVE_ENCRYPTION_KEY !== 'string' ||
+      !/^[0-9a-f]{64}$/i.test(env.GOOGLE_DRIVE_ENCRYPTION_KEY)) {
+    issues.push('GOOGLE_DRIVE_ENCRYPTION_KEY');
+  }
+  return issues;
+}
+
+export function isGoogleDriveConfigured(env) {
+  return googleDriveConfigurationIssues(env).length === 0;
 }
 
 export async function ensureGoogleDriveSchema(sql) {

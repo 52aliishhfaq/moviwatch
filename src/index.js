@@ -10,6 +10,7 @@ import {
   googleDriveAccessToken,
   googleDriveApiRequest,
   googleDriveConnection,
+  googleDriveConfigurationIssues,
   googleDriveFileIdFromMediaUrl,
   googleDriveMediaUrl,
   googleDrivePublicFileSummary,
@@ -724,6 +725,7 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
     const connection = await googleDriveConnection(sql);
     return json({
       configured: isGoogleDriveConfigured(env),
+      configurationIssues: googleDriveConfigurationIssues(env),
       connected: Boolean(connection),
       accountEmail: connection?.account_email || null,
       scopes: connection?.scopes || '',
@@ -736,18 +738,21 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
     return json({ authorizationUrl: flow.authorizationUrl }, 200, { 'set-cookie': flow.cookie });
   }
 
-  if (!isGoogleDriveConfigured(env)) {
-    return json({ error: 'Google Drive is not configured. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI and GOOGLE_DRIVE_ENCRYPTION_KEY to Cloudflare.' }, 503);
-  }
-  await ensureGoogleDriveSchema(sql);
-  await googleDriveAccessToken(sql, env);
-
+  // An authenticated admin can clear a stale connection even if OAuth
+  // settings are missing or the previous encryption key has been rotated.
   if (path === '/api/admin/google-drive/disconnect' && method === 'DELETE') {
+    await ensureGoogleDriveSchema(sql);
     await sql`DELETE FROM public.google_drive_connections WHERE id='primary'`;
     await sql`UPDATE public.google_drive_uploads SET state='cancelled',updated_at=NOW() WHERE state='active'`;
     clearGoogleDriveAccessTokenCache();
     return json({ ok: true });
   }
+
+  if (!isGoogleDriveConfigured(env)) {
+    return json({ error: 'Google Drive is not configured. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI and GOOGLE_DRIVE_ENCRYPTION_KEY to Cloudflare Worker Secrets.' }, 503);
+  }
+  await ensureGoogleDriveSchema(sql);
+  await googleDriveAccessToken(sql, env);
 
   if (path === '/api/admin/google-drive/drives' && method === 'GET') {
     const data = await googleDriveJson(sql, env,
