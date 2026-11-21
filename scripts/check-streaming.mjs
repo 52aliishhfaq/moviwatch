@@ -62,7 +62,8 @@ assertIncludes(worker, 'const VIDEO_CHUNK_SIZE = 8 * 1024 * 1024', '8 MiB contin
 assertIncludes(worker, 'const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024', '512 KiB fMP4 startup segment missing');
 assertIncludes(worker, 'const VIDEO_CACHE_TTL = 24 * 60 * 60', '24-hour shared video cache TTL missing');
 assertIncludes(worker, "'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600'", 'Complete video chunks must remain cacheable for 24 hours');
-assertIncludes(worker, 'props: { sourceUrl: source.url, sourceVersion: normalizedSourceVersion }', 'Video cache key must use source identity and version, not viewer identity');
+assertIncludes(worker, 'props: cachedSourceProps(source, normalizedSourceVersion)', 'Video cache keys must use source identity and version, not viewer identity');
+assertIncludes(worker, 'function cachedSourceProps(source, normalizedSourceVersion)', 'Typed private Drive sources must participate in stable shared cache keys');
 assertIncludes(worker, 'https://archive.org/metadata/', 'Archive.org metadata discovery missing');
 assertIncludes(worker, 'metadata.d1', 'Archive.org d1 mirror missing');
 assertIncludes(worker, 'metadata.d2', 'Archive.org d2 mirror missing');
@@ -201,3 +202,17 @@ assertIncludes(readme, 'd1', 'README must document mirror failover');
 
 assertIncludes(readme, 'A watch page obtains a short-lived signed playback session', 'README must describe the new playback authorization');
 console.log('Drive/Archive URL, provider, cache, range, protected playback/download, admin, watch and inline-script checks passed.');
+
+// Google Drive Manager: OAuth, private references and management routes stay server-side.
+assertIncludes(worker, "provider:'google-drive-private'", 'Private Drive sources must use an internal provider marker');
+assertIncludes(worker, 'googleDriveApiRequest(sqlFor(env), env, mediaUrl', 'Private Drive video ranges must be authorized by the Worker');
+assertIncludes(worker, 'fetchConfiguredVideoRange(source, cursor, requestedEnd, env)', 'Private Drive bytes must enter the existing shared chunk cache');
+assertIncludes(worker, "pathname === '/api/google-drive/oauth/callback'", 'OAuth callback route missing');
+assertIncludes(worker, "path.startsWith('/api/admin/google-drive/')", 'Google Drive management must stay under the admin API gate');
+assertIncludes(worker, 'refresh_token_ciphertext', 'Google refresh tokens must be encrypted at rest');
+assertIncludes(worker, 'session_ciphertext', 'Resumable upload session URLs must be encrypted at rest');
+assertIncludes(worker, 'new FixedLengthStream', 'Download size regression guard must remain in place');
+assertIncludes(admin, 'id="googleDrivePanel"', 'Admin Google Drive Manager UI missing');
+assertIncludes(worker, 'drive-private://', 'Admin API must preserve private Drive references without exposing them publicly');
+assertIncludes(admin, "'Content-Range':'bytes '+offset+'-'+end+'/'+file.size", 'Admin uploads must send explicit byte ranges');
+assert.ok(!/GOOGLE_CLIENT_SECRET|GOOGLE_DRIVE_ENCRYPTION_KEY|refresh_token=/.test(admin), 'Google OAuth secrets must never be embedded in the browser UI');
