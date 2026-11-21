@@ -157,6 +157,9 @@ assertIncludes(watch, 'video.getAudioLangs()', 'Use the supported language-keyed
 assertIncludes(watch, 'video.selectAudioLang(lang)', 'Use the supported audio language switch API');
 assertIncludes(watch, 'currentAudioTracks.length<2', 'Hide audio selector when the source is not dual-audio');
 assertIncludes(watch, 'const PLAYER_BUFFER_SIZE_MB=12', 'Custom player browser cache and engine memory cap missing');
+assertIncludes(watch, 'let playerLibrariesReady=false,playerLibraryError=false,mediaAuthorized=false', 'Playback controls must be gated by the signed playback session');
+assertIncludes(watch, "if(currentAudioTracks.length<2)", 'Audio menu must be hidden unless the source has multiple audio tracks');
+assertIncludes(watch, "const switched=await video.selectAudioLang(lang)", 'Audio switching must call the supported element API');
 assert.ok(!watch.includes('wasmurl='), 'Allow the slim build to use its built-in native fallback');
 assert.ok(!watch.includes(' id="video" controls'), 'Do not render the heavy built-in settings/control UI');
 assertIncludes(watch, "video.preload='none'", 'Player source must keep native preload disabled until the user plays');
@@ -205,14 +208,14 @@ for (const file of ['public/index.html', 'public/watch.html', 'public/admin.html
 assertIncludes(readme, 'Drive and Archive.org byte-range streaming', 'README must describe the restored providers');
 assertIncludes(readme, 'cannot guarantee zero buffering', 'README must document realistic buffering limits');
 assertIncludes(readme, '8 MiB continuation chunks', 'README must document 8 MiB chunks');
-assertIncludes(readme, '32 MiB', 'README must document the bounded player memory buffer');
+assertIncludes(readme, '12 MiB', 'README must document the bounded lightweight player memory buffer');
 assertIncludes(readme, '24 hours', 'README must document the shared edge cache TTL');
 assertIncludes(readme, 'not shared between browsers', 'README must distinguish private player memory from shared edge caching');
 assertIncludes(readme, 'https://archive.org/download/IDENTIFIER/FILENAME', 'README must document canonical direct Archive.org downloads');
 assertIncludes(readme, 'd1', 'README must document mirror failover');
 
 assertIncludes(readme, 'A watch page obtains a short-lived signed playback session', 'README must describe the new playback authorization');
-console.log('Drive/Archive URL, provider, cache, range, protected playback/download, admin, watch and inline-script checks passed.');
+console.log('Drive/Archive URL, provider, cache, range, protected playback, admin, lightweight watch player, dual-audio switching and inline-script checks passed.');
 
 // Google Drive Manager: OAuth, private references and management routes stay server-side.
 assertIncludes(worker, "provider:'google-drive-private'", 'Private Drive sources must use an internal provider marker');
