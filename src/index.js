@@ -320,7 +320,7 @@ async function publicMovies(env,category,query){
  // Series support is additive. A missing table, failed index migration, or a
  // restricted DB role must never hide the pre-existing movie catalogue.
  try {
-  await ensureSeriesSchema(sql);
+  // Public catalogue reads are read-only. Admin initializes optional series tables.
   return await sql`WITH movie_rows AS (
     SELECT id,title,poster_url,category,created_at,'movie'::text AS content_type,
      NULL::integer AS episode_count,
