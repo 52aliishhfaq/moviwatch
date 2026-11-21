@@ -321,7 +321,7 @@ async function invalidateContentCaches(ctx, movieId) {
   }
 }
 
-function driveOAuthStateCookie(nonce, verifier, env) {
+function driveOAuthStateCookie(nonce, verifier, env, connectionId = 'primary') {
   if (!env.JWT_SECRET) throw new Error('OAuth signing secret is not configured.');
   return (async () => {
     const head = b64(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
@@ -830,7 +830,7 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
     return json({ error: 'Google Drive is not configured. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI and GOOGLE_DRIVE_ENCRYPTION_KEY to Cloudflare Worker Secrets.' }, 503);
   }
   await ensureGoogleDriveSchema(sql);
-  await googleDriveAccessToken(sql, env);
+  await googleDriveAccessToken(sql, env, connectionId);
 
   if (path === '/api/admin/google-drive/drives' && method === 'GET') {
     const data = await googleDriveJson(sql, env,
@@ -922,7 +922,6 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
     return json({ file });
   }
   if (fileMatch && method === 'PATCH') {
-    const body = await readBody(req);
     const name = driveSafeName(body.name);
     const current = await driveFileMetadata(sql, env, fileMatch[1], connectionId);
     if (!current.capabilities.canEdit || !current.capabilities.canRename) throw new Error('You do not have permission to rename this Drive file.');
@@ -1432,7 +1431,8 @@ export class VideoChunk extends WorkerEntrypoint {
     const sourceVersion = String(props.sourceVersion || '');
     const sourceProviderName = props.sourceProvider || '';
     const sourceFileId = props.sourceFileId || '';
-    const source = { url: sourceUrl, provider: sourceProviderName, fileId: sourceFileId };
+    const sourceAccountId = props.sourceAccountId || 'primary';
+    const source = { url: sourceUrl, provider: sourceProviderName, fileId: sourceFileId, accountId: sourceAccountId };
 
     const alignedStandardChunk = chunkSize === VIDEO_CHUNK_SIZE &&
       (chunkStart % VIDEO_CHUNK_SIZE === 0 ||
@@ -1447,7 +1447,7 @@ export class VideoChunk extends WorkerEntrypoint {
     }
 
     try {
-      if (!isValidCachedSource(sourceUrl, sourceProviderName, sourceFileId)) {
+      if (!isValidCachedSource(sourceUrl, sourceProviderName, sourceFileId, sourceAccountId)) {
         return json({ error: 'Unsupported video source' }, 400);
       }
       const digest = await crypto.subtle.digest('SHA-256', enc.encode(sourceUrl + '|' + sourceVersion));
