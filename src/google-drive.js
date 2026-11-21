@@ -42,7 +42,7 @@ export function isGoogleDriveConfigured(env) {
 export async function ensureGoogleDriveSchema(sql) {
   if (!schemaPromise) {
     schemaPromise = (async () => {
-      await sql\`CREATE TABLE IF NOT EXISTS public.google_drive_connections (
+      await sql`CREATE TABLE IF NOT EXISTS public.google_drive_connections (
         id TEXT PRIMARY KEY,
         account_email TEXT NOT NULL,
         refresh_token_ciphertext TEXT NOT NULL,
@@ -50,8 +50,8 @@ export async function ensureGoogleDriveSchema(sql) {
         scopes TEXT NOT NULL DEFAULT '',
         connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )\`;
-      await sql\`CREATE TABLE IF NOT EXISTS public.google_drive_uploads (
+      )`;
+      await sql`CREATE TABLE IF NOT EXISTS public.google_drive_uploads (
         id UUID PRIMARY KEY,
         file_name TEXT NOT NULL,
         parent_id TEXT NOT NULL,
@@ -66,9 +66,9 @@ export async function ensureGoogleDriveSchema(sql) {
         file_id TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )\`;
-      await sql\`CREATE INDEX IF NOT EXISTS idx_google_drive_uploads_active
-        ON public.google_drive_uploads (state, expires_at)\`;
+      )`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_google_drive_uploads_active
+        ON public.google_drive_uploads (state, expires_at)`;
     })().catch((error) => {
       schemaPromise = null;
       throw error;
@@ -100,8 +100,8 @@ export async function decryptGoogleDriveSecret(env, ciphertext, iv, aad) {
 
 export async function googleDriveConnection(sql) {
   await ensureGoogleDriveSchema(sql);
-  const rows = await sql\`SELECT account_email, scopes, connected_at, updated_at
-    FROM public.google_drive_connections WHERE id=\${DRIVE_CONNECTION_ID} LIMIT 1\`;
+  const rows = await sql`SELECT account_email, scopes, connected_at, updated_at
+    FROM public.google_drive_connections WHERE id=${DRIVE_CONNECTION_ID} LIMIT 1`;
   return rows[0] || null;
 }
 
@@ -110,8 +110,8 @@ export async function googleDriveAccessToken(sql, env) {
     throw new Error('Google Drive is not configured yet. Add the Google OAuth and encryption secrets in Cloudflare.');
   }
   await ensureGoogleDriveSchema(sql);
-  const rows = await sql\`SELECT account_email, refresh_token_ciphertext, refresh_token_iv, scopes, updated_at
-    FROM public.google_drive_connections WHERE id=\${DRIVE_CONNECTION_ID} LIMIT 1\`;
+  const rows = await sql`SELECT account_email, refresh_token_ciphertext, refresh_token_iv, scopes, updated_at
+    FROM public.google_drive_connections WHERE id=${DRIVE_CONNECTION_ID} LIMIT 1`;
   const connection = rows[0];
   if (!connection) throw new Error('Connect a Google Drive account from the Moviwatch Admin panel first.');
 
@@ -150,9 +150,9 @@ export async function googleDriveAccessToken(sql, env) {
 
     if (typeof payload.refresh_token === 'string' && payload.refresh_token.length > 20) {
       const encrypted = await encryptGoogleDriveSecret(env, payload.refresh_token, DRIVE_TOKEN_AAD);
-      await sql\`UPDATE public.google_drive_connections
-        SET refresh_token_ciphertext=\${encrypted.ciphertext}, refresh_token_iv=\${encrypted.iv}, updated_at=NOW()
-        WHERE id=\${DRIVE_CONNECTION_ID}\`;
+      await sql`UPDATE public.google_drive_connections
+        SET refresh_token_ciphertext=${encrypted.ciphertext}, refresh_token_iv=${encrypted.iv}, updated_at=NOW()
+        WHERE id=${DRIVE_CONNECTION_ID}`;
     }
 
     accessTokenCache = {
