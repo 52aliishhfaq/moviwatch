@@ -31,6 +31,60 @@ The first source is selected by default. When multiple options exist, the watch 
 
 Only publish videos for which you have the rights and permissions required to distribute them.
 
+
+## Secure Google Drive Manager
+
+The admin dashboard includes an optional Google Drive Manager. It uses the connected administrator's Google OAuth account through the Cloudflare Worker; Google OAuth credentials and the refresh token never enter the browser.
+
+Features:
+- Browse My Drive and Shared Drives, open folders, search within the current folder, and create folders.
+- Upload new files to the selected folder using resumable 8 MiB chunks.
+- Replace the contents of an existing file without changing its Drive file ID.
+- Rename files, move My Drive files to Trash, and delete Shared Drive files (Shared Drive deletion is permanent).
+- Attach a selected Drive video to a Moviwatch movie as a private source. Public catalogue responses include only the source label, provider and index; the Drive file ID and URL remain server-side.
+- Private video playback uses authenticated Google Drive byte-range requests, then the same Cloudflare shared 8 MiB/24-hour cache and protected movie-bound playback sessions as existing sources.
+- Refresh or replace operations update attached movie source versions and purge related video cache tags.
+
+The Worker creates the `google_drive_connections` and `google_drive_uploads` PostgreSQL tables automatically on the first Admin Drive Manager request. Refresh tokens and resumable upload session URLs are encrypted with AES-256-GCM using a separate Cloudflare secret. Do not store OAuth credentials in Neon plaintext, GitHub, or browser storage.
+
+### Google Cloud setup
+
+1. Create or select a Google Cloud project and enable the **Google Drive API**.
+2. Configure the OAuth consent screen and create a **Web application** OAuth client.
+3. Add this exact Authorized redirect URI:
+   `https://moviwatch.vercel.app/api/google-drive/oauth/callback`
+4. For an External app in Testing, add the Google account that will own the Drive connection as a test user. For a single Google Workspace organization, an Internal consent-screen app may be suitable if the organization permits it.
+5. The Manager currently requests `openid`, `email`, and `https://www.googleapis.com/auth/drive` because it needs to list, upload, replace, rename and delete files across the connected account's Drives.
+
+Configure these **Cloudflare Worker Secrets** (never paste their values into chat or commit them):
+
+```bash
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+npx wrangler secret put GOOGLE_REDIRECT_URI
+npx wrangler secret put GOOGLE_DRIVE_ENCRYPTION_KEY
+```
+
+- `GOOGLE_CLIENT_ID`: OAuth client ID ending in `.apps.googleusercontent.com`.
+- `GOOGLE_CLIENT_SECRET`: OAuth client secret.
+- `GOOGLE_REDIRECT_URI`: exactly `https://moviwatch.vercel.app/api/google-drive/oauth/callback`.
+- `GOOGLE_DRIVE_ENCRYPTION_KEY`: 32 random bytes represented as 64 hexadecimal characters. Generate it with a cryptographically secure random generator and keep a protected backup. Losing it makes stored refresh tokens and upload sessions undecryptable; rotating it requires re-encrypting stored records first.
+
+The same names can be placed in local `.dev.vars` for local Worker testing; see `.dev.vars.example`.
+
+### Google OAuth verification note
+
+The full `drive` scope is a **Restricted** Google OAuth scope. Google may require OAuth app verification and, where restricted-scope data is stored or transmitted by a server, a security assessment before a public production app can use it. An External app left in Testing is limited to configured test users, and Google refresh tokens issued while the consent screen is in Testing generally expire after 7 days for these Drive scopes. Plan verification and consent-screen publication before opening this manager to the public. The integration cannot bypass the connected account's Drive permissions, Google quotas, or file download restrictions.
+
+### Safe operation
+
+- Only logged-in administrators can call Drive management routes; write requests also require a trusted same-origin request.
+- OAuth state is signed, short-lived and bound to an HttpOnly SameSite=Lax cookie; the authorization code exchange uses PKCE.
+- Refresh tokens and resumable upload session URLs are encrypted at rest. Session URLs are never returned to the browser.
+- File IDs are validated, Google API destinations are allowlisted, media redirects are restricted to trusted Google hosts, and byte ranges flow through the existing cache.
+- Deleting a file detaches it from any Moviwatch movie sources. For My Drive it is moved to Trash; Shared Drive deletion is permanent and requires an explicit confirmation.
+- A private Drive source means the original Drive file need not be public. The connected account must have access, and a movie attached and published on Moviwatch is then playable by Moviwatch visitors through its existing protected playback flow.
+
 ## Pakistan/mobile streaming behavior
 
 The watch page uses Movi Player's custom `SourceAdapter` to split the player's requested byte reads into HTTP Range requests of at most 1 MiB. The adapter deduplicates in-flight reads and keeps an LRU cache capped at 32 MiB in the current browser tab; older pieces are evicted as playback advances. This cache is private to that browser, is not shared between browsers, and is not visible to other visitors. A demuxer may still need several 1 MiB pieces to inspect the container and decode the first frame, so a 1 MiB request size does not mean that exactly 1 MiB total is always enough to start playback.
