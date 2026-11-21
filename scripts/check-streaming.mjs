@@ -413,7 +413,7 @@ async function readAll(reader) {
   });
   const reader = relay.getReader();
   assert.deepEqual([...((await reader.read()).value)], [0]);
-  await assert.rejects(() => reader.read(), /simulated upstream connection reset/);
+  await assert.rejects(() => reader.read(), /simulated permanent reset/);
 }
 
 
