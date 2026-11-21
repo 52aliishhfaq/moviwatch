@@ -89,7 +89,7 @@ assertIncludes(worker, 'const startNextPrefetch = (currentChunk) =>', 'Bounded s
 assertIncludes(worker, "if (req.method === 'HEAD')", 'HEAD requests must not warm video chunks');
 assertIncludes(worker, "const uncachedProbePiece", 'Small browser probes must bypass the shared video cache');
 assertIncludes(worker, 'ctx.waitUntil(Promise.allSettled([nextPromise]))', 'Next-segment prefetch must not block playback');
-assertIncludes(worker, "'cache-tag': 'video-chunks-' + movieId", 'Video chunks need a movie-level cache purge tag');
+assertIncludes(worker, "headers.set('cache-tag', 'video-chunks-' + movieId)", 'Video chunks need a movie-level cache purge tag');
 assertIncludes(worker, "ctx.exports.VideoChunk({", 'Cached chunk entrypoint not used');
 assertIncludes(worker, "ctx.exports.VideoHeader({", 'Cached header entrypoint not used');
 assertIncludes(worker, "'x-moviwatch-cache': cacheStatus", 'Cache diagnostics header missing');
