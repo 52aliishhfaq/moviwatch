@@ -1633,9 +1633,11 @@ export class VideoChunk extends WorkerEntrypoint {
       (chunkSize === VIDEO_STARTUP_CHUNK_SIZE || chunkSize === VIDEO_FRAGMENT_START_CHUNK_SIZE);
     const uncachedContinuationPiece = chunkStart > 0 && Number.isSafeInteger(chunkSize) &&
       chunkSize > 0 && chunkSize <= VIDEO_CHUNK_SIZE;
+    const uncachedProbePiece = chunkStart === 0 && Number.isSafeInteger(chunkSize) &&
+      chunkSize > 0 && chunkSize <= 64 * 1024;
     if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex > 7 ||
         !Number.isSafeInteger(chunkStart) || chunkStart < 0 ||
-        !(alignedContinuationChunk || initialStartupChunk || uncachedContinuationPiece) ||
+        !(alignedContinuationChunk || initialStartupChunk || uncachedContinuationPiece || uncachedProbePiece) ||
         chunkSize > VIDEO_CHUNK_SIZE ||
         typeof sourceUrl !== 'string' || sourceUrl.length > 2048) {
       return json({ error: 'Invalid internal video chunk parameters' }, 400);
@@ -1909,6 +1911,38 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   }
   if (start >= total || end < start) {
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + total, 'accept-ranges': 'bytes' } });
+  }
+
+  // HEAD and tiny browser probes use header metadata (plus at most their
+  // explicitly requested bytes); they never fill or prefetch a full media chunk.
+  if (req.method === 'HEAD') {
+    return new Response(null, { status: 206, headers: {
+      'content-type': contentType,
+      'content-range': 'bytes ' + start + '-' + end + '/' + total,
+      'content-length': String(end - start + 1),
+      'accept-ranges': 'bytes',
+      'x-moviwatch-container': container,
+      'x-moviwatch-cache': 'HEADER_ONLY',
+      'x-moviwatch-header-cache': headerCacheStatus
+    } });
+  }
+  const tinyProbe = req.method === 'GET' && start === 0 && end <= 64 * 1024;
+  if (tinyProbe) {
+    const probeChunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion,
+      sourceHash, 0, end - start + 1);
+    if (probeChunk.unsatisfiedTotal !== undefined || probeChunk.total !== total || probeChunk.start !== start || probeChunk.end < end) {
+      throw new Error('Video source could not satisfy the small initial probe');
+    }
+    return new Response(probeChunk.bytes.subarray(0, end - start + 1), { status: 206, headers: {
+      'content-type': contentType,
+      'content-range': 'bytes ' + start + '-' + end + '/' + total,
+      'content-length': String(end - start + 1),
+      'accept-ranges': 'bytes',
+      'cache-control': 'private, no-store, max-age=0',
+      'x-moviwatch-container': container,
+      'x-moviwatch-cache': probeChunk.cacheStatus,
+      'x-moviwatch-header-cache': headerCacheStatus
+    } });
   }
 
   if (startupPrefetch) {
