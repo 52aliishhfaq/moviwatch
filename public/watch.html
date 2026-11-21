@@ -12,10 +12,11 @@
 <link rel="apple-touch-icon" href="/assets/moviwatch-app-icon-180.png">
 <link rel="preconnect" href="https://drive.usercontent.google.com">
 <link rel="preconnect" href="https://archive.org">
-<title>Watch movie · Moviwatch</title>
+<title>Watch · Moviwatch</title>
 <style>
 :root{color-scheme:dark;--bg:#080d18;--panel:#111a2b;--line:#26334a;--muted:#9eabc4;--accent:#7185ff}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:radial-gradient(ellipse at 50% -20%,#1a2944 0,transparent 55%),var(--bg);color:#f4f6fc;font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
 header{height:68px;padding:0 max(5vw,22px);display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);background:#080d18e8}
 .brand{font-weight:750;font-size:19px;color:#fff;text-decoration:none;letter-spacing:-.3px}
@@ -41,6 +42,19 @@ select{min-width:min(300px,100%);max-width:100%;height:42px;padding:0 38px 0 12p
 .download-now[hidden]{display:none}
 .retry{display:none;margin:8px 4px 2px;border:1px solid #53658a;border-radius:8px;background:#1b2941;color:#fff;padding:9px 14px;font:inherit;cursor:pointer}
 .retry.show{display:inline-flex}
+.series-browser,.episode-context,.episode-navigation{margin:16px 0;padding:16px;background:#111a2b;border:1px solid var(--line);border-radius:12px}
+.series-poster{display:block;width:100%;max-height:280px;object-fit:cover;object-position:center 28%;border-radius:9px;margin:0 0 14px}
+.series-browser h2{margin:0 0 6px;font-size:20px}
+.series-description{margin:0 0 14px;color:var(--muted);font-size:14px}
+.episode-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:9px;margin-top:14px}
+.episode-link{display:block;padding:12px;border:1px solid #35425c;border-radius:9px;background:#0d1627;color:#f4f6fc;text-decoration:none}
+.episode-link:hover{border-color:#8494ff;background:#17233a}
+.episode-link small{display:block;margin-top:3px;color:var(--muted)}
+.episode-context{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.episode-context a,.episode-navigation a{color:#bdc8ff;text-decoration:none;font-weight:700}
+.episode-navigation{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.episode-navigation a[aria-disabled="true"]{opacity:.35;pointer-events:none}
+@media(max-width:650px){.series-browser,.episode-context,.episode-navigation{padding:12px}.episode-list{grid-template-columns:1fr}}
 @media(max-width:650px){header{height:58px;padding:0 14px}main{width:calc(100% - 24px);margin:20px auto 40px}.player-shell{padding:0;border-radius:12px}.source-bar{align-items:stretch;flex-direction:column}.source-bar select,.source-bar .download-now{width:100%}}
 </style>
 </head>
@@ -49,16 +63,32 @@ select{min-width:min(300px,100%);max-width:100%;height:42px;padding:0 38px 0 12p
 <main>
 <a class="back" href="/">← Back to catalogue</a>
 <div class="heading"><h1 id="title">Loading movie…</h1><p class="meta" id="category"></p></div>
-<section class="player-shell" aria-label="Movie video player">
+<div id="episodeContext" class="episode-context" hidden>
+  <a id="seriesBack" href="/">← Back to series</a>
+  <strong id="episodeLabel"></strong>
+</div>
+<section id="playerShell" class="player-shell" aria-label="Video player">
   <movi-player id="video" controls playsinline preload="metadata" buffersize="32" sw="auto" persist="volume speed audiolang" persistkey="moviwatch"></movi-player>
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <button id="retry" class="retry" type="button">Retry stream</button>
 </section>
-<div class="source-bar">
+<div id="sourceBar" class="source-bar">
   <a id="downloadNow" class="download-now" href="#" hidden>Download Now</a>
   <label id="sourceSelectLabel" for="sourceSelect" hidden>Streaming source</label>
   <select id="sourceSelect" aria-label="Choose video source" disabled hidden></select>
 </div>
+<nav id="episodeNavigation" class="episode-navigation" aria-label="Episode navigation" hidden>
+  <a id="previousEpisode" href="#" hidden>← Previous episode</a>
+  <a id="nextEpisode" href="#" hidden>Next episode →</a>
+</nav>
+<section id="seriesBrowser" class="series-browser" hidden>
+  <img id="seriesPoster" class="series-poster" alt="">
+  <h2>Seasons and episodes</h2>
+  <p id="seriesDescription" class="series-description"></p>
+  <label for="seasonSelect">Choose season</label>
+  <select id="seasonSelect"></select>
+  <div id="episodeList" class="episode-list"></div>
+</section>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.global.js"></script>
 <script src="/player-range-source.js"></script>
@@ -143,22 +173,82 @@ function playSource(localIndex){
   },30000);
 }
 
+function watchPath(id){return '/watch/'+encodeURIComponent(id)}
+function renderSeriesPage(content){
+  $('#playerShell').hidden=true;
+  $('#sourceBar').hidden=true;
+  $('#episodeContext').hidden=true;
+  $('#episodeNavigation').hidden=true;
+  $('#seriesBrowser').hidden=false;
+  $('#title').textContent=content.title||'Web series';
+  $('#category').textContent=(content.category||'')+' · Web Series';
+  $('#seriesDescription').textContent=content.description||'Choose a season and episode to start watching.';
+  if(content.poster_url){$('#seriesPoster').src=content.poster_url;$('#seriesPoster').hidden=false;}
+  else $('#seriesPoster').hidden=true;
+  const seasons=Array.isArray(content.seasons)?content.seasons:[];
+  const select=$('#seasonSelect');select.replaceChildren();
+  const episodeList=$('#episodeList');episodeList.replaceChildren();
+  if(!seasons.length){episodeList.textContent='No published episodes are available yet.';select.disabled=true;return;}
+  seasons.forEach(season=>select.add(new Option('Season '+season.season_number, String(season.season_number))));
+  select.value=String(seasons[0].season_number);
+  const renderEpisodes=()=>{
+    const season=seasons.find(item=>String(item.season_number)===select.value);
+    episodeList.replaceChildren();
+    const episodes=Array.isArray(season?.episodes)?season.episodes:[];
+    if(!episodes.length){episodeList.textContent='No published episodes in this season.';return;}
+    episodes.forEach(item=>{
+      const link=document.createElement('a');link.className='episode-link';link.href=watchPath(item.id);
+      const title=document.createElement('strong');
+      title.textContent='Episode '+item.episode_number+' — '+item.title;
+      const summary=document.createElement('small');
+      summary.textContent=item.description||('Season '+season.season_number+' · Episode '+item.episode_number);
+      link.append(title,summary);episodeList.append(link);
+    });
+  };
+  select.addEventListener('change',renderEpisodes);
+  renderEpisodes();
+}
+function renderEpisodeContext(content){
+  if(content.content_type!=='episode'||!content.series_id)return;
+  $('#episodeContext').hidden=false;
+  $('#seriesBack').href=watchPath(content.series_id);
+  $('#seriesBack').textContent='← '+(content.series_title||'Back to series');
+  $('#episodeLabel').textContent='Season '+content.season_number+' · Episode '+content.episode_number;
+  const prev=$('#previousEpisode'),next=$('#nextEpisode');
+  prev.hidden=!content.previous_episode;
+  next.hidden=!content.next_episode;
+  if(content.previous_episode){
+    prev.href=watchPath(content.previous_episode.id);
+    prev.textContent='← '+content.previous_episode.title;
+  }
+  if(content.next_episode){
+    next.href=watchPath(content.next_episode.id);
+    next.textContent=content.next_episode.title+' →';
+  }
+  $('#episodeNavigation').hidden=!content.previous_episode&&!content.next_episode;
+}
 async function prepare(){
   setLoading(true);
   setStatus('');
   try{
-    const response=await fetch('/api/movies',{cache:'no-store',headers:{Accept:'application/json'},credentials:'same-origin'});
+    const response=await fetch('/api/content/'+encodeURIComponent(movieId),{cache:'no-store',headers:{Accept:'application/json'},credentials:'same-origin'});
     const data=await response.json();
-    if(!response.ok)throw new Error(data.error||'Could not load the movie catalogue.');
-    const movie=(data.movies||[]).find(item=>item.id===movieId);
-    if(!movie)throw new Error('This movie is not published or could not be found.');
-    $('#title').textContent=movie.title;
-    $('#category').textContent=movie.category||'';
-    if(movie.poster_url)video.poster=movie.poster_url;
-    availableSources=Array.isArray(movie.video_sources)?movie.video_sources:[];
-    if(!availableSources.length)throw new Error('No Google Drive or Archive.org source is configured for this movie.');
+    if(!response.ok||!data.content)throw new Error(data.error||'Could not load this content.');
+    const content=data.content;
+    if(content.content_type==='series'){
+      renderSeriesPage(content);
+      return;
+    }
+    $('#seriesBrowser').hidden=true;
+    $('#playerShell').hidden=false;
+    $('#sourceBar').hidden=false;
+    $('#title').textContent=content.title||'Untitled video';
+    $('#category').textContent=(content.category||'')+(content.content_type==='episode'?' · Web Series':'');
+    if(content.poster_url)video.poster=content.poster_url;
+    renderEpisodeContext(content);
+    availableSources=Array.isArray(content.video_sources)?content.video_sources:[];
+    if(!availableSources.length)throw new Error('No Google Drive or Archive.org source is configured for this episode.');
 
-    // Establish the HttpOnly playback cookie before loading any media bytes.
     const session=await fetch('/api/playback/session',{
       method:'POST',credentials:'same-origin',cache:'no-store',
       headers:{'Content-Type':'application/json','Accept':'application/json'},
@@ -184,7 +274,7 @@ async function prepare(){
     playSource(0);
   }catch(error){
     setLoading(false);
-    setStatus('This movie is temporarily unavailable. Please try again.',true);
+    setStatus(error.message||'This content is temporarily unavailable. Please try again.',true);
     $('#retry').classList.add('show');
   }
 }
