@@ -2498,7 +2498,7 @@ async function secureResponse(response, request) {
   headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   headers.set('Strict-Transport-Security', 'max-age=31536000');
   const contentType = headers.get('content-type') || '';
-  const isHtml = /text\\/html/i.test(contentType);
+  const isHtml = /text\/html/i.test(contentType);
   let nonce = '';
   if (isHtml) {
     const bytes = new Uint8Array(18);
@@ -2538,7 +2538,7 @@ export default {
       } else if (url.pathname === '/admin') {
         response = await env.ASSETS.fetch(new Request(new URL('/admin.html', url), req));
       } else {
-        const watchMatch = /^\\/watch\\/([^/]+)\\/?$/.exec(url.pathname);
+        const watchMatch = /^\/watch\/([^/]+)\\/?$/.exec(url.pathname);
         if (watchMatch) {
           let movieId = '';
           try { movieId = decodeURIComponent(watchMatch[1]); } catch {}
@@ -2557,7 +2557,7 @@ export default {
     } catch (error) {
       console.error('Request failed:', error?.stack || error?.message || error);
       const message = error instanceof Error ? error.message : 'Internal server error';
-      const client = /required|invalid|cross-origin|must |between |only |unknown category|too large|HTTPS|Google Drive|Archive\\.org|video link/i.test(message);
+      const client = /required|invalid|cross-origin|must |between |only |unknown category|too large|HTTPS|Google Drive|Archive\.org|video link/i.test(message);
       return await secureResponse(json({ error: client ? message : 'Internal server error' }, client ? 400 : 500), req);
     }
   }
