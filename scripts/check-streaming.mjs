@@ -97,7 +97,7 @@ assertIncludes(worker, "x-moviwatch-cache-acquire-ms': String(cacheAcquireMs)", 
 assertIncludes(worker, "x-moviwatch-direct-seek-setup-ms': String(directSeekSetupMs)", 'Direct range setup timing diagnostics missing');
 assertIncludes(worker, "ctx.waitUntil(branches[1].pipeTo(new WritableStream({ write() {} }))", 'A separate background branch must finish filling the shared cache segment');
 
-assertIncludes(worker, 'fetchConfiguredVideoRange(source, start, requestedEnd, env, 0, true)', 'Cold chunk fills must stream directly from the upstream provider');
+assertIncludes(worker, 'fetchConfiguredVideoRange(source, chunkStart, requestedEnd, env, 0, true)', 'Cold chunk fills must stream directly from the upstream provider');
 assertIncludes(worker, "'x-moviwatch-stream-mode': 'progressive-upstream'", 'Progressive stream diagnostics missing');
 assertIncludes(worker, "'x-moviwatch-cache': firstChunk.cacheStatus", 'Cache status must survive the progressive relay');
 const chunkFillStart = worker.indexOf('async function fetchAndCacheVideoChunk');
