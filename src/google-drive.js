@@ -2,6 +2,13 @@ const enc = new TextEncoder();
 
 const DRIVE_TOKEN_AAD = 'moviwatch-google-drive-refresh-token-v1';
 
+export function googleDriveTokenAad(connectionId = 'primary') {
+  if (typeof connectionId !== 'string' || !/^(primary|[0-9a-f-]{36})$/i.test(connectionId)) {
+    throw new Error('Invalid Google Drive account ID.');
+  }
+  return connectionId === 'primary' ? DRIVE_TOKEN_AAD : DRIVE_TOKEN_AAD + ':' + connectionId.toLowerCase();
+}
+
 let schemaPromise = null;
 let accessTokenCache = new Map();
 let accessTokenRefresh = new Map();
@@ -167,7 +174,7 @@ export async function googleDriveAccessToken(sql, env, connectionId = 'primary')
         env,
         connection.refresh_token_ciphertext,
         connection.refresh_token_iv,
-        DRIVE_TOKEN_AAD
+        googleDriveTokenAad(connectionId)
       );
     } catch {
       throw new Error('Stored Google Drive refresh token cannot be decrypted with the current GOOGLE_DRIVE_ENCRYPTION_KEY. Reset the old Drive connection and reconnect after confirming the key.');
@@ -192,7 +199,7 @@ export async function googleDriveAccessToken(sql, env, connectionId = 'primary')
 
     let cacheUpdatedAt = updatedAt;
     if (typeof payload.refresh_token === 'string' && payload.refresh_token.length > 20) {
-      const encrypted = await encryptGoogleDriveSecret(env, payload.refresh_token, DRIVE_TOKEN_AAD);
+      const encrypted = await encryptGoogleDriveSecret(env, payload.refresh_token, googleDriveTokenAad(connectionId));
       await sql`UPDATE public.google_drive_connections
         SET refresh_token_ciphertext=${encrypted.ciphertext}, refresh_token_iv=${encrypted.iv}, updated_at=NOW()
         WHERE id=${connectionId}`;
