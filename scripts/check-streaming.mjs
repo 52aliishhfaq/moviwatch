@@ -92,7 +92,7 @@ assertIncludes(worker, 'const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024', '51
 assertIncludes(worker, "import { createRangeRelayStream } from './video-stream.js'", 'Progressive range relay must be wired into the Worker');
 assertIncludes(worker, 'createRangeRelayStream({', 'Cache chunks must be relayed without a whole-chunk arrayBuffer');
 assertIncludes(worker, 'const VIDEO_DIRECT_SEEK_THRESHOLD = 256 * 1024', 'Cold seeks must bypass large aligned-prefix waits');
-assertIncludes(worker, "['MISS', 'EXPIRED', 'REVALIDATED', 'UPDATING', 'STALE', 'BYPASS'].includes(firstChunk.cacheStatus)", 'Direct cold seek must require an explicit cache miss/bypass status');
+assertIncludes(worker, "['MISS', 'EXPIRED'].includes(firstChunk.cacheStatus)", 'Direct cold seek must require an explicit cache miss/bypass status');
 assertIncludes(worker, 'fetchConfiguredVideoRange(source, responseStart, responseEnd, env, 0, true, req.signal)', 'Cold cache misses must request the exact seek byte range for immediate playback');
 assertIncludes(worker, "x-moviwatch-cold-seek-direct': String(directSeek)", 'Cold-seek direct-path diagnostics missing');
 assertIncludes(worker, "x-moviwatch-cache-acquire-ms': String(cacheAcquireMs)", 'Cache acquisition timing diagnostics missing');
