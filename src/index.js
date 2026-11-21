@@ -414,7 +414,7 @@ async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSource
     'https://moviwatch.internal'
   );
   const videoEntry = ctx.exports.VideoChunk({
-    props: { sourceUrl: source.url, sourceVersion: normalizedSourceVersion }
+    props: cachedSourceProps(source, normalizedSourceVersion)
   });
   const response = await videoEntry.fetch(new Request(internalUrl));
   const cacheStatus = response.headers.get('cf-cache-status') || 'UNKNOWN';
@@ -561,7 +561,55 @@ function videoChunkSizeAt(chunkStart, fragmented) {
   return fragmented && chunkStart === 0 ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_CHUNK_SIZE;
 }
 
-async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHUNK_SIZE) {
+async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverride = 0) {
+  if (source?.provider !== 'google-drive-private') {
+    return fetchVideoRangeFromMirrors(source.url, start, end, timeoutOverride);
+  }
+  if (!isGoogleDriveFileId(source.fileId) || source.url !== googleDriveMediaUrl(source.fileId)) {
+    throw new Error('Invalid private Google Drive video source');
+  }
+  const signal = AbortSignal.timeout(timeoutOverride || Math.max(45000, Math.min(5 * 60 * 1000, 30000 + (end - start + 1) / (192 * 1024) * 2000)));
+  const upstream = await googleDriveApiRequest(sqlFor(env), env, source.url, {
+    headers: new Headers({ Range: 'bytes=' + start + '-' + end, 'Accept-Encoding': 'identity' }),
+    signal
+  });
+  if (upstream.status === 416) {
+    const unsatisfied = /^bytes \*\/([0-9]+)$/.exec(upstream.headers.get('content-range') || '');
+    try { await upstream.body?.cancel(); } catch {}
+    if (unsatisfied) return { unsatisfiedTotal: Number(unsatisfied[1]) };
+  }
+  const range = parseContentRange(upstream.headers.get('content-range'));
+  if (upstream.status !== 206 || !range || range.start !== start || range.end < start || range.end > end) {
+    const status = upstream.status;
+    const contentRange = upstream.headers.get('content-range') || 'none';
+    try { await upstream.body?.cancel(); } catch {}
+    throw new Error('Google Drive did not return the requested byte range (HTTP ' + status + ', Content-Range: ' + contentRange + ').');
+  }
+  const bytes = new Uint8Array(await upstream.arrayBuffer());
+  if (bytes.byteLength !== range.end - range.start + 1) throw new Error('Google Drive returned an incomplete video range');
+  return { range, bytes, upstreamType: (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() };
+}
+
+function cachedSourceProps(source, normalizedSourceVersion) {
+  return {
+    sourceUrl: source.url,
+    sourceVersion: normalizedSourceVersion,
+    sourceProvider: source.provider || '',
+    sourceFileId: source.provider === 'google-drive-private' ? source.fileId : ''
+  };
+}
+
+function isValidCachedSource(sourceUrl, sourceProviderName, sourceFileId) {
+  if (sourceProviderName === 'google-drive-private') {
+    return isGoogleDriveFileId(sourceFileId) && sourceUrl === googleDriveMediaUrl(sourceFileId);
+  }
+  try {
+    const parsed = new URL(sourceUrl);
+    return parsed.protocol === 'https:' && allowedSourceHost(parsed.hostname);
+  } catch { return false; }
+}
+
+async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHUNK_SIZE, env) {
   // Fill one complete cache chunk; keep requesting if the upstream caps its Range size.
   const requestedEnd = chunkStart + chunkSize - 1;
   const pieces = [];
@@ -573,7 +621,7 @@ async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHU
 
   while (cursor <= expectedEnd) {
     if (++requests > 128) throw new Error('Video source returned too many small byte ranges');
-    const part = await fetchVideoRangeFromMirrors(source.url, cursor, requestedEnd);
+    const part = await fetchConfiguredVideoRange(source, cursor, requestedEnd, env);
     if (part.unsatisfiedTotal !== undefined) {
       if (cursor === chunkStart) return { unsatisfiedTotal: part.unsatisfiedTotal };
       throw new Error('Video source ended before the cached chunk was complete');
@@ -618,19 +666,21 @@ export class VideoHeader extends WorkerEntrypoint {
     const props = this.ctx.props || {};
     const sourceUrl = props.sourceUrl;
     const sourceVersion = String(props.sourceVersion || '');
+    const sourceProviderName = props.sourceProvider || '';
+    const sourceFileId = props.sourceFileId || '';
+    const source = { url: sourceUrl, provider: sourceProviderName, fileId: sourceFileId };
     if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex > 7 ||
         typeof sourceUrl !== 'string' || sourceUrl.length > 2048) {
       return json({ error: 'Invalid internal video header parameters' }, 400);
     }
     try {
-      const parsedSource = new URL(sourceUrl);
-      if (parsedSource.protocol !== 'https:' || !allowedSourceHost(parsedSource.hostname)) {
+      if (!isValidCachedSource(sourceUrl, sourceProviderName, sourceFileId)) {
         return json({ error: 'Unsupported video source' }, 400);
       }
       const digest = await crypto.subtle.digest('SHA-256', enc.encode(sourceUrl + '|' + sourceVersion));
       const expectedHash = hex(new Uint8Array(digest)).slice(0, 32);
       if (expectedHash !== sourceHash) return json({ error: 'Video header cache key did not match its source' }, 400);
-      const probe = await fetchVideoRangeFromMirrors(sourceUrl, 0, VIDEO_HEADER_PROBE_SIZE - 1, 20000);
+      const probe = await fetchConfiguredVideoRange(source, 0, VIDEO_HEADER_PROBE_SIZE - 1, this.env, 20000);
       const range = probe.range;
       if (!range || probe.unsatisfiedTotal !== undefined || range.start !== 0 || range.end < 39) {
         throw new Error('Video source did not return a valid video header');
@@ -674,6 +724,9 @@ export class VideoChunk extends WorkerEntrypoint {
     const props = this.ctx.props || {};
     const sourceUrl = props.sourceUrl;
     const sourceVersion = String(props.sourceVersion || '');
+    const sourceProviderName = props.sourceProvider || '';
+    const sourceFileId = props.sourceFileId || '';
+    const source = { url: sourceUrl, provider: sourceProviderName, fileId: sourceFileId };
 
     const alignedStandardChunk = chunkSize === VIDEO_CHUNK_SIZE &&
       (chunkStart % VIDEO_CHUNK_SIZE === 0 ||
@@ -688,15 +741,14 @@ export class VideoChunk extends WorkerEntrypoint {
     }
 
     try {
-      const parsedSource = new URL(sourceUrl);
-      if (parsedSource.protocol !== 'https:' || !allowedSourceHost(parsedSource.hostname)) {
+      if (!isValidCachedSource(sourceUrl, sourceProviderName, sourceFileId)) {
         return json({ error: 'Unsupported video source' }, 400);
       }
       const digest = await crypto.subtle.digest('SHA-256', enc.encode(sourceUrl + '|' + sourceVersion));
       const expectedHash = hex(new Uint8Array(digest)).slice(0, 32);
       if (expectedHash !== sourceHash) return json({ error: 'Video cache key did not match its source' }, 400);
 
-      const result = await fetchAndCacheVideoChunk({ url: sourceUrl }, chunkStart, chunkSize);
+      const result = await fetchAndCacheVideoChunk(source, chunkStart, chunkSize, this.env);
       if (result.unsatisfiedTotal !== undefined) {
         return new Response(null, {
           status: 416,
@@ -921,9 +973,10 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */*', 'accept-ranges': 'bytes' } });
   }
 
-  const normalizedSourceVersion = sourceVersion instanceof Date
+  const baseSourceVersion = sourceVersion instanceof Date
     ? sourceVersion.toISOString()
     : String(sourceVersion || '');
+  const normalizedSourceVersion = baseSourceVersion + '|' + String(source.modified_time || '');
   const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url + '|' + normalizedSourceVersion));
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
 
