@@ -71,9 +71,12 @@ button.danger{background:#9c3847;border-color:#9c3847;width:auto;padding:7px 10p
       <p id="driveStatus" class="drive-status" role="status">Checking Google Drive configuration…</p>
       <div class="drive-buttons">
         <button id="driveConnect" type="button">Connect Google Drive</button>
+        <button id="driveAddAccount" type="button" class="secondary">Add another Google account</button>
         <button id="driveDisconnect" type="button" class="secondary hidden">Disconnect</button>
       </div>
       <div id="driveTools" class="hidden">
+        <label for="driveAccountSelector">Google account</label>
+        <select id="driveAccountSelector"></select>
         <label for="driveSelector">Storage</label>
         <select id="driveSelector"></select>
         <div class="drive-controls">
@@ -140,6 +143,48 @@ Archive.org 720p | https://archive.org/download/IDENTIFIER/video.mp4"></textarea
         </div>
       </form>
       <p id="formNotice" class="notice" role="status" aria-live="polite"></p>
+    </div>
+
+    <div class="panel" id="seriesManager">
+      <h2>Web Series Manager</h2>
+      <p class="muted">Create one series poster, then publish its episodes into seasons. Every episode has its own private video source.</p>
+      <form id="seriesForm">
+        <label for="seriesTitle">Series name</label>
+        <input id="seriesTitle" maxlength="200" required placeholder="Series title">
+        <label for="seriesPoster">Series poster URL (HTTPS)</label>
+        <input id="seriesPoster" type="url" required placeholder="https://…">
+        <label for="seriesCategory">Category</label>
+        <select id="seriesCategory"><option>Action</option><option>Romantic</option></select>
+        <label for="seriesDescription">Description (optional)</label>
+        <textarea id="seriesDescription" rows="3" placeholder="Series description"></textarea>
+        <label><input id="seriesPublished" type="checkbox" checked style="width:auto"> Published to visitors</label>
+        <button id="saveSeries" type="submit">Create series</button>
+      </form>
+      <p id="seriesNotice" class="notice" role="status"></p>
+      <hr style="border:0;border-top:1px solid #303b54;margin:22px 0">
+      <h3>Add episode</h3>
+      <form id="episodeForm">
+        <label for="episodeSeries">Series</label>
+        <select id="episodeSeries" required><option value="">Create a series first</option></select>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div><label for="episodeSeason">Season number</label><input id="episodeSeason" type="number" min="1" max="999" value="1" required></div>
+          <div><label for="episodeNumber">Episode number</label><input id="episodeNumber" type="number" min="1" max="9999" value="1" required></div>
+        </div>
+        <label for="episodeTitle">Episode title</label>
+        <input id="episodeTitle" maxlength="200" required placeholder="Episode title">
+        <label for="episodeDescription">Episode description (optional)</label>
+        <textarea id="episodeDescription" rows="2" placeholder="Episode description"></textarea>
+        <div id="episodeDriveSelection" class="drive-selected hidden" role="status">
+          <strong id="episodeDriveName">No episode video selected</strong>
+          <p id="episodeDriveMeta" class="drive-hint"></p>
+          <button id="clearEpisodeDrive" type="button" class="secondary">Remove selected video</button>
+        </div>
+        <p class="source-help">In Google Drive Manager, click <strong>Episode</strong> beside a video to select its source.</p>
+        <label><input id="episodePublished" type="checkbox" checked style="width:auto"> Published to visitors</label>
+        <button id="saveEpisode" type="submit">Publish episode</button>
+      </form>
+      <p id="episodeNotice" class="notice" role="status"></p>
+      <div id="seriesList" style="margin-top:18px"></div>
     </div>
 
     <div class="panel">
