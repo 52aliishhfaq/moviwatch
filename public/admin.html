@@ -330,6 +330,103 @@ $('#clearPublishDrive').addEventListener('click',()=>{
   setPendingPublishFile(null);
   driveMessage('Drive video removed from the new movie form.');
 });
+function stageDriveFileForEpisode(file){
+  if(!file||file.mimeType==='application/vnd.google-apps.folder')return;
+  const isVideo=(file.mimeType||'').toLowerCase().startsWith('video/')||/\.(mp4|m4v|mov|mkv|webm|avi|mpg|mpeg|mpe|3gp|3g2|ts|ogv|flv)$/i.test(file.name||'');
+  if(!isVideo){driveMessage('Select a video file for this episode.',true);return;}
+  pendingEpisodeFile={...file,accountId:driveAccountId};
+  $('#episodeDriveSelection').classList.remove('hidden');
+  $('#episodeDriveName').textContent=pendingEpisodeFile.name;
+  $('#episodeDriveMeta').textContent=[pendingEpisodeFile.mimeType,formatDriveBytes(pendingEpisodeFile.size),driveAccountLabel()].filter(Boolean).join(' · ');
+  $('#episodeForm').scrollIntoView({behavior:'smooth',block:'start'});
+  driveMessage('Episode video selected. Complete its season, episode number and title.');
+}
+function clearPendingEpisodeFile(){
+  pendingEpisodeFile=null;
+  $('#episodeDriveSelection').classList.add('hidden');
+  $('#episodeDriveName').textContent='No episode video selected';
+  $('#episodeDriveMeta').textContent='';
+}
+function driveAccountLabel(){
+  return driveAccounts.find(account=>account.id===driveAccountId)?.email||driveAccountId;
+}
+$('#clearEpisodeDrive').addEventListener('click',clearPendingEpisodeFile);
+async function loadSeries(){
+  const result=await api('/api/admin/series');
+  seriesData=result.series||[];
+  const select=$('#episodeSeries'),previous=select.value;
+  select.replaceChildren();
+  if(!seriesData.length)select.add(new Option('Create a series first',''));
+  else{
+    seriesData.forEach(series=>select.add(new Option(series.title+(series.is_published?'':' (Hidden)'),series.id)));
+    if(seriesData.some(series=>series.id===previous))select.value=previous;
+  }
+  renderSeriesList();
+}
+function renderSeriesList(){
+  const list=$('#seriesList');list.replaceChildren();
+  if(!seriesData.length){list.textContent='No web series created yet.';return;}
+  seriesData.forEach(series=>{
+    const panel=document.createElement('div');panel.className='drive-selected';panel.style.marginTop='10px';
+    const title=document.createElement('strong');title.textContent=series.title;
+    const meta=document.createElement('p');meta.className='drive-hint';meta.textContent=(series.category||'')+' · '+(series.is_published?'Published':'Hidden')+' · '+(series.episodes||[]).length+' episode(s)';
+    const remove=document.createElement('button');remove.type='button';remove.className='danger';remove.textContent='Delete series';
+    remove.addEventListener('click',async()=>{
+      if(!confirm('Delete "'+series.title+'" and all its episodes?'))return;
+      try{await api('/api/admin/series/'+series.id,{method:'DELETE'});await loadSeries();$('#seriesNotice').textContent='Series and its episodes deleted.';}
+      catch(error){$('#seriesNotice').textContent=error.message;}
+    });
+    panel.append(title,meta,remove);
+    (Array.isArray(series.episodes)?series.episodes:[]).forEach(item=>{
+      const line=document.createElement('div');line.className='drive-row';line.style.padding='7px 0';
+      const label=document.createElement('div');label.className='drive-name';
+      const name=document.createElement('strong');name.textContent='S'+String(item.season_number).padStart(2,'0')+' · E'+String(item.episode_number).padStart(2,'0')+' — '+item.title;
+      const small=document.createElement('small');small.textContent=(item.is_published?'Published':'Hidden')+' · '+(item.video_sources||[]).length+' source(s)';
+      label.append(name,small);
+      const del=document.createElement('button');del.type='button';del.className='danger';del.textContent='Delete';
+      del.addEventListener('click',async()=>{
+        if(!confirm('Delete episode "'+item.title+'"?'))return;
+        try{await api('/api/admin/episodes/'+item.id,{method:'DELETE'});await loadSeries();$('#episodeNotice').textContent='Episode deleted.';}
+        catch(error){$('#episodeNotice').textContent=error.message;}
+      });
+      line.append(label,del);panel.append(line);
+    });
+    list.append(panel);
+  });
+}
+$('#seriesForm').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const button=$('#saveSeries');button.disabled=true;button.textContent='Creating…';
+  $('#seriesNotice').textContent='Saving series…';
+  const body={title:$('#seriesTitle').value,posterUrl:$('#seriesPoster').value,category:$('#seriesCategory').value,
+    description:$('#seriesDescription').value,isPublished:$('#seriesPublished').checked};
+  try{
+    const result=await api('/api/admin/series',{method:'POST',body:JSON.stringify(body)});
+    $('#seriesForm').reset();$('#seriesPublished').checked=true;
+    await loadSeries();$('#episodeSeries').value=result.series.id;
+    $('#seriesNotice').textContent='Series created. Now add its episodes below.';
+  }catch(error){$('#seriesNotice').textContent=error.message;}
+  finally{button.disabled=false;button.textContent='Create series';}
+});
+$('#episodeForm').addEventListener('submit',async event=>{
+  event.preventDefault();
+  if(!pendingEpisodeFile){$('#episodeNotice').textContent='Select an episode video with the Episode button in Drive Manager.';return;}
+  const seriesId=$('#episodeSeries').value;
+  if(!seriesId){$('#episodeNotice').textContent='Create or select a series first.';return;}
+  const button=$('#saveEpisode');button.disabled=true;button.textContent='Publishing…';
+  const body={seasonNumber:Number($('#episodeSeason').value),episodeNumber:Number($('#episodeNumber').value),
+    title:$('#episodeTitle').value,description:$('#episodeDescription').value,
+    videoSources:[{label:pendingEpisodeFile.name,provider:'google-drive-private',fileId:pendingEpisodeFile.id,
+      accountId:pendingEpisodeFile.accountId||driveAccountId,driveId:pendingEpisodeFile.driveId||'',
+      modifiedTime:pendingEpisodeFile.modifiedTime||''}],isPublished:$('#episodePublished').checked};
+  try{
+    await api('/api/admin/series/'+encodeURIComponent(seriesId)+'/episodes',{method:'POST',body:JSON.stringify(body)});
+    $('#episodeForm').reset();$('#episodeSeason').value='1';$('#episodeNumber').value='1';$('#episodePublished').checked=true;
+    clearPendingEpisodeFile();await loadSeries();
+    $('#episodeNotice').textContent='Episode published successfully.';
+  }catch(error){$('#episodeNotice').textContent=error.message;}
+  finally{button.disabled=false;button.textContent='Publish episode';}
+});
 function updateDriveSelected(file){
   driveSelected=file||null;
   $('#driveSelectedName').textContent=file?file.name:'No file selected';
@@ -448,7 +545,10 @@ function renderDriveFiles(){
       const publish=document.createElement('button');publish.className='publish-file';publish.type='button';publish.textContent=pendingPublishFile?.id===file.id?'Selected':'Publish';
       publish.disabled=pendingPublishFile?.id===file.id;
       publish.addEventListener('click',()=>stageDriveFileForMovie(file));
-      actions.append(publish);
+      const episode=document.createElement('button');episode.className='secondary';episode.type='button';episode.textContent=pendingEpisodeFile?.id===file.id?'Episode selected':'Episode';
+      episode.disabled=pendingEpisodeFile?.id===file.id;
+      episode.addEventListener('click',()=>stageDriveFileForEpisode(file));
+      actions.append(publish,episode);
       const select=document.createElement('button');select.className='secondary';select.type='button';select.textContent=driveSelected?.id===file.id?'Managing':'Manage';
       select.addEventListener('click',()=>{updateDriveSelected(file);renderDriveFiles();});
       actions.append(select);
@@ -625,9 +725,12 @@ $('#driveUploadNew').addEventListener('click',()=>uploadDriveFile(false));
 $('#driveReplace').addEventListener('click',()=>uploadDriveFile(true));
 $('#driveConnect').textContent='Connect Google Drive';
 async function handleDriveCallback(){
-  const result=new URLSearchParams(location.search).get('drive');
+  const params=new URLSearchParams(location.search);
+  const result=params.get('drive');
+  const connectedAccount=params.get('accountId');
+  if(connectedAccount)driveAccountId=connectedAccount;
   if(!result)return;
-  if(result==='connected')driveMessage('Google Drive connected successfully.');
+  if(result==='connected')driveMessage('Google Drive connected successfully: '+(connectedAccount||'account'));
   else if(result==='cancelled')driveMessage('Google authorization was cancelled.',true);
   else driveMessage('Google Drive connection failed. Check OAuth settings and try again.',true);
   history.replaceState({},'',location.pathname);
