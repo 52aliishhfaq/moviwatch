@@ -421,12 +421,15 @@ async function readAll(reader) {
 // abort signal must reach that fetch so a discarded seek does not waste bytes.
 {
   let continuationSignal = null;
+  let markFetchStarted;
+  const fetchStarted = new Promise((resolve) => { markFetchStarted = resolve; });
   const relay = createRangeRelayStream({
     firstPart: { range: { start: 0, end: 0, total: 2 }, body: byteStream([[0]]) },
     end: 1,
     total: 2,
     fetchPart: async (_start, _end, signal) => {
       continuationSignal = signal;
+      markFetchStarted();
       return await new Promise((resolve, reject) => {
         signal.addEventListener('abort', () => reject(new Error('upstream continuation aborted')), { once: true });
       });
@@ -435,7 +438,7 @@ async function readAll(reader) {
   const reader = relay.getReader();
   assert.deepEqual([...((await reader.read()).value)], [0]);
   const pending = reader.read();
-  await Promise.resolve();
+  await fetchStarted;
   await reader.cancel('viewer seeked elsewhere');
   assert.ok(continuationSignal?.aborted, 'Cancel must abort the pending upstream Range fetch');
   await pending.catch(() => {});
