@@ -1379,8 +1379,6 @@ async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverrid
     }
     mediaUrl = redirected.toString();
   }
-y { await upstream.body?.cancel(); } catch {} 
-  }
   if (!upstream) throw new Error('Google Drive media request returned no response.');
   if (upstream.status === 416) {
     const unsatisfied = /^bytes \*\/([0-9]+)$/.exec(upstream.headers.get('content-range') || '');
@@ -1398,7 +1396,6 @@ y { await upstream.body?.cancel(); } catch {}
   if (bytes.byteLength !== range.end - range.start + 1) throw new Error('Google Drive returned an incomplete video range');
   return { range, bytes, upstreamType: (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() };
 }
-
 function cachedSourceProps(source, normalizedSourceVersion) {
   return {
     sourceUrl: source.url,
