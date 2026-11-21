@@ -33,6 +33,7 @@ export function createRangeRelayStream({
   let requests = 1;
   let retries = 0;
   let closed = false;
+  const abortController = new AbortController();
 
   const validatePart = (part, expectedStart) => {
     const range = part?.range;
@@ -64,7 +65,7 @@ export function createRangeRelayStream({
                 throw new Error('Video source returned too many small byte ranges');
               }
               try {
-                currentPart = await fetchPart(nextOffset, requestedEnd);
+                currentPart = await fetchPart(nextOffset, requestedEnd, abortController.signal);
               } catch (error) {
                 if (++retries > maxRetries) throw error;
                 continue;
@@ -138,6 +139,7 @@ export function createRangeRelayStream({
         }
       } catch (error) {
         closed = true;
+        abortController.abort(error);
         try { await currentReader?.cancel(error); } catch {}
         controller.error(error);
       }
@@ -145,6 +147,7 @@ export function createRangeRelayStream({
 
     async cancel(reason) {
       closed = true;
+      abortController.abort(reason);
       try { await currentReader?.cancel(reason); } catch {}
     }
   });
