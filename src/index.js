@@ -2490,19 +2490,75 @@ async function api(req, env, ctx) {
   return json({ error: 'API route not found' }, 404);
 }
 
+async function secureResponse(response, request) {
+  const headers = new Headers(response.headers);
+  headers.set('X-Frame-Options', 'DENY');
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Referrer-Policy', 'same-origin');
+  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  headers.set('Strict-Transport-Security', 'max-age=31536000');
+  const contentType = headers.get('content-type') || '';
+  const isHtml = /text\\/html/i.test(contentType);
+  let nonce = '';
+  if (isHtml) {
+    const bytes = new Uint8Array(18);
+    crypto.getRandomValues(bytes);
+    let raw = '';
+    for (const byte of bytes) raw += String.fromCharCode(byte);
+    nonce = btoa(raw);
+  }
+  const scriptPolicy = isHtml ? "'self' 'nonce-" + nonce + "'" : "'self'";
+  headers.set('Content-Security-Policy',
+    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; " +
+    "script-src " + scriptPolicy + "; style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data: https:; media-src 'self' blob:; connect-src 'self'; " +
+    "font-src 'self' data:; worker-src 'self' blob:; manifest-src 'self'");
+  const secured = new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+  if (!isHtml || request.method === 'HEAD') return secured;
+  return new HTMLRewriter().on('script', {
+    element(element) {
+      if (!element.hasAttribute('src')) element.setAttribute('nonce', nonce);
+    }
+  }).transform(secured);
+}
+
 export default {
   async fetch(req, env, ctx) {
     try {
       const url = new URL(req.url);
-      if (url.pathname.startsWith('/api/')) return await api(req, env, ctx);
-      if (url.pathname === '/admin.html') return Response.redirect(new URL('/admin', url), 302);
-      if (url.pathname === '/admin') return env.ASSETS.fetch(new Request(new URL('/admin.html', url), req));
-      return env.ASSETS.fetch(req);
+      let response;
+      if (url.pathname.startsWith('/api/')) {
+        response = await api(req, env, ctx);
+      } else if (url.pathname === '/admin.html') {
+        response = Response.redirect(new URL('/admin', url), 302);
+      } else if (url.pathname === '/admin') {
+        response = await env.ASSETS.fetch(new Request(new URL('/admin.html', url), req));
+      } else {
+        const watchMatch = /^\\/watch\\/([^/]+)\\/?$/.exec(url.pathname);
+        if (watchMatch) {
+          let movieId = '';
+          try { movieId = decodeURIComponent(watchMatch[1]); } catch {}
+          if (!/^[0-9a-f-]{36}$/i.test(movieId)) {
+            response = json({ error: 'Not found' }, 404);
+          } else {
+            const assetUrl = new URL('/watch.html', url);
+            assetUrl.searchParams.set('id', movieId);
+            response = await env.ASSETS.fetch(new Request(assetUrl, req));
+          }
+        } else {
+          response = await env.ASSETS.fetch(req);
+        }
+      }
+      return await secureResponse(response, req);
     } catch (error) {
       console.error('Request failed:', error?.stack || error?.message || error);
       const message = error instanceof Error ? error.message : 'Internal server error';
-      const client = /required|invalid|cross-origin|must |between |only |unknown category|too large|HTTPS|Google Drive|Archive\.org|video link/i.test(message);
-      return json({ error: client ? message : 'Internal server error' }, client ? 400 : 500);
+      const client = /required|invalid|cross-origin|must |between |only |unknown category|too large|HTTPS|Google Drive|Archive\\.org|video link/i.test(message);
+      return await secureResponse(json({ error: client ? message : 'Internal server error' }, client ? 400 : 500), req);
     }
   }
 };
