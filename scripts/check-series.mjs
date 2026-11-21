@@ -48,6 +48,13 @@ includes(watch, 'id="seriesBrowser"', 'Season and episode browser');
 includes(watch, 'id="previousEpisode"', 'Previous episode navigation');
 includes(watch, 'id="nextEpisode"', 'Next episode navigation');
 
+// A failed optional series migration must not hide legacy published movies.
+includes(worker, "Series catalogue unavailable; using movie-only fallback:", 'Movie-only catalogue fallback');
+includes(worker, "FROM public.movies WHERE is_published=TRUE", 'Fallback query reads legacy movies table');
+includes(worker, "Public catalogue entrypoint returned HTTP", 'Internal catalogue failure logging');
+includes(worker, "path === '/api/admin/catalogue-diagnostics'", 'Admin database/schema diagnostics route');
+includes(worker, "has_schema_privilege(current_user, 'public', 'CREATE')", 'Safe schema permission diagnostic');
+
 // New tables are additive; the legacy movies schema remains present.
 includes(schema, 'CREATE TABLE IF NOT EXISTS public.movies', 'Legacy movie schema');
 includes(schema, 'CREATE TABLE IF NOT EXISTS public.series', 'Series SQL schema');

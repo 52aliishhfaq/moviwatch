@@ -317,27 +317,45 @@ const MOVIE_METADATA_CACHE_TTL = 30;
 
 async function publicMovies(env,category,query){
  const sql=sqlFor(env);
- await ensureSeriesSchema(sql);
- return await sql`WITH movie_rows AS (
-   SELECT id,title,poster_url,category,created_at,'movie'::text AS content_type,
+ // Series support is additive. A missing table, failed index migration, or a
+ // restricted DB role must never hide the pre-existing movie catalogue.
+ try {
+  await ensureSeriesSchema(sql);
+  return await sql`WITH movie_rows AS (
+    SELECT id,title,poster_url,category,created_at,'movie'::text AS content_type,
+     NULL::integer AS episode_count,
+     COALESCE((SELECT jsonb_agg(jsonb_build_object('label',COALESCE(NULLIF(item.value->>'label',''),'Video'),'url',item.value->>'url',
+      'provider',item.value->>'provider','file_id',item.value->>'file_id','account_id',item.value->>'account_id','source_index',item.ordinality-1) ORDER BY item.ordinality)
+     FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) WITH ORDINALITY AS item(value,ordinality)),'[]'::jsonb) AS video_sources
+    FROM public.movies WHERE is_published=TRUE
+     AND (${category||null}::text IS NULL OR category=${category||null})
+     AND (${query||null}::text IS NULL OR title ILIKE ${query?'%'+query+'%':null})
+  ), series_rows AS (
+    SELECT s.id,s.title,s.poster_url,s.category,s.created_at,'series'::text AS content_type,
+      (SELECT COUNT(*)::int FROM public.episodes e WHERE e.series_id=s.id AND e.is_published=TRUE) AS episode_count,
+      '[]'::jsonb AS video_sources
+    FROM public.series s WHERE s.is_published=TRUE
+     AND (${category||null}::text IS NULL OR s.category=${category||null})
+     AND (${query||null}::text IS NULL OR s.title ILIKE ${query?'%'+query+'%':null})
+  )
+  SELECT * FROM (SELECT * FROM movie_rows UNION ALL SELECT * FROM series_rows) catalogue
+  ORDER BY created_at DESC LIMIT 100`;
+ } catch(error) {
+  console.error('Series catalogue unavailable; using movie-only fallback:', error?.message || error);
+  // This query uses only the original movies table, so a series migration
+  // failure cannot make already-published movies disappear from the homepage.
+  return await sql`SELECT id,title,poster_url,category,created_at,'movie'::text AS content_type,
     NULL::integer AS episode_count,
     COALESCE((SELECT jsonb_agg(jsonb_build_object('label',COALESCE(NULLIF(item.value->>'label',''),'Video'),'url',item.value->>'url',
-     'provider',item.value->>'provider','file_id',item.value->>'file_id','account_id',item.value->>'account_id','source_index',item.ordinality-1) ORDER BY item.ordinality)
+      'provider',item.value->>'provider','file_id',item.value->>'file_id','account_id',item.value->>'account_id','source_index',item.ordinality-1) ORDER BY item.ordinality)
     FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) WITH ORDINALITY AS item(value,ordinality)),'[]'::jsonb) AS video_sources
    FROM public.movies WHERE is_published=TRUE
     AND (${category||null}::text IS NULL OR category=${category||null})
     AND (${query||null}::text IS NULL OR title ILIKE ${query?'%'+query+'%':null})
- ), series_rows AS (
-   SELECT s.id,s.title,s.poster_url,s.category,s.created_at,'series'::text AS content_type,
-     (SELECT COUNT(*)::int FROM public.episodes e WHERE e.series_id=s.id AND e.is_published=TRUE) AS episode_count,
-     '[]'::jsonb AS video_sources
-   FROM public.series s WHERE s.is_published=TRUE
-    AND (${category||null}::text IS NULL OR s.category=${category||null})
-    AND (${query||null}::text IS NULL OR s.title ILIKE ${query?'%'+query+'%':null})
- )
- SELECT * FROM (SELECT * FROM movie_rows UNION ALL SELECT * FROM series_rows) catalogue
- ORDER BY created_at DESC LIMIT 100`;
+   ORDER BY created_at DESC LIMIT 100`;
+ }
 }
+
 export class PublicCatalogue extends WorkerEntrypoint {
  async fetch(request){
   if(request.method!=='GET')return new Response(null,{status:405,headers:{allow:'GET','cache-control':'no-store'}});
@@ -2072,8 +2090,18 @@ async function api(req, env, ctx) {
     if (category) catalogueUrl.searchParams.set('category', category);
     if (query) catalogueUrl.searchParams.set('q', query);
     const catalogueEntry = ctx.exports.PublicCatalogue({ props: { category, query } });
-    const cachedCatalogue = await catalogueEntry.fetch(new Request(catalogueUrl));
-    if (!cachedCatalogue.ok) return json({ error: 'Could not load the public catalogue' }, 502);
+    let cachedCatalogue;
+    try {
+      cachedCatalogue = await catalogueEntry.fetch(new Request(catalogueUrl));
+    } catch (error) {
+      console.error('Public catalogue entrypoint threw:', error?.stack || error?.message || error);
+      return json({ error: 'Could not load the public catalogue' }, 502);
+    }
+    if (!cachedCatalogue.ok) {
+      const detail = await cachedCatalogue.clone().text().catch(() => '');
+      console.error('Public catalogue entrypoint returned HTTP', cachedCatalogue.status, detail.slice(0, 800));
+      return json({ error: 'Could not load the public catalogue' }, 502);
+    }
     const payload = await cachedCatalogue.json();
     // Cloudflare's cached PublicCatalogue entrypoint is the authoritative cache.
     // Do not let Vercel cache this gateway response: doing so hides the current
@@ -2324,6 +2352,39 @@ async function api(req, env, ctx) {
       }
     }
     const sql = sqlFor(env);
+    if (path === '/api/admin/catalogue-diagnostics' && method === 'GET') {
+      const rows = await sql`SELECT current_database() AS database_name,
+        current_schema() AS schema_name,
+        (SELECT COUNT(*)::int FROM public.movies) AS movie_count,
+        to_regclass('public.series')::text AS series_table,
+        to_regclass('public.episodes')::text AS episodes_table,
+        has_schema_privilege(current_user, 'public', 'CREATE') AS can_create_public_objects`;
+      let seriesCount = null, episodeCount = null, seriesReadError = null;
+      if (rows[0]?.series_table && rows[0]?.episodes_table) {
+        try {
+          const counts = await sql`SELECT
+            (SELECT COUNT(*)::int FROM public.series) AS series_count,
+            (SELECT COUNT(*)::int FROM public.episodes) AS episode_count`;
+          seriesCount = Number(counts[0]?.series_count || 0);
+          episodeCount = Number(counts[0]?.episode_count || 0);
+        } catch (error) {
+          seriesReadError = (error instanceof Error ? error.message : 'Series tables could not be read').slice(0, 200);
+        }
+      }
+      return json({
+        database: rows[0]?.database_name || null,
+        schema: rows[0]?.schema_name || null,
+        movieCount: Number(rows[0]?.movie_count || 0),
+        seriesTables: {
+          seriesExists: Boolean(rows[0]?.series_table),
+          episodesExists: Boolean(rows[0]?.episodes_table),
+          canCreatePublicObjects: rows[0]?.can_create_public_objects === true,
+          seriesCount,
+          episodeCount,
+          readError: seriesReadError
+        }
+      });
+    }
     if (path === '/api/admin/series' || path.startsWith('/api/admin/series/') || path.startsWith('/api/admin/episodes/')) {
       await ensureSeriesSchema(sql);
       if (path === '/api/admin/series' && method === 'GET') {
