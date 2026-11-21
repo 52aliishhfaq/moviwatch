@@ -291,13 +291,13 @@ function episodeInput(body) {
   return { title, season, episode, description: typeof body.description === 'string' ? body.description.trim().slice(0,5000) : '', sources, published: body.isPublished !== false };
 }
 function publicVideoSources(videoSources) {
-  return (Array.isArray(videoSources) ? videoSources : []).flatMap((source) => {
+  return (Array.isArray(videoSources) ? videoSources : []).flatMap((source, index) => {
     try {
       if (source?.provider === 'google-drive-private' && isGoogleDriveFileId(source.file_id)) {
-        return [{ label: (source.label || 'Google Drive').slice(0,60), provider: source.provider, source_index: 0 }];
+        return [{ label: (source.label || 'Google Drive').slice(0,60), provider: source.provider, source_index: index }];
       }
       const url = videoSourceUrl(source.url), provider = sourceProvider(url);
-      return [{ label: (source.label || provider).slice(0,60), provider, source_index: 0 }];
+      return [{ label: (source.label || provider).slice(0,60), provider, source_index: index }];
     } catch { return []; }
   });
 }
@@ -393,7 +393,7 @@ async function movieById(ctx, env, movieId) {
   if (!/^[0-9a-f-]{36}$/i.test(movieId)) return { movie: null, cacheStatus: 'BYPASS' };
   const metadataEntry = ctx.exports.MovieMetadata({ props: { movieId } });
   const response = await metadataEntry.fetch(
-    new Request('https://moviwatch.internal/__movie_metadata__v2/' + encodeURIComponent(movieId))
+    new Request('https://moviwatch.internal/__movie_metadata__v3/' + encodeURIComponent(movieId))
   );
   if (!response.ok) throw new Error('Movie metadata lookup failed (HTTP ' + response.status + ')');
   const payload = await response.json();
@@ -1998,12 +1998,42 @@ async function api(req, env, ctx) {
   }
   if (path === '/api/auth/me' && method === 'GET') return await isAdmin(req, env) ? json({ authenticated: true }) : json({ authenticated: false }, 401);
 
+  const contentMatch = /^\\/api\\/content\\/([0-9a-f-]{36})$/.exec(path);
+  if (contentMatch && method === 'GET') {
+    const contentId = contentMatch[1];
+    const sql = sqlFor(env);
+    await ensureSeriesSchema(sql);
+    const seriesRows = await sql`SELECT id,title,description,poster_url,category,created_at
+      FROM public.series WHERE id=${contentId} AND is_published=TRUE LIMIT 1`;
+    if (seriesRows[0]) {
+      const seasons = await sql`SELECT season_number,
+        jsonb_agg(jsonb_build_object('id',e.id,'episode_number',e.episode_number,'title',e.title,'description',e.description)
+          ORDER BY e.episode_number) AS episodes
+        FROM public.episodes e WHERE e.series_id=${contentId} AND e.is_published=TRUE
+        GROUP BY season_number ORDER BY season_number`;
+      return json({ content: { ...seriesRows[0], content_type: 'series', seasons } });
+    }
+    const metadata = await movieById(ctx, env, contentId);
+    const movie = metadata.movie;
+    if (!movie) return json({ error: 'Content not found or not published.' }, 404);
+    const content = { ...movie, video_sources: publicVideoSources(movie.video_sources) };
+    if (movie.content_type === 'episode' && movie.series_id) {
+      const siblings = await sql`SELECT id,title,season_number,episode_number FROM public.episodes
+        WHERE series_id=${movie.series_id} AND is_published=TRUE
+        ORDER BY season_number,episode_number`;
+      const at = siblings.findIndex((item) => item.id === movie.id);
+      content.previous_episode = at > 0 ? siblings[at - 1] : null;
+      content.next_episode = at >= 0 && at < siblings.length - 1 ? siblings[at + 1] : null;
+    }
+    return json({ content });
+  }
+
   if (path === '/api/movies' && method === 'GET') {
     const category = url.searchParams.get('category') || '';
     const query = (url.searchParams.get('q') || '').trim().slice(0, 80);
     if (category && !CATEGORIES.has(category)) return json({ error: 'Unknown category' }, 400);
 
-    const catalogueUrl = new URL('https://moviwatch.internal/__public_catalogue__v2');
+    const catalogueUrl = new URL('https://moviwatch.internal/__public_catalogue__v3');
     if (category) catalogueUrl.searchParams.set('category', category);
     if (query) catalogueUrl.searchParams.set('q', query);
     const catalogueEntry = ctx.exports.PublicCatalogue({ props: { category, query } });
@@ -2259,6 +2289,82 @@ async function api(req, env, ctx) {
       }
     }
     const sql = sqlFor(env);
+    if (path === '/api/admin/series' || path.startsWith('/api/admin/series/') || path.startsWith('/api/admin/episodes/')) {
+      await ensureSeriesSchema(sql);
+      if (path === '/api/admin/series' && method === 'GET') {
+        const rows = await sql`SELECT s.id,s.title,s.description,s.poster_url,s.category,s.is_published,s.created_at,s.updated_at,
+          COALESCE((SELECT jsonb_agg(jsonb_build_object(
+            'id',e.id,'series_id',e.series_id,'season_number',e.season_number,'episode_number',e.episode_number,
+            'title',e.title,'description',e.description,'is_published',e.is_published,'created_at',e.created_at,
+            'video_sources',COALESCE((SELECT jsonb_agg(jsonb_build_object(
+              'label',v->>'label','provider',v->>'provider','url',CASE WHEN v->>'provider'='google-drive-private' THEN 'drive-private://' || (v->>'file_id') ELSE v->>'url' END,
+              'fileId',v->>'file_id','accountId',COALESCE(v->>'account_id','primary'),'driveId',v->>'drive_id','modifiedTime',v->>'modified_time'
+            )) FROM jsonb_array_elements(e.videos) v),'[]'::jsonb)
+          ) ORDER BY e.season_number,e.episode_number)
+          FROM public.episodes e WHERE e.series_id=s.id),'[]'::jsonb) AS episodes
+          FROM public.series s ORDER BY s.updated_at DESC LIMIT 500`;
+        return json({ series: rows });
+      }
+      if (path === '/api/admin/series' && method === 'POST') {
+        const value = seriesInput(await readBody(req));
+        const rows = await sql`INSERT INTO public.series(id,title,description,poster_url,category,is_published)
+          VALUES(${crypto.randomUUID()},${value.title},${value.description},${value.poster},${value.category},${value.published})
+          RETURNING id,title,description,poster_url,category,is_published,created_at,updated_at`;
+        await invalidateContentCaches(ctx);
+        return json({ series: rows[0] }, 201);
+      }
+      const seriesMatch = /^\\/api\\/admin\\/series\\/([0-9a-f-]{36})$/.exec(path);
+      if (seriesMatch) {
+        const seriesId = seriesMatch[1];
+        if (method === 'PUT') {
+          const value = seriesInput(await readBody(req));
+          const rows = await sql`UPDATE public.series SET title=${value.title},description=${value.description},
+            poster_url=${value.poster},category=${value.category},is_published=${value.published},updated_at=NOW()
+            WHERE id=${seriesId} RETURNING id,title,description,poster_url,category,is_published,created_at,updated_at`;
+          if (!rows[0]) return json({ error: 'Series not found.' }, 404);
+          await invalidateContentCaches(ctx);
+          return json({ series: rows[0] });
+        }
+        if (method === 'DELETE') {
+          const rows = await sql`DELETE FROM public.series WHERE id=${seriesId} RETURNING id`;
+          if (!rows[0]) return json({ error: 'Series not found.' }, 404);
+          await invalidateContentCaches(ctx);
+          return json({ ok: true });
+        }
+      }
+      const episodeCreateMatch = /^\\/api\\/admin\\/series\\/([0-9a-f-]{36})\\/episodes$/.exec(path);
+      if (episodeCreateMatch && method === 'POST') {
+        const seriesId = episodeCreateMatch[1];
+        const value = episodeInput(await readBody(req));
+        const seriesRows = await sql`SELECT id FROM public.series WHERE id=${seriesId} LIMIT 1`;
+        if (!seriesRows[0]) return json({ error: 'Series not found.' }, 404);
+        const rows = await sql`INSERT INTO public.episodes(id,series_id,season_number,episode_number,title,description,videos,is_published)
+          VALUES(${crypto.randomUUID()},${seriesId},${value.season},${value.episode},${value.title},${value.description},${JSON.stringify(value.sources)}::jsonb,${value.published})
+          RETURNING id,series_id,season_number,episode_number,title,description,is_published,created_at,updated_at`;
+        await invalidateContentCaches(ctx);
+        return json({ episode: rows[0] }, 201);
+      }
+      const episodeMatch = /^\\/api\\/admin\\/episodes\\/([0-9a-f-]{36})$/.exec(path);
+      if (episodeMatch) {
+        const episodeId = episodeMatch[1];
+        if (method === 'PUT') {
+          const value = episodeInput(await readBody(req));
+          const rows = await sql`UPDATE public.episodes SET season_number=${value.season},episode_number=${value.episode},
+            title=${value.title},description=${value.description},videos=${JSON.stringify(value.sources)}::jsonb,
+            is_published=${value.published},updated_at=NOW() WHERE id=${episodeId}
+            RETURNING id,series_id,season_number,episode_number,title,description,is_published,created_at,updated_at`;
+          if (!rows[0]) return json({ error: 'Episode not found.' }, 404);
+          await invalidateContentCaches(ctx, episodeId);
+          return json({ episode: rows[0] });
+        }
+        if (method === 'DELETE') {
+          const rows = await sql`DELETE FROM public.episodes WHERE id=${episodeId} RETURNING id`;
+          if (!rows[0]) return json({ error: 'Episode not found.' }, 404);
+          await invalidateContentCaches(ctx, episodeId);
+          return json({ ok: true });
+        }
+      }
+    }
     if (path === '/api/admin/movies' && method === 'GET') {
       const rows = await sql`SELECT id,title,poster_url,category,videos AS video_sources,is_published,created_at,updated_at
         FROM movies ORDER BY updated_at DESC LIMIT 500`;
