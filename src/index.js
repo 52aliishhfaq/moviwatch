@@ -1430,14 +1430,15 @@ function videoChunkSizeAt(chunkStart, fragmented) {
   return fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE;
 }
 
-async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverride = 0, streamBody = false) {
+async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverride = 0, streamBody = false, externalSignal = null) {
   if (source?.provider !== 'google-drive-private') {
-    return fetchVideoRangeFromMirrors(source.url, start, end, timeoutOverride, streamBody);
+    return fetchVideoRangeFromMirrors(source.url, start, end, timeoutOverride, streamBody, externalSignal);
   }
   if (!isGoogleDriveFileId(source.fileId) || source.url !== googleDriveMediaUrl(source.fileId)) {
     throw new Error('Invalid private Google Drive video source');
   }
-  const signal = AbortSignal.timeout(timeoutOverride || Math.max(45000, Math.min(5 * 60 * 1000, 30000 + (end - start + 1) / (192 * 1024) * 2000)));
+  const timeoutSignal = AbortSignal.timeout(timeoutOverride || Math.max(45000, Math.min(5 * 60 * 1000, 30000 + (end - start + 1) / (192 * 1024) * 2000)));
+  const signal = externalSignal ? AbortSignal.any([timeoutSignal, externalSignal]) : timeoutSignal;
   const rangeHeaders = new Headers({ Range: 'bytes=' + start + '-' + end, 'Accept-Encoding': 'identity' });
   let mediaUrl = source.url;
   let upstream = null;
@@ -1517,8 +1518,8 @@ async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHU
     firstPart: first,
     end,
     total: range.total,
-    fetchPart: (nextStart, nextEnd) =>
-      fetchConfiguredVideoRange(source, nextStart, nextEnd, env, 0, true),
+    fetchPart: (nextStart, nextEnd, signal) =>
+      fetchConfiguredVideoRange(source, nextStart, nextEnd, env, 0, true, signal),
     maxRequests: 128
   });
   const contentType = first.upstreamType || 'application/octet-stream';
@@ -1804,7 +1805,7 @@ function archiveTimeout(size, score) {
   return Math.max(45000, Math.min(5 * 60 * 1000, 30000 + size / rate * 2000));
 }
 
-async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeoutOverride = 0, streamBody = false) {
+async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeoutOverride = 0, streamBody = false, externalSignal = null) {
   const details = archiveSourceParts(sourceUrl);
   const candidates = details ? await archiveCandidates(sourceUrl) : [{ url: sourceUrl, host: '', identifier: '' }];
   let lastError;
@@ -1813,7 +1814,8 @@ async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeou
     const began = Date.now();
     try {
       const score = details && candidate.host ? archiveScore(details.identifier, candidate.host) : null;
-      const signal = AbortSignal.timeout(timeoutOverride || archiveTimeout(requestedEnd - start + 1, score));
+      const timeoutSignal = AbortSignal.timeout(timeoutOverride || archiveTimeout(requestedEnd - start + 1, score));
+      const signal = externalSignal ? AbortSignal.any([timeoutSignal, externalSignal]) : timeoutSignal;
       const upstream = await videoSourceFetch(candidate.url, 'GET', new Headers({
         Range: 'bytes=' + start + '-' + requestedEnd,
         'Accept-Encoding': 'identity'
@@ -1856,7 +1858,7 @@ async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeou
                 streamedBytes += value.byteLength;
                 controller.enqueue(value);
               } catch (error) {
-                recordArchiveFailure(details.identifier, candidate.host);
+                if (!externalSignal?.aborted) recordArchiveFailure(details.identifier, candidate.host);
                 controller.error(error);
               }
             },
@@ -1873,7 +1875,7 @@ async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeou
       return { range, bytes, upstreamType };
     } catch (error) {
       lastError = error instanceof Error ? error : new Error('Video range request failed');
-      if (details && candidate.host) recordArchiveFailure(details.identifier, candidate.host);
+      if (details && candidate.host && !externalSignal?.aborted) recordArchiveFailure(details.identifier, candidate.host);
       if (i === candidates.length - 1) throw lastError;
       console.warn('Archive.org mirror failed; switching storage host:', candidate.host || 'archive.org router', lastError.message);
     }
@@ -1959,7 +1961,7 @@ async function cachedVideoRange(req, env, ctx, source, movieId, optionIndex, ran
   if (directSeekCacheMiss && skipRemaining > VIDEO_DIRECT_SEEK_THRESHOLD) {
     try {
       const directStartedAt = Date.now();
-      const direct = await fetchConfiguredVideoRange(source, responseStart, responseEnd, env, 0, true);
+      const direct = await fetchConfiguredVideoRange(source, responseStart, responseEnd, env, 0, true, req.signal);
       directSeekSetupMs = Date.now() - directStartedAt;
       if (!direct.range || direct.range.start !== responseStart ||
           direct.range.total !== total || direct.range.end < responseStart ||
@@ -1971,8 +1973,8 @@ async function cachedVideoRange(req, env, ctx, source, movieId, optionIndex, ran
         firstPart: direct,
         end: responseEnd,
         total,
-        fetchPart: (nextStart, nextEnd) =>
-          fetchConfiguredVideoRange(source, nextStart, nextEnd, env, 0, true),
+        fetchPart: (nextStart, nextEnd, signal) =>
+          fetchConfiguredVideoRange(source, nextStart, nextEnd, env, 0, true, signal),
         maxRequests: 128
       });
       try { await firstChunk.body.cancel(); } catch {}
