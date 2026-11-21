@@ -204,7 +204,7 @@ console.log('Drive/Archive URL, provider, cache, range, protected playback/downl
 
 // Google Drive Manager: OAuth, private references and management routes stay server-side.
 assertIncludes(worker, "provider:'google-drive-private'", 'Private Drive sources must use an internal provider marker');
-assertIncludes(worker, 'googleDriveApiRequest(sqlFor(env), env, source.url', 'Private Drive video ranges must be authorized by the Worker');
+assertIncludes(worker, 'googleDriveApiRequest(sqlFor(env), env, mediaUrl', 'Private Drive video ranges must be authorized by the Worker');
 assertIncludes(worker, 'fetchConfiguredVideoRange(source, cursor, requestedEnd, env)', 'Private Drive bytes must enter the existing shared chunk cache');
 assertIncludes(worker, "pathname === '/api/google-drive/oauth/callback'", 'OAuth callback route missing');
 assertIncludes(worker, "path.startsWith('/api/admin/google-drive/')", 'Google Drive management must stay under the admin API gate');
