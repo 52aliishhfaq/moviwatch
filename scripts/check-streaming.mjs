@@ -206,12 +206,12 @@ console.log('Drive/Archive URL, provider, cache, range, protected playback/downl
 assertIncludes(worker, "provider:'google-drive-private'", 'Private Drive sources must use an internal provider marker');
 assertIncludes(worker, 'googleDriveApiRequest(sqlFor(env), env, source.url', 'Private Drive video ranges must be authorized by the Worker');
 assertIncludes(worker, 'fetchConfiguredVideoRange(source, cursor, requestedEnd, env)', 'Private Drive bytes must enter the existing shared chunk cache');
-assertIncludes(worker, "path === '/api/google-drive/oauth/callback'", 'OAuth callback route missing');
+assertIncludes(worker, "pathname === '/api/google-drive/oauth/callback'", 'OAuth callback route missing');
 assertIncludes(worker, "path.startsWith('/api/admin/google-drive/')", 'Google Drive management must stay under the admin API gate');
 assertIncludes(worker, 'refresh_token_ciphertext', 'Google refresh tokens must be encrypted at rest');
 assertIncludes(worker, 'session_ciphertext', 'Resumable upload session URLs must be encrypted at rest');
 assertIncludes(worker, 'new FixedLengthStream', 'Download size regression guard must remain in place');
 assertIncludes(admin, 'id="googleDrivePanel"', 'Admin Google Drive Manager UI missing');
-assertIncludes(admin, 'drive-private://', 'Admin editor must preserve internal private Drive references');
-assertIncludes(admin, 'Content-Range', 'Admin uploads must send explicit byte ranges');
+assertIncludes(worker, 'drive-private://', 'Admin API must preserve private Drive references without exposing them publicly');
+assertIncludes(admin, "'Content-Range': 'bytes '+offset+'-'+end+'/'+file.size", 'Admin uploads must send explicit byte ranges');
 assert.ok(!/GOOGLE_CLIENT_SECRET|GOOGLE_DRIVE_ENCRYPTION_KEY|refresh_token=/.test(admin), 'Google OAuth secrets must never be embedded in the browser UI');
