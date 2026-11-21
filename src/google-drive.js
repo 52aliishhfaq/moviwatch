@@ -144,12 +144,17 @@ export async function googleDriveAccessToken(sql, env) {
   if (accessTokenRefresh) return accessTokenRefresh;
 
   accessTokenRefresh = (async () => {
-    const refreshToken = await decryptGoogleDriveSecret(
-      env,
-      connection.refresh_token_ciphertext,
-      connection.refresh_token_iv,
-      DRIVE_TOKEN_AAD
-    );
+    let refreshToken;
+    try {
+      refreshToken = await decryptGoogleDriveSecret(
+        env,
+        connection.refresh_token_ciphertext,
+        connection.refresh_token_iv,
+        DRIVE_TOKEN_AAD
+      );
+    } catch {
+      throw new Error('Stored Google Drive refresh token cannot be decrypted with the current GOOGLE_DRIVE_ENCRYPTION_KEY. Reset the old Drive connection and reconnect after confirming the key.');
+    }
     const response = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
