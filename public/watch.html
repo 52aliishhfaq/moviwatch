@@ -123,7 +123,7 @@ const PLAYER_PREFETCH_AHEAD=1;
 const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||new URLSearchParams(location.search).get('id')||'');
 const video=$('#video');
 let availableSources=[],activeOptionIndex=-1,startupTimer=null,generation=0,startupReady=false,activeRangeSource=null;
-let playerLibrariesReady=false,playerLibraryError=false,currentAudioTracks=[];
+let playerLibrariesReady=false,playerLibraryError=false,mediaAuthorized=false,currentAudioTracks=[];
 
 function setStatus(message,error=false){
   $('#status').textContent=message;
@@ -215,7 +215,7 @@ async function selectAudioTrack(language){
 }
 function playSource(localIndex,playAfterLoad=true){
   const source=availableSources[localIndex];
-  if(!source||!playerLibrariesReady||!window.MoviwatchRangeSource)return;
+  if(!source||!playerLibrariesReady||!mediaAuthorized||!window.MoviwatchRangeSource)return;
     activeOptionIndex=localIndex;
   $('#sourceSelect').value=String(localIndex);
   clearTimer();
@@ -253,7 +253,7 @@ function playSource(localIndex,playAfterLoad=true){
   },30000);
 }
 function startPlayback(){
-  if(!playerLibrariesReady||playerLibraryError)return;
+  if(!playerLibrariesReady||!mediaAuthorized||playerLibraryError)return;
   if(!activeRangeSource)playSource(Math.max(activeOptionIndex,0),true);
   else{
     const result=video.play();
@@ -317,8 +317,9 @@ function setPlayerLibraryState(){
     return;
   }
   playerLibrariesReady=loaded;
-  $('#bigPlay').disabled=!loaded;
-  $('#playPause').disabled=!loaded;
+  const unavailable=!loaded||!mediaAuthorized;
+  $('#bigPlay').disabled=unavailable;
+  $('#playPause').disabled=unavailable;
   if(loaded)setStatus('');
 }
 function watchLibraryEvent(event){
@@ -409,6 +410,7 @@ async function prepare(){
       try{const payload=await session.json();if(payload.error)message=payload.error}catch{}
       throw new Error(message);
     }
+    mediaAuthorized=true;
     const select=$('#sourceSelect'),selectLabel=$('#sourceSelectLabel');
     select.replaceChildren();
     availableSources.forEach((source,index)=>select.add(new Option(
@@ -423,8 +425,11 @@ async function prepare(){
     $('#bigPlay').disabled=!playerLibrariesReady;
     $('#playPause').disabled=!playerLibrariesReady;
   }catch(error){
+    mediaAuthorized=false;
     setStatus(error.message||'This content is temporarily unavailable. Please try again.',true);
     $('#bigPlay').hidden=true;
+    $('#bigPlay').disabled=true;
+    $('#playPause').disabled=true;
     $('#retry').classList.add('show');
   }
 }
