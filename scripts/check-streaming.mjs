@@ -62,7 +62,8 @@ assertIncludes(worker, 'const VIDEO_CHUNK_SIZE = 8 * 1024 * 1024', '8 MiB contin
 assertIncludes(worker, 'const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024', '512 KiB fMP4 startup segment missing');
 assertIncludes(worker, 'const VIDEO_CACHE_TTL = 24 * 60 * 60', '24-hour shared video cache TTL missing');
 assertIncludes(worker, "'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600'", 'Complete video chunks must remain cacheable for 24 hours');
-assertIncludes(worker, 'props: { sourceUrl: source.url, sourceVersion: normalizedSourceVersion }', 'Video cache key must use source identity and version, not viewer identity');
+assertIncludes(worker, 'props: cachedSourceProps(source, normalizedSourceVersion)', 'Video cache keys must use source identity and version, not viewer identity');
+assertIncludes(worker, 'function cachedSourceProps(source, normalizedSourceVersion)', 'Typed private Drive sources must participate in stable shared cache keys');
 assertIncludes(worker, 'https://archive.org/metadata/', 'Archive.org metadata discovery missing');
 assertIncludes(worker, 'metadata.d1', 'Archive.org d1 mirror missing');
 assertIncludes(worker, 'metadata.d2', 'Archive.org d2 mirror missing');
