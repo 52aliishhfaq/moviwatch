@@ -492,7 +492,7 @@ async function startGoogleDriveOAuth(env, sql, connectionId = 'primary') {
     response_type: 'code',
     scope: 'openid email https://www.googleapis.com/auth/drive',
     access_type: 'offline',
-    prompt: 'consent',
+    prompt: 'consent select_account',
     include_granted_scopes: 'true',
     state: nonce,
     code_challenge: challenge,
@@ -550,14 +550,19 @@ async function completeGoogleDriveOAuth(req, env) {
 
     const sql = sqlFor(env);
     await ensureGoogleDriveSchema(sql);
+    // One verified Google email maps to one connection. Adding an account that
+    // is already connected refreshes its existing slot instead of duplicating it.
+    const existingAccount = await sql`SELECT id FROM public.google_drive_connections
+      WHERE LOWER(account_email)=LOWER(${profile.email}) LIMIT 1`;
+    const connectionId = existingAccount[0]?.id || stateBody.connectionId;
     let refreshToken = tokenPayload.refresh_token;
     if (typeof refreshToken !== 'string' || refreshToken.length < 20) {
       const previous = await sql`SELECT refresh_token_ciphertext, refresh_token_iv
-        FROM public.google_drive_connections WHERE id=${stateBody.connectionId} LIMIT 1`;
+        FROM public.google_drive_connections WHERE id=${connectionId} LIMIT 1`;
       if (previous[0]) {
         refreshToken = await decryptGoogleDriveSecret(
           env, previous[0].refresh_token_ciphertext, previous[0].refresh_token_iv,
-          googleDriveTokenAad(stateBody.connectionId)
+          googleDriveTokenAad(connectionId)
         );
       }
     }
@@ -565,16 +570,16 @@ async function completeGoogleDriveOAuth(req, env) {
       throw new Error('Google did not return an offline refresh token. Disconnect the app from your Google Account and reconnect with consent.');
     }
     const encrypted = await encryptGoogleDriveSecret(
-      env, refreshToken, googleDriveTokenAad(stateBody.connectionId)
+      env, refreshToken, googleDriveTokenAad(connectionId)
     );
     await sql`INSERT INTO public.google_drive_connections
       (id,account_email,refresh_token_ciphertext,refresh_token_iv,scopes,connected_at,updated_at)
-      VALUES(${stateBody.connectionId},${profile.email},${encrypted.ciphertext},${encrypted.iv},${tokenPayload.scope || ''},NOW(),NOW())
+      VALUES(${connectionId},${profile.email},${encrypted.ciphertext},${encrypted.iv},${tokenPayload.scope || ''},NOW(),NOW())
       ON CONFLICT(id) DO UPDATE SET account_email=EXCLUDED.account_email,
       refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,
       refresh_token_iv=EXCLUDED.refresh_token_iv,scopes=EXCLUDED.scopes,updated_at=NOW()`;
     clearGoogleDriveAccessTokenCache();
-    return googleDriveAdminRedirect(env, 'connected', clearCookie, stateBody.connectionId);
+    return googleDriveAdminRedirect(env, 'connected', clearCookie, connectionId);
   } catch (error) {
     console.error('Google Drive OAuth callback failed:', error?.message || error);
     return googleDriveAdminRedirect(env, 'error', clearCookie);
