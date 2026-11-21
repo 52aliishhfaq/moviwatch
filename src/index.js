@@ -10,6 +10,7 @@ import {
   googleDriveAccessToken,
   googleDriveApiRequest,
   googleDriveConnection,
+  googleDriveConfigurationIssues,
   googleDriveFileIdFromMediaUrl,
   googleDriveMediaUrl,
   googleDrivePublicFileSummary,
@@ -724,6 +725,7 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
     const connection = await googleDriveConnection(sql);
     return json({
       configured: isGoogleDriveConfigured(env),
+      configurationIssues: googleDriveConfigurationIssues(env),
       connected: Boolean(connection),
       accountEmail: connection?.account_email || null,
       scopes: connection?.scopes || '',
