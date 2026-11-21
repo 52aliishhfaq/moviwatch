@@ -2,6 +2,20 @@ import { neon } from '@neondatabase/serverless';
 import { Redis } from '@upstash/redis';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { videoSourceUrl, sourceProvider } from './video-sources.js';
+import {
+  clearGoogleDriveAccessTokenCache,
+  decryptGoogleDriveSecret,
+  encryptGoogleDriveSecret,
+  ensureGoogleDriveSchema,
+  googleDriveAccessToken,
+  googleDriveApiRequest,
+  googleDriveConnection,
+  googleDriveFileIdFromMediaUrl,
+  googleDriveMediaUrl,
+  googleDrivePublicFileSummary,
+  isGoogleDriveConfigured,
+  isGoogleDriveFileId
+} from './google-drive.js';
 
 const COOKIE = 'moviwatch_admin';
 const SESSION = 8 * 60 * 60;
@@ -185,12 +199,31 @@ function movieInput(body){
   let poster;try{poster=new URL(body.posterUrl)}catch{throw new Error('Poster must be an HTTPS URL')}
   if(poster.protocol!=='https:'||poster.href.length>2048||poster.username||poster.password)throw new Error('Poster must be an HTTPS URL');
   if(!Array.isArray(body.videoSources)||body.videoSources.length<1||body.videoSources.length>8)throw new Error('Add between 1 and 8 Google Drive or Archive.org video links');
-  const sources=body.videoSources.map((item,index)=>{const url=videoSourceUrl(item?.url);const provider=sourceProvider(url);const fallback=provider==='archive.org'?'Archive.org':'Google Drive';return{label:(typeof item?.label==='string'&&item.label.trim()?item.label.trim():fallback+' '+(index+1)).slice(0,60),url,provider}});
+  const sources=body.videoSources.map((item,index)=>{
+    const label=(typeof item?.label==='string'&&item.label.trim()?item.label.trim():'Google Drive '+(index+1)).slice(0,60);
+    const privateId=item?.provider==='google-drive-private'?item.fileId:
+      (typeof item?.url==='string'&&item.url.startsWith('drive-private://')?item.url.slice('drive-private://'.length):'');
+    if(privateId){
+      if(!isGoogleDriveFileId(privateId))throw new Error('Invalid private Google Drive file reference');
+      return {label,provider:'google-drive-private',file_id:privateId,
+        drive_id:isGoogleDriveFileId(item.driveId)?item.driveId:null,
+        modified_time:typeof item.modifiedTime==='string'?item.modifiedTime:null};
+    }
+    const url=videoSourceUrl(item?.url);
+    const provider=sourceProvider(url);
+    const fallback=provider==='archive.org'?'Archive.org':'Google Drive';
+    return {label:(typeof item?.label==='string'&&item.label.trim()?item.label.trim():fallback+' '+(index+1)).slice(0,60),url,provider};
+  });
   return{title,poster:poster.href,category:body.category,sources,published:body.isPublished!==false};
 }
 function storedVideoSource(movie,optionIndex){
   if(!movie||!Number.isInteger(optionIndex)||optionIndex<0||optionIndex>7)return null;
-  const raw=movie.video_sources?.[optionIndex];if(!raw||typeof raw.url!=='string')return null;
+  const raw=movie.video_sources?.[optionIndex];
+  if(!raw||typeof raw!=='object')return null;
+  if(raw.provider==='google-drive-private'&&isGoogleDriveFileId(raw.file_id)){
+    try{return{...raw,fileId:raw.file_id,url:googleDriveMediaUrl(raw.file_id),provider:'google-drive-private'}}catch{return null}
+  }
+  if(typeof raw.url!=='string')return null;
   try{const url=videoSourceUrl(raw.url);return{...raw,url,provider:sourceProvider(url)}}catch{return null}
 }
 const CATALOGUE_CACHE_TTL = 30;
@@ -199,7 +232,8 @@ const MOVIE_METADATA_CACHE_TTL = 30;
 async function publicMovies(env,category,query){
  const sql=sqlFor(env);
  return await sql`SELECT id,title,poster_url,category,created_at,
-  COALESCE((SELECT jsonb_agg(jsonb_build_object('label',COALESCE(NULLIF(item.value->>'label',''),'Video'),'url',item.value->>'url','source_index',item.ordinality-1) ORDER BY item.ordinality)
+  COALESCE((SELECT jsonb_agg(jsonb_build_object('label',COALESCE(NULLIF(item.value->>'label',''),'Video'),'url',item.value->>'url',
+   'provider',item.value->>'provider','file_id',item.value->>'file_id','source_index',item.ordinality-1) ORDER BY item.ordinality)
   FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) WITH ORDINALITY AS item(value,ordinality)),'[]'::jsonb) AS video_sources
  FROM movies WHERE is_published=TRUE
  AND (${category||null}::text IS NULL OR category=${category||null})
@@ -213,16 +247,14 @@ export class PublicCatalogue extends WorkerEntrypoint {
   const rows=await publicMovies(this.env,category,query);
   const movies=rows.flatMap(({video_sources,...movie})=>{
    const playable=(video_sources||[]).flatMap(source=>{try{
-    const url=videoSourceUrl(source.url);
-    const provider=sourceProvider(url);
     const index=Number(source.source_index);
     if(!Number.isInteger(index)||index<0||index>7)return[];
-    return [{
-     label:source.label||(provider==='archive.org'?'Archive.org':'Google Drive'),
-     provider,
-     source_index:index,
-     
-    }];
+    if(source.provider==='google-drive-private'&&isGoogleDriveFileId(source.file_id)){
+      return [{label:source.label||'Google Drive',provider:'google-drive-private',source_index:index}];
+    }
+    const url=videoSourceUrl(source.url);
+    const provider=sourceProvider(url);
+    return [{label:source.label||(provider==='archive.org'?'Archive.org':'Google Drive'),provider,source_index:index}];
    }catch{return[]}});
    return playable.length?[{...movie,video_sources:playable}]:[];
   });
