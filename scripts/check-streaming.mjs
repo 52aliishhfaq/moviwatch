@@ -103,6 +103,7 @@ assertIncludes(downloadRoute, 'new FixedLengthStream(contentLength)', 'Downloads
 assertIncludes(downloadRoute, 'response.body.pipeTo(fixedLength.writable)', 'Downloads must remain streamed through the fixed-length body');
 assertIncludes(downloadRoute, "headers.set('content-length', String(contentLength))", 'Download Content-Length header must match the enforced stream size');
 assertIncludes(worker, 'cachedVideoRange(', 'Proxy must use the edge chunk cache');
+assertIncludes(worker, "if (req.headers.has('If-Range') && source.provider !== 'google-drive-private')", 'Private Drive If-Range requests must stay on the authenticated shared-cache path');
 assertIncludes(worker, 'content-disposition', 'Google Drive Worker download attachment header missing');
 assert.ok(!worker.includes("Response.redirect(archiveDownloadUrl("), 'Protected downloads must not redirect users to provider URLs');
 assertIncludes(worker, "const PLAYBACK_COOKIE = 'moviwatch_playback'", 'HttpOnly playback session cookie missing');
@@ -179,7 +180,7 @@ for (const file of ['public/index.html', 'public/watch.html', 'public/admin.html
 assertIncludes(readme, 'Drive and Archive.org byte-range streaming', 'README must describe the restored providers');
 assertIncludes(readme, 'cannot guarantee zero buffering', 'README must document realistic buffering limits');
 assertIncludes(readme, '8 MiB continuation chunks', 'README must document 8 MiB chunks');
-assertIncludes(readme, 'native HTML5 video', 'README must document native HTML5 playback');
+assertIncludes(readme, 'Native HTML5', 'README must document native HTML5 playback');
 assertIncludes(readme, '24 hours', 'README must document the shared edge cache TTL');
 assertIncludes(readme, 'not shared between browsers', 'README must distinguish private player memory from shared edge caching');
 assertIncludes(readme, 'https://archive.org/download/IDENTIFIER/FILENAME', 'README must document canonical direct Archive.org downloads');
