@@ -302,7 +302,10 @@ async function refreshDriveStatus(){
     driveStatus=await api('/api/admin/google-drive/status');
     $('#driveBadge').textContent=driveStatus.connected?'Connected':'Not connected';
     if(!driveStatus.configured){
-      $('#driveStatus').textContent='Google Drive Manager is ready in the app, but OAuth configuration is missing in Cloudflare Worker Secrets.';
+      const issues=Array.isArray(driveStatus.configurationIssues)?driveStatus.configurationIssues:[];
+      $('#driveStatus').textContent=issues.length?
+        'Missing or invalid Cloudflare Worker Secrets: '+issues.join(', ')+'. Add each as type Secret, then redeploy the Worker.':
+        'Google Drive configuration is incomplete. Check Cloudflare Worker Secrets.';
       $('#driveConnect').disabled=true;
       $('#driveDisconnect').classList.add('hidden');
       $('#driveTools').classList.add('hidden');
