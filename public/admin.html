@@ -307,11 +307,13 @@ async function refreshDriveStatus(){
         'Missing or invalid Cloudflare Worker Secrets: '+issues.join(', ')+'. Add each as type Secret, then redeploy the Worker.':
         'Google Drive configuration is incomplete. Check Cloudflare Worker Secrets.';
       $('#driveConnect').disabled=true;
-      $('#driveDisconnect').classList.add('hidden');
+      $('#driveDisconnect').classList.toggle('hidden',!driveStatus.connected);
+      $('#driveDisconnect').textContent='Reset old Drive connection';
       $('#driveTools').classList.add('hidden');
       return;
     }
     $('#driveConnect').disabled=false;
+    $('#driveDisconnect').textContent='Disconnect';
     if(!driveStatus.connected){
       $('#driveStatus').textContent='Connect the Google account that owns the movies. The refresh token is encrypted before it is stored.';
       $('#driveDisconnect').classList.add('hidden');
