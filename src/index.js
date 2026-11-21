@@ -1295,11 +1295,24 @@ async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSource
   const total = Number(response.headers.get('x-moviwatch-total'));
   const contentType = response.headers.get('content-type') || 'application/octet-stream';
   const container = response.headers.get('x-moviwatch-container') || 'unknown';
-  const contentLength = Number(response.headers.get('content-length'));
+  // Some internal cache/entrypoint response paths may omit Content-Length
+  // for a streaming body. The trusted range metadata still determines the
+  // exact segment size; when the header exists, it must agree with that size.
+  const contentLengthHeader = response.headers.get('content-length');
+  const expectedLength = end - start + 1;
+  const contentLength = contentLengthHeader === null
+    ? expectedLength
+    : Number(contentLengthHeader);
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
       !Number.isSafeInteger(total) || start !== chunkStart || end < start ||
       total <= end || end > chunkStart + chunkSize - 1 ||
-      contentLength !== end - start + 1 || !response.body) {
+      !Number.isSafeInteger(contentLength) || contentLength !== expectedLength || !response.body) {
+    const diagnostic = {
+      start, end, total, chunkStart, chunkSize,
+      contentLengthHeader, expectedLength, cacheStatus,
+      hasBody: Boolean(response.body)
+    };
+    console.error('Invalid cached video chunk metadata:', diagnostic);
     try { await response.body?.cancel(); } catch {}
     throw new Error('Cloudflare returned an invalid cached video chunk');
   }
