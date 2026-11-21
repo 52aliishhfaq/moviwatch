@@ -242,6 +242,8 @@ assertIncludes(worker, "provider:'google-drive-private'", 'Private Drive sources
 assertIncludes(worker, 'googleDriveApiRequest(sqlFor(env), env, mediaUrl', 'Private Drive video ranges must be authorized by the Worker');
 assertIncludes(worker, 'fetchConfiguredVideoRange(source, nextStart, nextEnd, env, 0, true)', 'Private Drive continuation ranges must enter the progressive shared chunk cache');
 assertIncludes(worker, 'recordArchiveFailure(details.identifier, candidate.host)', 'Archive.org stream failures must cool down the failed mirror');
+assertIncludes(worker, 'AbortSignal.any([timeoutSignal, externalSignal])', 'Viewer cancellation must abort pending provider range requests');
+assertIncludes(worker, 'fetchConfiguredVideoRange(source, responseStart, responseEnd, env, 0, true, req.signal)', 'Direct cold seeks must be tied to the browser request cancellation signal');
 assertIncludes(worker, "maxRetries = 2", 'Stream relay retries must be bounded');
 assertIncludes(worker, "pathname === '/api/google-drive/oauth/callback'", 'OAuth callback route missing');
 assertIncludes(worker, "path.startsWith('/api/admin/google-drive/')", 'Google Drive management must stay under the admin API gate');
@@ -393,6 +395,31 @@ async function readAll(reader) {
   const reader = relay.getReader();
   assert.deepEqual([...((await reader.read()).value)], [0]);
   await assert.rejects(() => reader.read(), /simulated upstream connection reset/);
+}
+
+
+// When a viewer cancels during an upstream continuation request, the relay
+// abort signal must reach that fetch so a discarded seek does not waste bytes.
+{
+  let continuationSignal = null;
+  const relay = createRangeRelayStream({
+    firstPart: { range: { start: 0, end: 0, total: 2 }, body: byteStream([[0]]) },
+    end: 1,
+    total: 2,
+    fetchPart: async (_start, _end, signal) => {
+      continuationSignal = signal;
+      return await new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('upstream continuation aborted')), { once: true });
+      });
+    }
+  });
+  const reader = relay.getReader();
+  assert.deepEqual([...((await reader.read()).value)], [0]);
+  const pending = reader.read();
+  await Promise.resolve();
+  await reader.cancel('viewer seeked elsewhere');
+  assert.ok(continuationSignal?.aborted, 'Cancel must abort the pending upstream Range fetch');
+  await pending.catch(() => {});
 }
 
 console.log('Progressive range relay, upstream continuation, truncation, discontinuity and cancellation checks passed.');
