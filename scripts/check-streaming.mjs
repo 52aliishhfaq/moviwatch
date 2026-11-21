@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Script } from 'node:vm';
 import { archiveDownloadUrl, sourceProvider, videoSourceUrl } from '../src/video-sources.js';
+import { getVideoRangeWindow } from '../src/video-range-window.js';
 
 const worker = readFileSync('src/index.js', 'utf8');
 const sourceModule = readFileSync('src/video-sources.js', 'utf8');
@@ -48,6 +49,30 @@ for (const bad of [
   assert.throws(() => videoSourceUrl(bad), undefined, 'Expected invalid source to be rejected: ' + bad);
 }
 
+// Seek windows: preserve the exact requested start but stop at the current cache chunk.
+// Open-ended bytes=N- requests must not create one response covering the whole tail.
+const MiB = 1024 * 1024;
+const seekConfig = {
+  total: 64 * MiB,
+  fragmented: false,
+  continuationChunkSize: 4 * MiB,
+  startupChunkSize: 1 * MiB,
+  fragmentStartupChunkSize: 512 * 1024
+};
+assert.deepEqual(getVideoRangeWindow({ ...seekConfig, start: 0, requestedEnd: seekConfig.total - 1 }),
+  { chunkStart: 0, chunkEnd: MiB - 1, end: MiB - 1 });
+const seekStart = 20 * MiB + 123;
+const seekWindow = getVideoRangeWindow({ ...seekConfig, start: seekStart, requestedEnd: seekConfig.total - 1 });
+assert.equal(seekWindow.chunkStart, 17 * MiB);
+assert.equal(seekWindow.end, 21 * MiB - 1);
+assert.ok(seekWindow.end < seekConfig.total - 1);
+assert.equal(getVideoRangeWindow({ ...seekConfig, start: seekStart, requestedEnd: seekStart + 777 }).end, seekStart + 777);
+const fmp4Window = getVideoRangeWindow({ ...seekConfig, fragmented: true, start: 400 * 1024, requestedEnd: seekConfig.total - 1 });
+assert.equal(fmp4Window.end, 512 * 1024 - 1);
+const finalWindow = getVideoRangeWindow({ ...seekConfig, start: 63 * MiB + 900, requestedEnd: seekConfig.total - 1 });
+assert.equal(finalWindow.end, seekConfig.total - 1);
+assert.throws(() => getVideoRangeWindow({ ...seekConfig, start: -1, requestedEnd: 12, total: 20 }), RangeError);
+
 // Worker source policy and safe provider redirects.
 assertIncludes(worker, "host === 'drive.google.com' || host === 'drive.usercontent.google.com'", 'Drive host allowlist missing');
 assertIncludes(worker, "host === 'archive.org' || host.endsWith('.archive.org')", 'Archive.org host allowlist missing');
@@ -55,9 +80,11 @@ assertIncludes(worker, "redirect: 'manual'", 'Upstream redirects must be validat
 assertIncludes(worker, 'sourceKind(new URL(source).hostname)', 'Google sign-in redirects must be detected');
 assertIncludes(worker, 'Anyone with the link (Viewer)', 'Private Drive guidance missing');
 
-// Edge streaming retains fMP4 startup detection, small initial chunks, range seeking,
-// and a prefetch of the immediate successor segment.
-assertIncludes(worker, 'const VIDEO_CHUNK_SIZE = 8 * 1024 * 1024', '8 MiB continuation chunks missing');
+// Edge streaming retains fMP4 startup detection, small initial chunks and on-demand seeking.
+assertIncludes(worker, 'const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024', '4 MiB continuation chunks missing');
+assertIncludes(worker, 'const responseWindow = getVideoRangeWindow({', 'Open-ended byte ranges must be bounded to the active cache chunk');
+assertIncludes(worker, 'end = responseWindow.end;', 'The 206 response end must use the bounded cache window');
+assert.ok(!worker.includes('const nextChunkStart = chunk.end + 1'), 'Worker must not speculatively fetch a successor chunk during a seek');
 assertIncludes(worker, 'const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024', '1 MiB conventional MP4 startup segment missing');
 assertIncludes(worker, 'const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024', '512 KiB fMP4 startup segment missing');
 assertIncludes(worker, 'const starts = [0]', 'Cold-start prefetch must fetch only the first segment');
@@ -78,8 +105,7 @@ assertIncludes(worker, 'mp4MoovEnd(bytes)', 'MP4 moov atom size detection missin
 assertIncludes(worker, 'mp4HasMvex(bytes)', 'Fragmented MP4 detection missing');
 assertIncludes(worker, 'videoChunkStartForOffset(offset, fragmented)', 'Seek offset mapping missing');
 assertIncludes(worker, 'videoChunkSizeAt(chunkStart, fragmented)', 'Adaptive chunk sizing missing');
-assertIncludes(worker, 'const nextChunkStart = chunk.end + 1', 'Next-segment prefetch missing');
-assertIncludes(worker, 'ctx.waitUntil(Promise.allSettled([nextPromise]))', 'Next-segment prefetch must not block playback');
+assertIncludes(worker, 'const requestedEnd = end;', 'Original browser range end must be retained for diagnostics');
 assertIncludes(worker, "'cache-tag': 'video-chunks-' + movieId", 'Video chunks need a movie-level cache purge tag');
 assertIncludes(worker, "ctx.exports.VideoChunk({", 'Cached chunk entrypoint not used');
 assertIncludes(worker, "ctx.exports.VideoHeader({", 'Cached header entrypoint not used');
@@ -182,10 +208,11 @@ for (const file of ['public/index.html', 'public/watch.html', 'public/admin.html
 
 assertIncludes(readme, 'Drive and Archive.org byte-range streaming', 'README must describe the restored providers');
 assertIncludes(readme, 'cannot guarantee zero buffering', 'README must document realistic buffering limits');
-assertIncludes(readme, '8 MiB continuation chunks', 'README must document 8 MiB chunks');
+assertIncludes(readme, '4 MiB continuation chunks', 'README must document 4 MiB chunks');
 assertIncludes(readme, 'Native HTML5', 'README must document native HTML5 playback');
 assertIncludes(readme, '24 hours', 'README must document the shared edge cache TTL');
 assertIncludes(readme, 'browser decides its own buffering', 'README must document native browser-controlled buffering');
+assertIncludes(readme, 'current cache-chunk boundary', 'README must explain bounded on-demand seek responses');
 assertIncludes(readme, 'https://archive.org/download/IDENTIFIER/FILENAME', 'README must document canonical direct Archive.org downloads');
 assertIncludes(readme, 'd1', 'README must document mirror failover');
 
