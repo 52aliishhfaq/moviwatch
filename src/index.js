@@ -1241,8 +1241,8 @@ async function videoSourceFetch(source, method, headers, signal, budget = null) 
 
 // Video edge cache: store complete 8 MiB continuation chunks as cacheable 200 responses.
 // The public response is reconstructed as a standards-compliant 206 response.
-const VIDEO_CHUNK_SIZE = 8 * 1024 * 1024;
-// Keep cold-start transfers small; continuation chunks remain large for cache efficiency.
+const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024;
+// Keep cold-start transfers small; startup sizes are bounded overrides of the same chunk policy.
 const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024;
 // Fragmented MP4 keeps its initial moov + first media fragments even more compact.
 const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024;
@@ -1318,9 +1318,10 @@ async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSource
     throw new Error(detail);
   }
 
-  const start = Number(response.headers.get('x-moviwatch-start'));
-  const end = Number(response.headers.get('x-moviwatch-end'));
-  const total = Number(response.headers.get('x-moviwatch-total'));
+  const range = parseContentRange(response.headers.get('content-range') || '');
+  const start = Number(response.headers.get('x-moviwatch-start') ?? range?.start);
+  const end = Number(response.headers.get('x-moviwatch-end') ?? range?.end);
+  const total = Number(response.headers.get('x-moviwatch-total') ?? range?.total);
   const contentType = response.headers.get('content-type') || 'video/mp4';
   const container = response.headers.get('x-moviwatch-container') || 'unknown';
   const bytes = new Uint8Array(await response.arrayBuffer());
@@ -1329,10 +1330,17 @@ async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSource
       total <= end || end > chunkStart + chunkSize - 1 || bytes.byteLength !== end - start + 1) {
     throw new Error('Cloudflare returned an invalid cached video chunk');
   }
-  return { bytes, start, end, total, contentType, container, cacheStatus };
+  return { bytes, start, end, total, contentType, container, cacheStatus,
+    partial: response.status === 206 || end < Math.min(chunkStart + chunkSize - 1, total - 1) };
 }
 
+const videoHeaderMemory = new Map();
+const VIDEO_HEADER_MEMORY_TTL = 60000;
 async function getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash) {
+  const memoryKey = movieId + '|' + sourceHash;
+  const cached = videoHeaderMemory.get(memoryKey);
+  if (cached && cached.until > Date.now()) return { ...cached.value, cacheStatus: 'MEMORY' };
+  if (cached) videoHeaderMemory.delete(memoryKey);
   const internalUrl = new URL(
     '/__video_header__/' + encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash,
     'https://moviwatch.internal'
@@ -1354,7 +1362,7 @@ async function getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourc
       (payload.moovEnd !== null && (!Number.isSafeInteger(payload.moovEnd) || payload.moovEnd < 0))) {
     throw new Error('Video source returned invalid MP4 metadata');
   }
-  return {
+  const value = {
     total: payload.total,
     moovEnd: payload.moovEnd,
     container: payload.container || 'unknown',
@@ -1362,6 +1370,9 @@ async function getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourc
     fragmented: payload.fragmented === true,
     cacheStatus: response.headers.get('cf-cache-status') || 'UNKNOWN'
   };
+  videoHeaderMemory.set(memoryKey, { value, until: Date.now() + VIDEO_HEADER_MEMORY_TTL });
+  while (videoHeaderMemory.size > 256) videoHeaderMemory.delete(videoHeaderMemory.keys().next().value);
+  return value;
 }
 
 function mp4MoovEnd(bytes) {
@@ -1513,50 +1524,29 @@ function isValidCachedSource(sourceUrl, sourceProviderName, sourceFileId, source
 }
 
 async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHUNK_SIZE, env, budget = { limit: VIDEO_UPSTREAM_FETCH_LIMIT, used: 0 }) {
-  // Fill one complete cache chunk; keep requesting if the upstream caps its Range size.
+  // One bounded upstream range per fill. A short but valid 206 is returned as
+  // an uncached piece; the response stream requests the next piece on demand.
   const requestedEnd = chunkStart + chunkSize - 1;
-  const pieces = [];
-  let cursor = chunkStart;
-  let total = null;
-  let upstreamType = '';
-  let expectedEnd = requestedEnd;
-  let requests = 0;
-
-  while (cursor <= expectedEnd) {
-    if (++requests > 128) throw new Error('Video source returned too many small byte ranges');
-    const part = await fetchConfiguredVideoRange(source, cursor, requestedEnd, env, 0, budget);
-    if (part.unsatisfiedTotal !== undefined) {
-      if (cursor === chunkStart) return { unsatisfiedTotal: part.unsatisfiedTotal };
-      throw new Error('Video source ended before the cached chunk was complete');
-    }
-    const { range, bytes } = part;
-    if (!range || (total !== null && range.total !== total)) throw new Error('Inconsistent upstream byte-range metadata');
-    total = range.total;
-    expectedEnd = Math.min(requestedEnd, total - 1);
-    if (cursor > expectedEnd) break;
-    if (range.end < cursor || range.end > expectedEnd) throw new Error('Non-contiguous upstream byte range');
-    if (!upstreamType) upstreamType = part.upstreamType;
-    pieces.push(bytes);
-    cursor = range.end + 1;
+  const part = await fetchConfiguredVideoRange(source, chunkStart, requestedEnd, env, 0, budget);
+  if (part.unsatisfiedTotal !== undefined) return { unsatisfiedTotal: part.unsatisfiedTotal };
+  const { range, bytes } = part;
+  if (!range || range.start !== chunkStart || range.end < chunkStart ||
+      range.end > requestedEnd || bytes.byteLength !== range.end - range.start + 1) {
+    throw new Error('Upstream returned an invalid video byte range');
   }
-
-  if (total === null || cursor !== expectedEnd + 1) throw new Error('Video source did not provide a complete contiguous cache chunk');
-  const expectedLength = expectedEnd - chunkStart + 1;
-  const bytes = new Uint8Array(expectedLength);
-  let offset = 0;
-  for (const piece of pieces) {
-    bytes.set(piece, offset);
-    offset += piece.byteLength;
-  }
-  if (offset !== expectedLength) throw new Error('Assembled video chunk has an invalid length');
-
-  const container = sniffVideoContainer(bytes);
-  const contentType = container === 'mp4' ? 'video/mp4' :
-    container === 'webm' ? 'video/webm' :
-    container === 'mkv' ? 'video/x-matroska' :
+  const expectedEnd = Math.min(requestedEnd, range.total - 1);
+  if (range.end > expectedEnd) throw new Error('Upstream returned bytes beyond the file boundary');
+  const partial = range.end < expectedEnd;
+  // Only scan the first range. The header probe already determines the
+  // container for every later piece, avoiding repeated 64 KiB sniff scans.
+  const container = chunkStart === 0 ? sniffVideoContainer(bytes) : 'unknown';
+  const upstreamType = part.upstreamType || '';
+  const contentType = chunkStart === 0 && container === 'mp4' ? 'video/mp4' :
+    chunkStart === 0 && container === 'webm' ? 'video/webm' :
+    chunkStart === 0 && container === 'mkv' ? 'video/x-matroska' :
     (!upstreamType || upstreamType === 'application/octet-stream' || upstreamType === 'binary/octet-stream')
       ? 'video/mp4' : upstreamType;
-  return { bytes, start: chunkStart, end: expectedEnd, total, contentType, container };
+  return { bytes, start: chunkStart, end: range.end, total: range.total, contentType, container, partial };
 }
 export class VideoHeader extends WorkerEntrypoint {
   async fetch(request) {
