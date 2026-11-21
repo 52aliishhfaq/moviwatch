@@ -1640,7 +1640,7 @@ export class VideoChunk extends WorkerEntrypoint {
         status: 200,
         headers: {
           'content-type': result.contentType,
-          'content-length': String(result.bytes.byteLength),
+          'content-length': String(result.end - result.start + 1),
           'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600',
           'cache-tag': 'video-chunks-' + movieId,
           'x-moviwatch-start': String(result.start),
