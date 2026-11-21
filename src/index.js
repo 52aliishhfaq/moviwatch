@@ -1228,9 +1228,29 @@ async function api(req, env, ctx) {
       headers.set('cache-control', 'private, no-store, max-age=0');
       headers.set('x-content-type-options', 'nosniff');
       headers.set('x-moviwatch-metadata-cache', metadata.cacheStatus);
+
+      // Cloudflare Workers ignores a user-set Content-Length on an arbitrary
+      // ReadableStream. Android then displays "downloaded / ?" even though the
+      // total is known. A FixedLengthStream makes the exact byte count visible
+      // to the runtime while still streaming the movie (no whole-file buffering).
+      const contentRange = parseContentRange(headers.get('content-range') || '');
+      const contentLength = contentRange
+        ? contentRange.end - contentRange.start + 1
+        : Number(headers.get('content-length'));
+      if (!Number.isSafeInteger(contentLength) || contentLength <= 0 || !response.body) {
+        try { await response.body?.cancel(); } catch {}
+        throw new Error('The video file size could not be determined reliably');
+      }
+
+      const fixedLength = new FixedLengthStream(contentLength);
+      const pump = response.body.pipeTo(fixedLength.writable).catch((streamError) => {
+        console.error('Fixed-length download stream failed:', streamError?.message || streamError);
+      });
+      ctx.waitUntil(pump);
+      headers.set('content-length', String(contentLength));
       if (!requestedRange) headers.delete('content-range');
 
-      return new Response(response.body, {
+      return new Response(fixedLength.readable, {
         status: requestedRange ? response.status : 200,
         statusText: requestedRange ? response.statusText : 'OK',
         headers
