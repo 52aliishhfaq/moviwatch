@@ -316,13 +316,25 @@ const MOVIE_METADATA_CACHE_TTL = 30;
 
 async function publicMovies(env,category,query){
  const sql=sqlFor(env);
- return await sql`SELECT id,title,poster_url,category,created_at,
-  COALESCE((SELECT jsonb_agg(jsonb_build_object('label',COALESCE(NULLIF(item.value->>'label',''),'Video'),'url',item.value->>'url',
-   'provider',item.value->>'provider','file_id',item.value->>'file_id','source_index',item.ordinality-1) ORDER BY item.ordinality)
-  FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) WITH ORDINALITY AS item(value,ordinality)),'[]'::jsonb) AS video_sources
- FROM movies WHERE is_published=TRUE
- AND (${category||null}::text IS NULL OR category=${category||null})
- AND (${query||null}::text IS NULL OR title ILIKE ${query?'%'+query+'%':null})
+ await ensureSeriesSchema(sql);
+ return await sql`WITH movie_rows AS (
+   SELECT id,title,poster_url,category,created_at,'movie'::text AS content_type,
+    NULL::integer AS episode_count,
+    COALESCE((SELECT jsonb_agg(jsonb_build_object('label',COALESCE(NULLIF(item.value->>'label',''),'Video'),'url',item.value->>'url',
+     'provider',item.value->>'provider','file_id',item.value->>'file_id','account_id',item.value->>'account_id','source_index',item.ordinality-1) ORDER BY item.ordinality)
+    FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) WITH ORDINALITY AS item(value,ordinality)),'[]'::jsonb) AS video_sources
+   FROM public.movies WHERE is_published=TRUE
+    AND (${category||null}::text IS NULL OR category=${category||null})
+    AND (${query||null}::text IS NULL OR title ILIKE ${query?'%'+query+'%':null})
+ ), series_rows AS (
+   SELECT s.id,s.title,s.poster_url,s.category,s.created_at,'series'::text AS content_type,
+     (SELECT COUNT(*)::int FROM public.episodes e WHERE e.series_id=s.id AND e.is_published=TRUE) AS episode_count,
+     '[]'::jsonb AS video_sources
+   FROM public.series s WHERE s.is_published=TRUE
+    AND (${category||null}::text IS NULL OR s.category=${category||null})
+    AND (${query||null}::text IS NULL OR s.title ILIKE ${query?'%'+query+'%':null})
+ )
+ SELECT * FROM (SELECT * FROM movie_rows UNION ALL SELECT * FROM series_rows) catalogue
  ORDER BY created_at DESC LIMIT 100`;
 }
 export class PublicCatalogue extends WorkerEntrypoint {
@@ -331,6 +343,7 @@ export class PublicCatalogue extends WorkerEntrypoint {
   const{category='',query=''}=this.ctx.props||{};
   const rows=await publicMovies(this.env,category,query);
   const movies=rows.flatMap(({video_sources,...movie})=>{
+   if (movie.content_type === 'series') return [{...movie,video_sources:[]}];
    const playable=(video_sources||[]).flatMap(source=>{try{
     const index=Number(source.source_index);
     if(!Number.isInteger(index)||index<0||index>7)return[];
@@ -350,15 +363,24 @@ export class PublicCatalogue extends WorkerEntrypoint {
 export class MovieMetadata extends WorkerEntrypoint {
   async fetch(request) {
     if (request.method !== 'GET') return new Response(null, { status: 405, headers: { allow: 'GET', 'cache-control': 'no-store' } });
-    const movieId = this.ctx.props?.movieId;
-    if (typeof movieId !== 'string' || !/^[0-9a-f-]{36}$/i.test(movieId)) {
+    const contentId = this.ctx.props?.movieId;
+    if (typeof contentId !== 'string' || !/^[0-9a-f-]{36}$/i.test(contentId)) {
       return json({ movie: null }, 200, { 'cache-control': 'public, max-age=5' });
     }
-    const rows = await sqlFor(this.env)`SELECT id,title,videos AS video_sources,updated_at
-      FROM movies WHERE id=${movieId} AND is_published=TRUE LIMIT 1`;
+    const sql = sqlFor(this.env);
+    await ensureSeriesSchema(sql);
+    const rows = await sql`SELECT id,title,poster_url,category,videos AS video_sources,updated_at,'movie'::text AS content_type,
+        NULL::uuid AS series_id,NULL::integer AS season_number,NULL::integer AS episode_number,NULL::text AS series_title
+      FROM public.movies WHERE id=${contentId} AND is_published=TRUE
+      UNION ALL
+      SELECT e.id,e.title,s.poster_url,s.category,e.videos AS video_sources,e.updated_at,'episode'::text AS content_type,
+        e.series_id,e.season_number,e.episode_number,s.title AS series_title
+      FROM public.episodes e JOIN public.series s ON s.id=e.series_id
+      WHERE e.id=${contentId} AND e.is_published=TRUE AND s.is_published=TRUE
+      LIMIT 1`;
     return json({ movie: rows[0] || null }, 200, {
       'cache-control': 'public, max-age=' + MOVIE_METADATA_CACHE_TTL + ', stale-while-revalidate=90',
-      'cache-tag': 'movie-meta-' + movieId
+      'cache-tag': 'movie-meta-' + contentId
     });
   }
 
@@ -367,7 +389,6 @@ export class MovieMetadata extends WorkerEntrypoint {
     return this.ctx.cache.purge({ tags: ['movie-meta-' + movieId] });
   }
 }
-
 async function movieById(ctx, env, movieId) {
   if (!/^[0-9a-f-]{36}$/i.test(movieId)) return { movie: null, cacheStatus: 'BYPASS' };
   const metadataEntry = ctx.exports.MovieMetadata({ props: { movieId } });
