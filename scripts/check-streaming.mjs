@@ -57,7 +57,11 @@ assertIncludes(worker, 'Anyone with the link (Viewer)', 'Private Drive guidance 
 
 // Edge streaming retains fMP4 startup detection, small initial chunks, range seeking,
 // and a prefetch of the immediate successor segment.
-assertIncludes(worker, 'const VIDEO_CHUNK_SIZE = 8 * 1024 * 1024', '8 MiB continuation chunks missing');
+assertIncludes(worker, 'const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024', '4 MiB continuation chunks missing');
+assertIncludes(worker, 'const VIDEO_UPSTREAM_FETCH_LIMIT = 6', 'Hard per-chunk upstream fetch budget missing');
+assert.ok(!worker.includes('requests > 128'), 'The legacy 128-range retry loop must stay removed');
+assertIncludes(worker, 'short-range-no-cache', 'Short upstream ranges must bypass shared chunk cache');
+assertIncludes(worker, 'bytes.set(piece, offset)', 'Legacy chunk reassembly path must not return');
 assertIncludes(worker, 'const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024', '1 MiB conventional MP4 startup segment missing');
 assertIncludes(worker, 'const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024', '512 KiB fMP4 startup segment missing');
 assertIncludes(worker, 'const starts = [0]', 'Cold-start prefetch must fetch only the first segment');
@@ -78,7 +82,10 @@ assertIncludes(worker, 'mp4MoovEnd(bytes)', 'MP4 moov atom size detection missin
 assertIncludes(worker, 'mp4HasMvex(bytes)', 'Fragmented MP4 detection missing');
 assertIncludes(worker, 'videoChunkStartForOffset(offset, fragmented)', 'Seek offset mapping missing');
 assertIncludes(worker, 'videoChunkSizeAt(chunkStart, fragmented)', 'Adaptive chunk sizing missing');
-assertIncludes(worker, 'const nextChunkStart = chunk.end + 1', 'Next-segment prefetch missing');
+assertIncludes(worker, 'cursor >= midpoint', 'Next-segment prefetch must wait until half of the current chunk is consumed');
+assertIncludes(worker, 'startNextPrefetch(currentChunk)', 'Bounded successor prefetch helper missing');
+assertIncludes(worker, "if (req.method === 'HEAD')", 'HEAD requests must not warm video chunks');
+assertIncludes(worker, "const uncachedProbePiece", 'Small browser probes must bypass the shared video cache');
 assertIncludes(worker, 'ctx.waitUntil(Promise.allSettled([nextPromise]))', 'Next-segment prefetch must not block playback');
 assertIncludes(worker, "'cache-tag': 'video-chunks-' + movieId", 'Video chunks need a movie-level cache purge tag');
 assertIncludes(worker, "ctx.exports.VideoChunk({", 'Cached chunk entrypoint not used');
@@ -111,6 +118,13 @@ assertIncludes(worker, 'content-disposition', 'Google Drive Worker download atta
 assert.ok(!worker.includes("Response.redirect(archiveDownloadUrl("), 'Protected downloads must not redirect users to provider URLs');
 assertIncludes(worker, "const PLAYBACK_COOKIE = 'moviwatch_playback'", 'HttpOnly playback session cookie missing');
 assertIncludes(worker, "playbackCookieName(movieId) + '=' + token", 'Playback sessions must use a separate cookie per movie so open tabs do not overwrite each other');
+assertIncludes(worker, "const existing = getCookieValue(req, playbackCookieName(movieId))", 'Playback session endpoint must reuse valid existing cookies');
+assertIncludes(worker, 'const PLAYBACK_VERIFY_CACHE_TTL = 15000', 'Playback JWT verification cache must be short-lived');
+assertIncludes(worker, "signingSecret(env, 'admin')", 'Admin JWT signing must use its purpose-derived key');
+assertIncludes(worker, "signingSecret(env, 'playback')", 'Playback JWT signing must use its purpose-derived key');
+assertIncludes(worker, "signingSecret(env, 'google-drive-oauth')", 'Drive OAuth state must use its purpose-derived key');
+assertIncludes(worker, 'const videoHeaderMemory = new Map()', 'Isolate-level video header metadata cache missing');
+assertIncludes(worker, 'const movieMetadataMemory = new Map()', 'Isolate-level movie metadata cache missing');
 assertIncludes(worker, 'async function makePlaybackToken(env, movieId)', 'Playback ticket must be cryptographically signed and movie-bound');
 assertIncludes(worker, 'async function validPlaybackToken(env, token)', 'Playback ticket verifier missing');
 assertIncludes(worker, 'claims.mid.toLowerCase() === movieId.toLowerCase()', 'Playback ticket must be bound to the requested movie');
@@ -188,7 +202,7 @@ for (const file of ['public/index.html', 'public/watch.html', 'public/admin.html
 
 assertIncludes(readme, 'Drive and Archive.org byte-range streaming', 'README must describe the restored providers');
 assertIncludes(readme, 'cannot guarantee zero buffering', 'README must document realistic buffering limits');
-assertIncludes(readme, '8 MiB continuation chunks', 'README must document 8 MiB chunks');
+assertIncludes(readme, '4 MiB continuation chunks', 'README must document safer 4 MiB continuation chunks');
 assertIncludes(readme, 'Native HTML5', 'README must document native HTML5 playback');
 assertIncludes(readme, '24 hours', 'README must document the shared edge cache TTL');
 assertIncludes(readme, 'browser decides its own buffering', 'README must document native browser-controlled buffering');
@@ -201,7 +215,7 @@ console.log('Drive/Archive URL, provider, cache, native HTML5 playback, protecte
 // Google Drive Manager: OAuth, private references and management routes stay server-side.
 assertIncludes(worker, "provider:'google-drive-private'", 'Private Drive sources must use an internal provider marker');
 assertIncludes(worker, 'googleDriveApiRequest(sqlFor(env), env, mediaUrl', 'Private Drive video ranges must be authorized by the Worker');
-assertIncludes(worker, 'fetchConfiguredVideoRange(source, cursor, requestedEnd, env)', 'Private Drive bytes must enter the existing shared chunk cache');
+assertIncludes(worker, 'fetchConfiguredVideoRange(source, chunkStart, requestedEnd, env, 0, budget)', 'Private Drive bytes must enter the bounded shared chunk fill');
 assertIncludes(worker, "pathname === '/api/google-drive/oauth/callback'", 'OAuth callback route missing');
 assertIncludes(worker, "path.startsWith('/api/admin/google-drive/')", 'Google Drive management must stay under the admin API gate');
 assertIncludes(worker, 'refresh_token_ciphertext', 'Google refresh tokens must be encrypted at rest');
