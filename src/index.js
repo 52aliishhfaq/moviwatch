@@ -44,7 +44,7 @@ async function ensureSeriesSchema(sql) {
         is_published BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )\`;
+      )`;
       await sql`CREATE TABLE IF NOT EXISTS public.episodes (
         id UUID PRIMARY KEY,
         series_id UUID NOT NULL REFERENCES public.series(id) ON DELETE CASCADE,
@@ -57,9 +57,9 @@ async function ensureSeriesSchema(sql) {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(series_id, season_number, episode_number)
-      )\`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_episodes_series_order ON public.episodes(series_id, season_number, episode_number)\`;
-      await sql`CREATE INDEX IF NOT EXISTS idx_episodes_public_order ON public.episodes(is_published, series_id, season_number, episode_number)\`;
+      )`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_episodes_series_order ON public.episodes(series_id, season_number, episode_number)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_episodes_public_order ON public.episodes(is_published, series_id, season_number, episode_number)`;
     })().catch((error) => { seriesSchemaPromise = null; throw error; });
   }
   await seriesSchemaPromise;
