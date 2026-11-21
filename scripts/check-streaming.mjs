@@ -93,12 +93,18 @@ assertIncludes(worker, 'createRangeRelayStream({', 'Cache chunks must be relayed
 assertIncludes(worker, 'const VIDEO_DIRECT_SEEK_THRESHOLD = 256 * 1024', 'Cold seeks must bypass large aligned-prefix waits');
 assertIncludes(worker, 'fetchConfiguredVideoRange(source, responseStart, responseEnd, env, 0, true)', 'Cold cache misses must request the exact seek byte range for immediate playback');
 assertIncludes(worker, "x-moviwatch-cold-seek-direct': String(directSeek)", 'Cold-seek direct-path diagnostics missing');
+assertIncludes(worker, "x-moviwatch-cache-acquire-ms': String(cacheAcquireMs)", 'Cache acquisition timing diagnostics missing');
+assertIncludes(worker, "x-moviwatch-direct-seek-setup-ms': String(directSeekSetupMs)", 'Direct range setup timing diagnostics missing');
 assertIncludes(worker, "ctx.waitUntil(branches[1].pipeTo(new WritableStream({ write() {} }))", 'A separate background branch must finish filling the shared cache segment');
 
 assertIncludes(worker, 'fetchConfiguredVideoRange(source, start, requestedEnd, env, 0, true)', 'Cold chunk fills must stream directly from the upstream provider');
 assertIncludes(worker, "'x-moviwatch-stream-mode': 'progressive-upstream'", 'Progressive stream diagnostics missing');
 assertIncludes(worker, "'x-moviwatch-cache': firstChunk.cacheStatus", 'Cache status must survive the progressive relay');
-assert.ok(!worker.includes('new Uint8Array(await upstream.arrayBuffer())'), 'Streaming fetch path must not buffer the full upstream range');
+const chunkFillStart = worker.indexOf('async function fetchAndCacheVideoChunk');
+const chunkFillEnd = worker.indexOf('export class VideoHeader', chunkFillStart);
+assert.ok(chunkFillStart >= 0 && chunkFillEnd > chunkFillStart &&
+  !worker.slice(chunkFillStart, chunkFillEnd).includes('arrayBuffer()'),
+  'Cache segment fill must stream, not buffer, the entire upstream segment');
 assertIncludes(worker, 'const startupSize = fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE', 'Startup/continuation byte-range alignment missing');
 assertIncludes(worker, 'const VIDEO_CACHE_TTL = 24 * 60 * 60', '24-hour shared video cache TTL missing');
 assertIncludes(worker, "'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600'", 'Complete video chunks must remain cacheable for 24 hours');
