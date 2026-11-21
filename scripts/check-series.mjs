@@ -21,7 +21,7 @@ includes(worker, "body.addAccount === true ? (existingAccounts.length ? crypto.r
 includes(worker, "WHERE id=${connectionId}", 'Connection-scoped refresh-token storage');
 includes(worker, "account_id:accountId", 'Private video account binding');
 includes(worker, "source.accountId || 'primary'", 'Per-account private stream authorization');
-includes(worker, 'connection_id TEXT NOT NULL DEFAULT \'primary\'', 'Legacy-compatible upload connection column');
+includes(drive, 'connection_id TEXT NOT NULL DEFAULT \'primary\'', 'Legacy-compatible upload connection column');
 includes(admin, 'id="driveAccountSelector"', 'Drive account selector');
 includes(admin, 'id="driveAddAccount"', 'Add another Google account control');
 includes(admin, "accountId:pendingEpisodeFile.accountId||driveAccountId", 'Episode account binding');
@@ -36,7 +36,7 @@ includes(worker, "content_type: 'series'", 'Public series detail response');
 includes(worker, 'content.next_episode = at >= 0', 'Episode sibling navigation');
 includes(worker, "path === '/api/admin/series' && method === 'POST'", 'Series creation endpoint');
 includes(worker, "episodeCreateMatch && method === 'POST'", 'Episode publishing endpoint');
-includes(worker, "path === '/api/admin/episodes/'", 'Episode management route');
+includes(worker, "path.startsWith('/api/admin/episodes/')", 'Episode management route');
 includes(admin, 'id="seriesForm"', 'Series creation form');
 includes(admin, 'id="episodeForm"', 'Episode publishing form');
 includes(admin, 'stageDriveFileForEpisode(file)', 'Drive-to-episode selection');
