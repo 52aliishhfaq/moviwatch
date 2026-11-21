@@ -955,7 +955,7 @@ async function getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourc
     'https://moviwatch.internal'
   );
   const headerEntry = ctx.exports.VideoHeader({
-    props: { sourceUrl: source.url, sourceVersion: normalizedSourceVersion }
+    props: cachedSourceProps(source, normalizedSourceVersion)
   });
   const response = await headerEntry.fetch(new Request(internalUrl));
   if (!response.ok) {
@@ -1959,6 +1959,14 @@ async function api(req, env, ctx) {
       const movies = rows.map((movie) => ({
         ...movie,
         video_sources: (Array.isArray(movie.video_sources) ? movie.video_sources : []).flatMap((source) => {
+          if (source?.provider === 'google-drive-private' && isGoogleDriveFileId(source.file_id)) {
+            return [{
+              label: (source.label || 'Private Google Drive').slice(0, 60),
+              url: 'drive-private://' + source.file_id,
+              provider: 'google-drive-private',
+              fileId: source.file_id
+            }];
+          }
           try {
             const url = videoSourceUrl(source.url);
             const provider = sourceProvider(url);
