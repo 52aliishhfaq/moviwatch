@@ -148,17 +148,19 @@ export async function googleDriveAccessToken(sql, env) {
       throw new Error('Google Drive could not refresh its access token. Reconnect the account and try again.');
     }
 
+    let cacheUpdatedAt = updatedAt;
     if (typeof payload.refresh_token === 'string' && payload.refresh_token.length > 20) {
       const encrypted = await encryptGoogleDriveSecret(env, payload.refresh_token, DRIVE_TOKEN_AAD);
       await sql`UPDATE public.google_drive_connections
         SET refresh_token_ciphertext=${encrypted.ciphertext}, refresh_token_iv=${encrypted.iv}, updated_at=NOW()
         WHERE id=${DRIVE_CONNECTION_ID}`;
+      cacheUpdatedAt = Date.now();
     }
 
     accessTokenCache = {
       token: payload.access_token,
       expiresAt: Date.now() + Math.max(60, Number(payload.expires_in) || 3600) * 1000,
-      updatedAt
+      updatedAt: cacheUpdatedAt
     };
     return payload.access_token;
   })().finally(() => {
