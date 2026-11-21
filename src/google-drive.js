@@ -145,7 +145,13 @@ export async function googleDriveConnections(sql) {
     FROM public.google_drive_connections ORDER BY connected_at ASC, account_email ASC`;
 }
 
-export async function googleDriveAccessToken(sql, env, connectionId = 'primary') {
+function consumeRequestBudget(budget) {
+  if (!budget) return;
+  if (budget.used >= budget.limit) throw new Error('Video upstream request budget exhausted (' + budget.limit + ').');
+  budget.used++;
+}
+
+export async function googleDriveAccessToken(sql, env, connectionId = 'primary', requestBudget = null) {
   if (typeof connectionId !== 'string' || !/^(primary|[0-9a-f-]{36})$/i.test(connectionId)) {
     throw new Error('Invalid Google Drive account ID.');
   }
@@ -179,6 +185,7 @@ export async function googleDriveAccessToken(sql, env, connectionId = 'primary')
     } catch {
       throw new Error('Stored Google Drive refresh token cannot be decrypted with the current GOOGLE_DRIVE_ENCRYPTION_KEY. Reset the old Drive connection and reconnect after confirming the key.');
     }
+    consumeRequestBudget(requestBudget);
     const response = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -219,15 +226,16 @@ export async function googleDriveAccessToken(sql, env, connectionId = 'primary')
   return refreshPromise;
 }
 
-export async function googleDriveApiRequest(sql, env, target, options = {}, connectionId = 'primary') {
+export async function googleDriveApiRequest(sql, env, target, options = {}, connectionId = 'primary', requestBudget = null) {
   const url = new URL(target);
   if (url.protocol !== 'https:' || url.origin !== 'https://www.googleapis.com' ||
       !(url.pathname.startsWith('/drive/v3/') || url.pathname.startsWith('/upload/drive/v3/'))) {
     throw new Error('Blocked an unexpected Google Drive API destination.');
   }
-  const token = await googleDriveAccessToken(sql, env, connectionId);
+  const token = await googleDriveAccessToken(sql, env, connectionId, requestBudget);
   const headers = new Headers(options.headers || {});
   headers.set('Authorization', 'Bearer ' + token);
+  consumeRequestBudget(requestBudget);
   return fetch(url, { ...options, headers, redirect: 'manual' });
 }
 

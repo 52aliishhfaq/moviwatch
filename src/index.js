@@ -3,6 +3,11 @@ import { Redis } from '@upstash/redis';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { videoSourceUrl, sourceProvider } from './video-sources.js';
 import {
+  VIDEO_CHUNK_SIZE, VIDEO_STARTUP_CHUNK_SIZE, VIDEO_FRAGMENT_START_CHUNK_SIZE,
+  parseByteRange, parseContentRange, mp4MoovEnd, mp4HasMvex,
+  videoChunkStartForOffset, videoChunkSizeAt
+} from './video-range.js';
+import {
   clearGoogleDriveAccessTokenCache,
   decryptGoogleDriveSecret,
   encryptGoogleDriveSecret,
@@ -90,12 +95,22 @@ async function hmac(secret, data) {
   const key = await crypto.subtle.importKey('raw', secret, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return new Uint8Array(await crypto.subtle.sign('HMAC', key, data));
 }
+async function signingSecret(env, purpose) {
+  if (!env.JWT_SECRET) throw new Error('JWT_SECRET is not configured');
+  return hmac(enc.encode(env.JWT_SECRET), enc.encode('moviwatch:' + purpose + ':v1'));
+}
+const playbackVerificationCache = new Map();
+const PLAYBACK_VERIFY_CACHE_TTL = 15000;
+function cachePlaybackClaims(token, claims) {
+  playbackVerificationCache.set(token, { claims, until: Math.min(Date.now() + PLAYBACK_VERIFY_CACHE_TTL, claims.exp * 1000) });
+  while (playbackVerificationCache.size > 512) playbackVerificationCache.delete(playbackVerificationCache.keys().next().value);
+}
 async function makeToken(env) {
   const now = Math.floor(Date.now() / 1000);
   const head = b64(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = b64(JSON.stringify({ sub: 'admin', iat: now, exp: now + SESSION }));
   const unsigned = head + '.' + payload;
-  return unsigned + '.' + b64(await hmac(enc.encode(env.JWT_SECRET), enc.encode(unsigned)));
+  return unsigned + '.' + b64(await hmac(await signingSecret(env, 'admin'), enc.encode(unsigned)));
 }
 async function validToken(env, token) {
   try {
@@ -105,7 +120,7 @@ async function validToken(env, token) {
     const body = JSON.parse(new TextDecoder().decode(unb64(p[1])));
     const now = Math.floor(Date.now() / 1000);
     if (head.alg !== 'HS256' || body.sub !== 'admin' || !Number.isInteger(body.exp) || body.exp <= now || body.iat > now + 60) return false;
-    const sig = await hmac(enc.encode(env.JWT_SECRET), enc.encode(p[0] + '.' + p[1]));
+    const sig = await hmac(await signingSecret(env, 'admin'), enc.encode(p[0] + '.' + p[1]));
     const got = unb64(p[2]);
     if (got.length !== sig.length) return false;
     let diff = 0;
@@ -135,11 +150,14 @@ async function makePlaybackToken(env, movieId) {
   const head = b64(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = b64(JSON.stringify({ sub: 'playback', mid: movieId, sid: b64(sid), iat: now, exp: now + PLAYBACK_SESSION }));
   const unsigned = head + '.' + payload;
-  return unsigned + '.' + b64(await hmac(enc.encode(env.JWT_SECRET), enc.encode(unsigned)));
+  return unsigned + '.' + b64(await hmac(await signingSecret(env, 'playback'), enc.encode(unsigned)));
 }
 async function validPlaybackToken(env, token) {
   try {
     if (!env.JWT_SECRET || typeof token !== 'string') return false;
+    const cached = playbackVerificationCache.get(token);
+    if (cached && cached.until > Date.now()) return cached.claims;
+    if (cached) playbackVerificationCache.delete(token);
     const parts = token.split('.');
     if (parts.length !== 3) return false;
     const head = JSON.parse(new TextDecoder().decode(unb64(parts[0])));
@@ -151,12 +169,14 @@ async function validPlaybackToken(env, token) {
         !Number.isInteger(body.exp) || body.exp <= now ||
         !Number.isInteger(body.iat) || body.iat > now + 60 ||
         body.exp - body.iat > PLAYBACK_SESSION) return false;
-    const expected = await hmac(enc.encode(env.JWT_SECRET), enc.encode(parts[0] + '.' + parts[1]));
+    const expected = await hmac(await signingSecret(env, 'playback'), enc.encode(parts[0] + '.' + parts[1]));
     const received = unb64(parts[2]);
     if (received.length !== expected.length) return false;
     let diff = 0;
     for (let i = 0; i < expected.length; i++) diff |= expected[i] ^ received[i];
-    return diff === 0 ? body : null;
+    if (diff !== 0) return null;
+    cachePlaybackClaims(token, body);
+    return body;
   } catch { return null; }
 }
 function isTrustedAppOrigin(req, env, value) {
@@ -312,8 +332,10 @@ function storedVideoSource(movie,optionIndex){
   if(typeof raw.url!=='string')return null;
   try{const url=videoSourceUrl(raw.url);return{...raw,url,provider:sourceProvider(url)}}catch{return null}
 }
-const CATALOGUE_CACHE_TTL = 30;
-const MOVIE_METADATA_CACHE_TTL = 30;
+const CATALOGUE_CACHE_TTL = 300;
+const MOVIE_METADATA_CACHE_TTL = 300;
+const movieMetadataMemory = new Map();
+const MOVIE_METADATA_MEMORY_TTL = 30000;
 
 async function publicMovies(env,category,query){
  const sql=sqlFor(env);
@@ -423,19 +445,30 @@ export class MovieMetadata extends WorkerEntrypoint {
 
 async function movieById(ctx, env, movieId) {
   if (!/^[0-9a-f-]{36}$/i.test(movieId)) return { movie: null, cacheStatus: 'BYPASS' };
+  const cached = movieMetadataMemory.get(movieId);
+  if (cached && cached.until > Date.now()) return { movie: cached.movie, cacheStatus: 'MEMORY' };
+  if (cached) movieMetadataMemory.delete(movieId);
   const metadataEntry = ctx.exports.MovieMetadata({ props: { movieId } });
   const response = await metadataEntry.fetch(
     new Request('https://moviwatch.internal/__movie_metadata__v3/' + encodeURIComponent(movieId))
   );
   if (!response.ok) throw new Error('Movie metadata lookup failed (HTTP ' + response.status + ')');
   const payload = await response.json();
+  const movie = payload.movie || null;
+  movieMetadataMemory.set(movieId, { movie, until: Date.now() + MOVIE_METADATA_MEMORY_TTL });
+  while (movieMetadataMemory.size > 256) movieMetadataMemory.delete(movieMetadataMemory.keys().next().value);
   return {
-    movie: payload.movie || null,
+    movie,
     cacheStatus: response.headers.get('cf-cache-status') || 'UNKNOWN'
   };
 }
 
 async function invalidateContentCaches(ctx, movieId) {
+  if (movieId) {
+    movieMetadataMemory.delete(movieId);
+    const headerPrefix = movieId + '|';
+    for (const key of videoHeaderMemory.keys()) if (key.startsWith(headerPrefix)) videoHeaderMemory.delete(key);
+  }
   // Defer each entrypoint factory call into its own promise. Promise.allSettled()
   // cannot catch a synchronous throw that happens while building an eager array.
   // A cache-purge problem must never turn an already-committed movie edit into
@@ -463,7 +496,7 @@ function driveOAuthStateCookie(nonce, verifier, env, connectionId = 'primary') {
     const now = Math.floor(Date.now() / 1000);
     const body = b64(JSON.stringify({ sub: 'google-drive-oauth', nonce, verifier, connectionId, iat: now, exp: now + 600 }));
     const unsigned = head + '.' + body;
-    return unsigned + '.' + b64(await hmac(enc.encode(env.JWT_SECRET), enc.encode(unsigned)));
+    return unsigned + '.' + b64(await hmac(await signingSecret(env, 'google-drive-oauth'), enc.encode(unsigned)));
   })();
 }
 
@@ -481,7 +514,7 @@ async function verifyDriveOAuthState(token, env, expectedNonce) {
         typeof body.connectionId !== 'string' || !/^(primary|[0-9a-f-]{36})$/i.test(body.connectionId) ||
         !Number.isInteger(body.iat) || body.iat > now + 60 ||
         !Number.isInteger(body.exp) || body.exp <= now || body.exp - body.iat > 600) return null;
-    const expected = await hmac(enc.encode(env.JWT_SECRET), enc.encode(parts[0] + '.' + parts[1]));
+    const expected = await hmac(await signingSecret(env, 'google-drive-oauth'), enc.encode(parts[0] + '.' + parts[1]));
     const received = unb64(parts[2]);
     if (received.length !== expected.length) return null;
     let diff = 0;
@@ -1179,7 +1212,14 @@ function sourceKind(host) {
   host = host.toLowerCase();
   return host === 'archive.org' || host.endsWith('.archive.org') ? 'Archive.org' : 'Google Drive';
 }
-async function videoSourceFetch(source, method, headers, signal) {
+function consumeUpstreamBudget(budget) {
+  if (!budget) return;
+  if (budget.used >= budget.limit) throw new Error('Video upstream fetch budget exhausted (' + budget.limit + ').');
+  budget.used++;
+}
+const VIDEO_UPSTREAM_FETCH_LIMIT = 6;
+
+async function videoSourceFetch(source, method, headers, signal, budget = null) {
   let url = new URL(source);
   // Normalize legacy database URLs to Google's direct download endpoint.
   if (url.hostname.toLowerCase() === 'drive.google.com' && url.pathname === '/uc') {
@@ -1196,6 +1236,7 @@ async function videoSourceFetch(source, method, headers, signal) {
     if (!allowedSourceHost(host)) throw new Error('Unsupported video-source redirect');
     const options = { method: currentMethod, headers, redirect: 'manual' };
     if (signal) options.signal = signal;
+    consumeUpstreamBudget(budget);
     const res = await fetch(url.toString(), options);
     if (![301, 302, 303, 307, 308].includes(res.status)) return res;
     const location = res.headers.get('Location');
@@ -1207,32 +1248,10 @@ async function videoSourceFetch(source, method, headers, signal) {
   throw new Error('Video-source redirect limit reached');
 }
 
-// Video edge cache: store complete 8 MiB continuation chunks as cacheable 200 responses.
+// Video edge cache: store complete 4 MiB continuation chunks as cacheable 200 responses.
 // The public response is reconstructed as a standards-compliant 206 response.
-const VIDEO_CHUNK_SIZE = 8 * 1024 * 1024;
-// Keep cold-start transfers small; continuation chunks remain large for cache efficiency.
-const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024;
-// Fragmented MP4 keeps its initial moov + first media fragments even more compact.
-const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024;
 const VIDEO_HEADER_PROBE_SIZE = 16 * 1024;
 const VIDEO_CACHE_TTL = 24 * 60 * 60;
-
-function parseByteRange(value) {
-  if (typeof value !== 'string' || !value.startsWith('bytes=')) return null;
-  const spec = value.slice(6).trim();
-  if (spec.includes(',')) return { invalid: true };
-  const match = /^([0-9]*)-([0-9]*)$/.exec(spec);
-  if (!match || (!match[1] && !match[2])) return { invalid: true };
-  if (!match[1]) {
-    const suffix = Number(match[2]);
-    return Number.isSafeInteger(suffix) && suffix > 0 ? { suffix } : { invalid: true };
-  }
-  const start = Number(match[1]);
-  const end = match[2] ? Number(match[2]) : null;
-  if (!Number.isSafeInteger(start) || start < 0 ||
-      (end !== null && (!Number.isSafeInteger(end) || end < start))) return { invalid: true };
-  return { start, end };
-}
 
 function sniffVideoContainer(bytes) {
   // ISO-BMFF files can place free/wide boxes before the ftyp signature.
@@ -1252,14 +1271,6 @@ function sniffVideoContainer(bytes) {
   if (bytes.length >= 3 && String.fromCharCode(...bytes.subarray(0, 3)) === 'FLV') return 'flv';
   if (bytes.length >= 1 && bytes[0] === 0x47) return 'mpeg-ts-or-unknown';
   return 'unknown';
-}
-
-function parseContentRange(value) {
-  const match = new RegExp('^bytes ([0-9]+)-([0-9]+)/([0-9]+)$').exec(value || '');
-  if (!match) return null;
-  const start = Number(match[1]), end = Number(match[2]), total = Number(match[3]);
-  if (![start, end, total].every(Number.isSafeInteger) || end < start || total <= end) return null;
-  return { start, end, total };
 }
 
 async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash, chunkStart, chunkSize = VIDEO_CHUNK_SIZE) {
@@ -1286,9 +1297,10 @@ async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSource
     throw new Error(detail);
   }
 
-  const start = Number(response.headers.get('x-moviwatch-start'));
-  const end = Number(response.headers.get('x-moviwatch-end'));
-  const total = Number(response.headers.get('x-moviwatch-total'));
+  const range = parseContentRange(response.headers.get('content-range') || '');
+  const start = Number(response.headers.get('x-moviwatch-start') ?? range?.start);
+  const end = Number(response.headers.get('x-moviwatch-end') ?? range?.end);
+  const total = Number(response.headers.get('x-moviwatch-total') ?? range?.total);
   const contentType = response.headers.get('content-type') || 'video/mp4';
   const container = response.headers.get('x-moviwatch-container') || 'unknown';
   const bytes = new Uint8Array(await response.arrayBuffer());
@@ -1297,10 +1309,17 @@ async function getVideoChunk(ctx, source, movieId, optionIndex, normalizedSource
       total <= end || end > chunkStart + chunkSize - 1 || bytes.byteLength !== end - start + 1) {
     throw new Error('Cloudflare returned an invalid cached video chunk');
   }
-  return { bytes, start, end, total, contentType, container, cacheStatus };
+  return { bytes, start, end, total, contentType, container, cacheStatus,
+    partial: response.status === 206 || end < Math.min(chunkStart + chunkSize - 1, total - 1) };
 }
 
+const videoHeaderMemory = new Map();
+const VIDEO_HEADER_MEMORY_TTL = 60000;
 async function getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash) {
+  const memoryKey = movieId + '|' + sourceHash;
+  const cached = videoHeaderMemory.get(memoryKey);
+  if (cached && cached.until > Date.now()) return { ...cached.value, cacheStatus: 'MEMORY' };
+  if (cached) videoHeaderMemory.delete(memoryKey);
   const internalUrl = new URL(
     '/__video_header__/' + encodeURIComponent(movieId) + '/' + optionIndex + '/' + sourceHash,
     'https://moviwatch.internal'
@@ -1322,7 +1341,7 @@ async function getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourc
       (payload.moovEnd !== null && (!Number.isSafeInteger(payload.moovEnd) || payload.moovEnd < 0))) {
     throw new Error('Video source returned invalid MP4 metadata');
   }
-  return {
+  const value = {
     total: payload.total,
     moovEnd: payload.moovEnd,
     container: payload.container || 'unknown',
@@ -1330,92 +1349,14 @@ async function getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourc
     fragmented: payload.fragmented === true,
     cacheStatus: response.headers.get('cf-cache-status') || 'UNKNOWN'
   };
+  videoHeaderMemory.set(memoryKey, { value, until: Date.now() + VIDEO_HEADER_MEMORY_TTL });
+  while (videoHeaderMemory.size > 256) videoHeaderMemory.delete(videoHeaderMemory.keys().next().value);
+  return value;
 }
 
-function mp4MoovEnd(bytes) {
-  // Parse top-level ISO-BMFF boxes from the small cached file-header probe.
-  let offset = 0;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  for (let count = 0; count < 16 && offset + 8 <= bytes.byteLength; count++) {
-    let size = view.getUint32(offset);
-    const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
-    let headerSize = 8;
-    if (size === 1) {
-      if (offset + 16 > bytes.byteLength) return null;
-      const largeSize = view.getBigUint64(offset + 8);
-      if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return null;
-      size = Number(largeSize);
-      headerSize = 16;
-    } else if (size === 0) {
-      return null;
-    }
-    if (size < headerSize) return null;
-    if (type === 'moov') {
-      const end = offset + size;
-      return Number.isSafeInteger(end) && end <= 64 * 1024 * 1024 ? end : null;
-    }
-    if (offset + size > bytes.byteLength) return null;
-    offset += size;
-  }
-  return null;
-}
-
-function mp4HasMvex(bytes) {
-  // A fragmented MP4 has an mvex box as a direct child of its initial moov.
-  // Return false when the complete moov is not present in the tiny probe.
-  let offset = 0;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  for (let count = 0; count < 16 && offset + 8 <= bytes.byteLength; count++) {
-    let size = view.getUint32(offset);
-    const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
-    let headerSize = 8;
-    if (size === 1) {
-      if (offset + 16 > bytes.byteLength) return false;
-      const largeSize = view.getBigUint64(offset + 8);
-      if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return false;
-      size = Number(largeSize);
-      headerSize = 16;
-    } else if (size === 0) return false;
-    if (size < headerSize || offset + size > bytes.byteLength) return false;
-    if (type === 'moov') {
-      const moovEnd = offset + size;
-      let child = offset + headerSize;
-      while (child + 8 <= moovEnd) {
-        let childSize = view.getUint32(child);
-        const childType = String.fromCharCode(bytes[child + 4], bytes[child + 5], bytes[child + 6], bytes[child + 7]);
-        let childHeader = 8;
-        if (childSize === 1) {
-          if (child + 16 > moovEnd) return false;
-          const largeSize = view.getBigUint64(child + 8);
-          if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return false;
-          childSize = Number(largeSize);
-          childHeader = 16;
-        } else if (childSize === 0) return false;
-        if (childSize < childHeader || child + childSize > moovEnd) return false;
-        if (childType === 'mvex') return true;
-        child += childSize;
-      }
-      return false;
-    }
-    offset += size;
-  }
-  return false;
-}
-
-function videoChunkStartForOffset(offset, fragmented) {
-  const startupSize = fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE;
-  if (offset < startupSize) return 0;
-  return startupSize + Math.floor((offset - startupSize) / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
-}
-
-function videoChunkSizeAt(chunkStart, fragmented) {
-  if (chunkStart !== 0) return VIDEO_CHUNK_SIZE;
-  return fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE;
-}
-
-async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverride = 0) {
+async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverride = 0, budget = null) {
   if (source?.provider !== 'google-drive-private') {
-    return fetchVideoRangeFromMirrors(source.url, start, end, timeoutOverride);
+    return fetchVideoRangeFromMirrors(source.url, start, end, timeoutOverride, budget);
   }
   if (!isGoogleDriveFileId(source.fileId) || source.url !== googleDriveMediaUrl(source.fileId)) {
     throw new Error('Invalid private Google Drive video source');
@@ -1426,8 +1367,8 @@ async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverrid
   let upstream = null;
   for (let hop = 0; hop <= 5; hop++) {
     upstream = hop === 0
-      ? await googleDriveApiRequest(sqlFor(env), env, mediaUrl, { headers: rangeHeaders, signal }, source.accountId || 'primary')
-      : await fetch(mediaUrl, { method: 'GET', headers: rangeHeaders, signal, redirect: 'manual' });
+      ? await googleDriveApiRequest(sqlFor(env), env, mediaUrl, { headers: rangeHeaders, signal }, source.accountId || 'primary', budget)
+      : (consumeUpstreamBudget(budget), await fetch(mediaUrl, { method: 'GET', headers: rangeHeaders, signal, redirect: 'manual' }));
     if (![301, 302, 303, 307, 308].includes(upstream.status)) break;
     const location = upstream.headers.get('location');
     try { await upstream.body?.cancel(); } catch {}
@@ -1459,7 +1400,6 @@ async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverrid
   if (bytes.byteLength !== range.end - range.start + 1) throw new Error('Google Drive returned an incomplete video range');
   return { range, bytes, upstreamType: (upstream.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() };
 }
-
 function cachedSourceProps(source, normalizedSourceVersion) {
   return {
     sourceUrl: source.url,
@@ -1480,51 +1420,30 @@ function isValidCachedSource(sourceUrl, sourceProviderName, sourceFileId, source
   } catch { return false; }
 }
 
-async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHUNK_SIZE, env) {
-  // Fill one complete cache chunk; keep requesting if the upstream caps its Range size.
+async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHUNK_SIZE, env, budget = { limit: VIDEO_UPSTREAM_FETCH_LIMIT, used: 0 }) {
+  // One bounded upstream range per fill. A short but valid 206 is returned as
+  // an uncached piece; the response stream requests the next piece on demand.
   const requestedEnd = chunkStart + chunkSize - 1;
-  const pieces = [];
-  let cursor = chunkStart;
-  let total = null;
-  let upstreamType = '';
-  let expectedEnd = requestedEnd;
-  let requests = 0;
-
-  while (cursor <= expectedEnd) {
-    if (++requests > 128) throw new Error('Video source returned too many small byte ranges');
-    const part = await fetchConfiguredVideoRange(source, cursor, requestedEnd, env);
-    if (part.unsatisfiedTotal !== undefined) {
-      if (cursor === chunkStart) return { unsatisfiedTotal: part.unsatisfiedTotal };
-      throw new Error('Video source ended before the cached chunk was complete');
-    }
-    const { range, bytes } = part;
-    if (!range || (total !== null && range.total !== total)) throw new Error('Inconsistent upstream byte-range metadata');
-    total = range.total;
-    expectedEnd = Math.min(requestedEnd, total - 1);
-    if (cursor > expectedEnd) break;
-    if (range.end < cursor || range.end > expectedEnd) throw new Error('Non-contiguous upstream byte range');
-    if (!upstreamType) upstreamType = part.upstreamType;
-    pieces.push(bytes);
-    cursor = range.end + 1;
+  const part = await fetchConfiguredVideoRange(source, chunkStart, requestedEnd, env, 0, budget);
+  if (part.unsatisfiedTotal !== undefined) return { unsatisfiedTotal: part.unsatisfiedTotal };
+  const { range, bytes } = part;
+  if (!range || range.start !== chunkStart || range.end < chunkStart ||
+      range.end > requestedEnd || bytes.byteLength !== range.end - range.start + 1) {
+    throw new Error('Upstream returned an invalid video byte range');
   }
-
-  if (total === null || cursor !== expectedEnd + 1) throw new Error('Video source did not provide a complete contiguous cache chunk');
-  const expectedLength = expectedEnd - chunkStart + 1;
-  const bytes = new Uint8Array(expectedLength);
-  let offset = 0;
-  for (const piece of pieces) {
-    bytes.set(piece, offset);
-    offset += piece.byteLength;
-  }
-  if (offset !== expectedLength) throw new Error('Assembled video chunk has an invalid length');
-
-  const container = sniffVideoContainer(bytes);
-  const contentType = container === 'mp4' ? 'video/mp4' :
-    container === 'webm' ? 'video/webm' :
-    container === 'mkv' ? 'video/x-matroska' :
+  const expectedEnd = Math.min(requestedEnd, range.total - 1);
+  if (range.end > expectedEnd) throw new Error('Upstream returned bytes beyond the file boundary');
+  const partial = range.end < expectedEnd;
+  // Only scan the first range. The header probe already determines the
+  // container for every later piece, avoiding repeated 64 KiB sniff scans.
+  const container = chunkStart === 0 ? sniffVideoContainer(bytes) : 'unknown';
+  const upstreamType = part.upstreamType || '';
+  const contentType = chunkStart === 0 && container === 'mp4' ? 'video/mp4' :
+    chunkStart === 0 && container === 'webm' ? 'video/webm' :
+    chunkStart === 0 && container === 'mkv' ? 'video/x-matroska' :
     (!upstreamType || upstreamType === 'application/octet-stream' || upstreamType === 'binary/octet-stream')
       ? 'video/mp4' : upstreamType;
-  return { bytes, start: chunkStart, end: expectedEnd, total, contentType, container };
+  return { bytes, start: chunkStart, end: range.end, total: range.total, contentType, container, partial };
 }
 export class VideoHeader extends WorkerEntrypoint {
   async fetch(request) {
@@ -1552,7 +1471,8 @@ export class VideoHeader extends WorkerEntrypoint {
       const digest = await crypto.subtle.digest('SHA-256', enc.encode(sourceUrl + '|' + sourceVersion));
       const expectedHash = hex(new Uint8Array(digest)).slice(0, 32);
       if (expectedHash !== sourceHash) return json({ error: 'Video header cache key did not match its source' }, 400);
-      const probe = await fetchConfiguredVideoRange(source, 0, VIDEO_HEADER_PROBE_SIZE - 1, this.env, 20000);
+      const requestBudget = { limit: VIDEO_UPSTREAM_FETCH_LIMIT, used: 0 };
+      const probe = await fetchConfiguredVideoRange(source, 0, VIDEO_HEADER_PROBE_SIZE - 1, this.env, 20000, requestBudget);
       const range = probe.range;
       if (!range || probe.unsatisfiedTotal !== undefined || range.start !== 0 || range.end < 39) {
         throw new Error('Video source did not return a valid video header');
@@ -1608,9 +1528,14 @@ export class VideoChunk extends WorkerEntrypoint {
         (chunkStart - VIDEO_FRAGMENT_START_CHUNK_SIZE) % VIDEO_CHUNK_SIZE === 0));
     const initialStartupChunk = chunkStart === 0 &&
       (chunkSize === VIDEO_STARTUP_CHUNK_SIZE || chunkSize === VIDEO_FRAGMENT_START_CHUNK_SIZE);
+    const uncachedContinuationPiece = chunkStart > 0 && Number.isSafeInteger(chunkSize) &&
+      chunkSize > 0 && chunkSize <= VIDEO_CHUNK_SIZE;
+    const uncachedProbePiece = chunkStart === 0 && Number.isSafeInteger(chunkSize) &&
+      chunkSize > 0 && chunkSize <= 64 * 1024;
     if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex > 7 ||
         !Number.isSafeInteger(chunkStart) || chunkStart < 0 ||
-        !(alignedContinuationChunk || initialStartupChunk) ||
+        !(alignedContinuationChunk || initialStartupChunk || uncachedContinuationPiece || uncachedProbePiece) ||
+        chunkSize > VIDEO_CHUNK_SIZE ||
         typeof sourceUrl !== 'string' || sourceUrl.length > 2048) {
       return json({ error: 'Invalid internal video chunk parameters' }, 400);
     }
@@ -1623,7 +1548,8 @@ export class VideoChunk extends WorkerEntrypoint {
       const expectedHash = hex(new Uint8Array(digest)).slice(0, 32);
       if (expectedHash !== sourceHash) return json({ error: 'Video cache key did not match its source' }, 400);
 
-      const result = await fetchAndCacheVideoChunk(source, chunkStart, chunkSize, this.env);
+      const requestBudget = { limit: VIDEO_UPSTREAM_FETCH_LIMIT, used: 0 };
+      const result = await fetchAndCacheVideoChunk(source, chunkStart, chunkSize, this.env, requestBudget);
       if (result.unsatisfiedTotal !== undefined) {
         return new Response(null, {
           status: 416,
@@ -1635,19 +1561,24 @@ export class VideoChunk extends WorkerEntrypoint {
         });
       }
 
-      return new Response(result.bytes, {
-        status: 200,
-        headers: {
-          'content-type': result.contentType,
-          'content-length': String(result.bytes.byteLength),
-          'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600',
-          'cache-tag': 'video-chunks-' + movieId,
-          'x-moviwatch-start': String(result.start),
-          'x-moviwatch-end': String(result.end),
-          'x-moviwatch-total': String(result.total),
-          'x-moviwatch-container': result.container
-        }
+      const cacheable = !result.partial && (alignedContinuationChunk || initialStartupChunk);
+      const headers = new Headers({
+        'content-type': result.contentType,
+        'content-length': String(result.bytes.byteLength),
+        'x-moviwatch-start': String(result.start),
+        'x-moviwatch-end': String(result.end),
+        'x-moviwatch-total': String(result.total),
+        'x-moviwatch-container': result.container
       });
+      if (cacheable) {
+        headers.set('cache-control', 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600');
+        headers.set('cache-tag', 'video-chunks-' + movieId);
+        return new Response(result.bytes, { status: 200, headers });
+      }
+      headers.set('cache-control', 'private, no-store, max-age=0');
+      headers.set('content-range', 'bytes ' + result.start + '-' + result.end + '/' + result.total);
+      headers.set('x-moviwatch-upstream-mode', 'short-range-no-cache');
+      return new Response(result.bytes, { status: 206, headers });
     } catch (error) {
       console.error('Tiered video chunk fill failed:', error?.message || error);
       const detail = error instanceof Error ? error.message : 'Unknown video chunk error';
@@ -1699,7 +1630,7 @@ function archiveHost(value) {
     host !== 'archive.org' && !host.includes('..') ? host : null;
 }
 
-async function archiveRouting(identifier) {
+async function archiveRouting(identifier, budget = null) {
   const cached = archiveMeta.get(identifier);
   if (cached && cached.until > Date.now()) return cached.value;
   if (archiveMetaPending.has(identifier)) return archiveMetaPending.get(identifier);
@@ -1707,6 +1638,7 @@ async function archiveRouting(identifier) {
   const pending = (async () => {
     let value = null;
     try {
+      consumeUpstreamBudget(budget);
       const response = await fetch('https://archive.org/metadata/' + encodeURIComponent(identifier), {
         headers: { Accept: 'application/json' },
         signal: AbortSignal.timeout(12000)
@@ -1723,7 +1655,7 @@ async function archiveRouting(identifier) {
       ].map(archiveHost).filter(Boolean))];
       if (hosts.length) value = { dir, hosts };
     } catch (error) {
-      console.warn('Archive.org mirror discovery failed:', error?.message || error);
+      // The final source/proxy error is logged by the owning request handler.
     }
     archiveMeta.set(identifier, {
       value,
@@ -1767,10 +1699,10 @@ function recordArchiveFailure(identifier, host) {
   });
 }
 
-async function archiveCandidates(sourceUrl) {
+async function archiveCandidates(sourceUrl, budget = null) {
   const details = archiveSourceParts(sourceUrl);
   if (!details) return [{ url: sourceUrl, host: '', identifier: '' }];
-  const route = await archiveRouting(details.identifier);
+  const route = await archiveRouting(details.identifier, budget);
   if (!route?.hosts?.length) return [{ url: details.original, host: '', identifier: details.identifier }];
   const ranked = route.hosts.map((host, order) => ({
     host, order, score: archiveScore(details.identifier, host)
@@ -1801,9 +1733,9 @@ function archiveTimeout(size, score) {
   return Math.max(45000, Math.min(5 * 60 * 1000, 30000 + size / rate * 2000));
 }
 
-async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeoutOverride = 0) {
+async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeoutOverride = 0, budget = null) {
   const details = archiveSourceParts(sourceUrl);
-  const candidates = details ? await archiveCandidates(sourceUrl) : [{ url: sourceUrl, host: '', identifier: '' }];
+  const candidates = details ? await archiveCandidates(sourceUrl, budget) : [{ url: sourceUrl, host: '', identifier: '' }];
   let lastError;
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i];
@@ -1814,7 +1746,7 @@ async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeou
       const upstream = await videoSourceFetch(candidate.url, 'GET', new Headers({
         Range: 'bytes=' + start + '-' + requestedEnd,
         'Accept-Encoding': 'identity'
-      }), signal);
+      }), signal, budget);
       if (upstream.status === 416) {
         const unsatisfied = /^bytes \*\/([0-9]+)$/.exec(upstream.headers.get('content-range') || '');
         try { await upstream.body?.cancel(); } catch {}
@@ -1836,7 +1768,7 @@ async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeou
       lastError = error instanceof Error ? error : new Error('Video range request failed');
       if (details && candidate.host) recordArchiveFailure(details.identifier, candidate.host);
       if (i === candidates.length - 1) throw lastError;
-      console.warn('Archive.org mirror failed; switching storage host:', candidate.host || 'archive.org router', lastError.message);
+      // Avoid per-mirror log spam; the owning request logs only if all candidates fail.
     }
   }
   throw lastError || new Error('No storage host returned the requested video range');
@@ -1854,10 +1786,6 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   const normalizedSourceVersion = baseSourceVersion + '|' + String(source.modified_time || '') + '|' + String(source.account_id || 'primary');
   const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url + '|' + normalizedSourceVersion));
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
-
-  // The cached header probe identifies fragmented MP4 for every range request,
-  // including seeks. Keep a compact first segment and 8 MiB continuation chunks
-  // so cold seeks do not have to wait for a 8 MiB Archive.org/Drive transfer.
   const header = await getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash);
   const fragmented = header.fragmented === true;
   const total = header.total;
@@ -1882,29 +1810,60 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + total, 'accept-ranges': 'bytes' } });
   }
 
+  // HEAD and tiny browser probes use header metadata (plus at most their
+  // explicitly requested bytes); they never fill or prefetch a full media chunk.
+  if (req.method === 'HEAD') {
+    return new Response(null, { status: 206, headers: {
+      'content-type': contentType,
+      'content-range': 'bytes ' + start + '-' + end + '/' + total,
+      'content-length': String(end - start + 1),
+      'accept-ranges': 'bytes',
+      'x-moviwatch-container': container,
+      'x-moviwatch-cache': 'HEADER_ONLY',
+      'x-moviwatch-header-cache': headerCacheStatus
+    } });
+  }
+  const tinyProbe = req.method === 'GET' && start === 0 && end <= 64 * 1024;
+  if (tinyProbe) {
+    const probeChunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion,
+      sourceHash, 0, end - start + 1);
+    if (probeChunk.unsatisfiedTotal !== undefined || probeChunk.total !== total ||
+        probeChunk.start !== start || probeChunk.end < start) {
+      throw new Error('Video source could not satisfy the small initial probe');
+    }
+    const probeEnd = Math.min(end, probeChunk.end);
+    const probeBytes = probeChunk.bytes.subarray(0, probeEnd - start + 1);
+    return new Response(probeBytes, { status: 206, headers: {
+      'content-type': contentType,
+      'content-range': 'bytes ' + start + '-' + probeEnd + '/' + total,
+      'content-length': String(probeBytes.byteLength),
+      'accept-ranges': 'bytes',
+      'cache-control': 'private, no-store, max-age=0',
+      'x-moviwatch-container': container,
+      'x-moviwatch-cache': probeChunk.cacheStatus,
+      'x-moviwatch-header-cache': headerCacheStatus
+    } });
+  }
+
   if (startupPrefetch) {
     const prefetchStarted = Date.now();
-    // Fetch only the small first segment on the critical path. The next
-    // continuation segment is warmed asynchronously as the response streams.
     const starts = [0];
-
-    const chunkPromises = starts.map((chunkStart) =>
-      getVideoChunk(
-        ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
-        chunkStart, videoChunkSizeAt(chunkStart, fragmented)
-      )
-    );
-    for (let i = 0; i < starts.length; i++) prefetched.set(starts[i], chunkPromises[i]);
-    ctx.waitUntil(Promise.allSettled(chunkPromises));
+    for (const chunkStart of starts) {
+      const chunkPromise = getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
+        chunkStart, videoChunkSizeAt(chunkStart, fragmented)).catch((error) => {
+          prefetched.delete(chunkStart);
+          throw error;
+        });
+      prefetched.set(chunkStart, chunkPromise);
+    }
+    ctx.waitUntil(Promise.allSettled([...prefetched.values()]));
     startupPrefetchCount = starts.length;
     startupPrefetchMs = Date.now() - prefetchStarted;
     cacheStatus = 'PREFETCH';
   } else {
     const firstStart = videoChunkStartForOffset(start, fragmented);
-    const firstChunk = await getVideoChunk(
-      ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
-      firstStart, videoChunkSizeAt(firstStart, fragmented)
-    );
+    const firstChunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
+      firstStart, videoChunkSizeAt(firstStart, fragmented));
     if (firstChunk.unsatisfiedTotal !== undefined) {
       return new Response(null, {
         status: 416,
@@ -1921,6 +1880,22 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   const contentLength = responseEnd - responseStart + 1;
   let cursor = responseStart;
   let chunk = null;
+  let uncachedStream = false;
+  let prefetchedForChunkStart = -1;
+
+  const startNextPrefetch = (currentChunk) => {
+    if (req.method !== 'GET' || uncachedStream || currentChunk.partial) return;
+    const nextChunkStart = currentChunk.end + 1;
+    if (nextChunkStart >= total || prefetched.has(nextChunkStart)) return;
+    const nextPromise = getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
+      nextChunkStart, videoChunkSizeAt(nextChunkStart, fragmented)).catch((error) => {
+        prefetched.delete(nextChunkStart);
+        throw error;
+      });
+    prefetched.set(nextChunkStart, nextPromise);
+    ctx.waitUntil(Promise.allSettled([nextPromise]));
+  };
+
   const body = new ReadableStream({
     async pull(controller) {
       try {
@@ -1928,40 +1903,42 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
           controller.close();
           return;
         }
-        const expectedChunkStart = videoChunkStartForOffset(cursor, fragmented);
-        if (!chunk || chunk.start !== expectedChunkStart) {
-          const pending = prefetched.get(expectedChunkStart);
-          chunk = pending
-            ? await pending
-            : await getVideoChunk(
-                ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
-                expectedChunkStart, videoChunkSizeAt(expectedChunkStart, fragmented)
-              );
-          prefetched.delete(expectedChunkStart);
-          if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total) {
-            throw new Error('Video source size changed during streaming');
+        if (!chunk || cursor > chunk.end) {
+          if (chunk?.partial) uncachedStream = true;
+          const nextStart = uncachedStream ? cursor : videoChunkStartForOffset(cursor, fragmented);
+          const nextSize = uncachedStream
+            ? Math.min(VIDEO_CHUNK_SIZE, responseEnd - cursor + 1)
+            : videoChunkSizeAt(nextStart, fragmented);
+          const pending = prefetched.get(nextStart);
+          if (pending) {
+            try { chunk = await pending; }
+            catch (error) { prefetched.delete(nextStart); throw error; }
+          } else {
+            chunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion,
+              sourceHash, nextStart, nextSize);
           }
+          prefetched.delete(nextStart);
+          if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total ||
+              chunk.start !== nextStart || chunk.end < cursor) {
+            throw new Error('Video source returned an inconsistent continuation range');
+          }
+          if (chunk.partial) uncachedStream = true;
         }
 
-        // Keep one segment ahead warm while the browser consumes the current
-        // range. This is especially useful after a seek: the target segment is
-        // fetched immediately, and its successor starts filling in parallel.
-        const nextChunkStart = chunk.end + 1;
-        if (nextChunkStart < total && !prefetched.has(nextChunkStart)) {
-          const nextPromise = getVideoChunk(
-            ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
-            nextChunkStart, videoChunkSizeAt(nextChunkStart, fragmented)
-          );
-          prefetched.set(nextChunkStart, nextPromise);
-          ctx.waitUntil(Promise.allSettled([nextPromise]));
-        }
-
-        const from = cursor - chunk.start;
-        const through = Math.min(responseEnd, chunk.end) - chunk.start + 1;
-        if (through <= from) throw new Error('Invalid cached video chunk boundary');
-        const output = chunk.bytes.subarray(from, through);
+        const through = Math.min(responseEnd + 1, chunk.end + 1, cursor + 256 * 1024);
+        const fromOffset = cursor - chunk.start;
+        const output = chunk.bytes.subarray(fromOffset, through - chunk.start);
+        if (!output.byteLength) throw new Error('Invalid cached video chunk boundary');
         cursor += output.byteLength;
         controller.enqueue(output);
+
+        // Start at most one successor fetch only after the viewer has consumed
+        // half of the current cached chunk. Never prefetch for HEAD requests.
+        const midpoint = chunk.start + Math.ceil(chunk.bytes.byteLength / 2);
+        if (!chunk.partial && cursor >= midpoint && prefetchedForChunkStart !== chunk.start) {
+          prefetchedForChunkStart = chunk.start;
+          startNextPrefetch(chunk);
+        }
         if (cursor > responseEnd) controller.close();
       } catch (error) {
         controller.error(error);
@@ -1969,6 +1946,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
     },
     cancel() {
       chunk = null;
+      prefetched.clear();
     }
   });
 
@@ -2018,8 +1996,13 @@ async function api(req, env, ctx) {
     const body = await readBody(req);
     const movieId = typeof body.movieId === 'string' ? body.movieId : '';
     if (!/^[0-9a-f-]{36}$/i.test(movieId)) return json({ error: 'A valid movie ID is required.' }, 400);
+    const existing = getCookieValue(req, playbackCookieName(movieId));
+    const existingClaims = existing ? await validPlaybackToken(env, existing) : null;
+    if (existingClaims && existingClaims.mid.toLowerCase() === movieId.toLowerCase()) {
+      return json({ ok: true, expiresIn: Math.max(0, existingClaims.exp - Math.floor(Date.now() / 1000)), reused: true });
+    }
     const token = await makePlaybackToken(env, movieId);
-    return json({ ok: true, expiresIn: PLAYBACK_SESSION }, 200, {
+    return json({ ok: true, expiresIn: PLAYBACK_SESSION, reused: false }, 200, {
       'set-cookie': playbackCookieName(movieId) + '=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/api/; Max-Age=' + PLAYBACK_SESSION
     });
   }
@@ -2530,19 +2513,75 @@ async function api(req, env, ctx) {
   return json({ error: 'API route not found' }, 404);
 }
 
+async function secureResponse(response, request) {
+  const headers = new Headers(response.headers);
+  headers.set('X-Frame-Options', 'DENY');
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Referrer-Policy', 'same-origin');
+  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  headers.set('Strict-Transport-Security', 'max-age=31536000');
+  const contentType = headers.get('content-type') || '';
+  const isHtml = /text\/html/i.test(contentType);
+  let nonce = '';
+  if (isHtml) {
+    const bytes = new Uint8Array(18);
+    crypto.getRandomValues(bytes);
+    let raw = '';
+    for (const byte of bytes) raw += String.fromCharCode(byte);
+    nonce = btoa(raw);
+  }
+  const scriptPolicy = isHtml ? "'self' 'nonce-" + nonce + "'" : "'self'";
+  headers.set('Content-Security-Policy',
+    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; " +
+    "script-src " + scriptPolicy + "; style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data: https:; media-src 'self' blob:; connect-src 'self'; " +
+    "font-src 'self' data:; worker-src 'self' blob:; manifest-src 'self'");
+  const secured = new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+  if (!isHtml || request.method === 'HEAD') return secured;
+  return new HTMLRewriter().on('script', {
+    element(element) {
+      if (element.getAttribute('src') === null) element.setAttribute('nonce', nonce);
+    }
+  }).transform(secured);
+}
+
 export default {
   async fetch(req, env, ctx) {
     try {
       const url = new URL(req.url);
-      if (url.pathname.startsWith('/api/')) return await api(req, env, ctx);
-      if (url.pathname === '/admin.html') return Response.redirect(new URL('/admin', url), 302);
-      if (url.pathname === '/admin') return env.ASSETS.fetch(new Request(new URL('/admin.html', url), req));
-      return env.ASSETS.fetch(req);
+      let response;
+      if (url.pathname.startsWith('/api/')) {
+        response = await api(req, env, ctx);
+      } else if (url.pathname === '/admin.html') {
+        response = Response.redirect(new URL('/admin', url), 302);
+      } else if ((url.pathname === '/admin' || url.pathname === '/admin/')) {
+        response = await env.ASSETS.fetch(new Request(new URL('/admin.html', url), req));
+      } else {
+        const watchMatch = /^\/watch\/([^/]+)\/?$/.exec(url.pathname);
+        if (watchMatch) {
+          let movieId = '';
+          try { movieId = decodeURIComponent(watchMatch[1]); } catch {}
+          if (!/^[0-9a-f-]{36}$/i.test(movieId)) {
+            response = json({ error: 'Not found' }, 404);
+          } else {
+            const assetUrl = new URL('/watch.html', url);
+            assetUrl.searchParams.set('id', movieId);
+            response = await env.ASSETS.fetch(new Request(assetUrl, req));
+          }
+        } else {
+          response = await env.ASSETS.fetch(req);
+        }
+      }
+      return await secureResponse(response, req);
     } catch (error) {
       console.error('Request failed:', error?.stack || error?.message || error);
       const message = error instanceof Error ? error.message : 'Internal server error';
       const client = /required|invalid|cross-origin|must |between |only |unknown category|too large|HTTPS|Google Drive|Archive\.org|video link/i.test(message);
-      return json({ error: client ? message : 'Internal server error' }, client ? 400 : 500);
+      return await secureResponse(json({ error: client ? message : 'Internal server error' }, client ? 400 : 500), req);
     }
   }
 };

@@ -5,6 +5,7 @@ import { archiveDownloadUrl, sourceProvider, videoSourceUrl } from '../src/video
 
 const worker = readFileSync('src/index.js', 'utf8');
 const sourceModule = readFileSync('src/video-sources.js', 'utf8');
+const rangeModule = readFileSync('src/video-range.js', 'utf8');
 const watch = readFileSync('public/watch.html', 'utf8');
 const admin = readFileSync('public/admin.html', 'utf8');
 const config = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
@@ -57,13 +58,17 @@ assertIncludes(worker, 'Anyone with the link (Viewer)', 'Private Drive guidance 
 
 // Edge streaming retains fMP4 startup detection, small initial chunks, range seeking,
 // and a prefetch of the immediate successor segment.
-assertIncludes(worker, 'const VIDEO_CHUNK_SIZE = 8 * 1024 * 1024', '8 MiB continuation chunks missing');
-assertIncludes(worker, 'const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024', '1 MiB conventional MP4 startup segment missing');
-assertIncludes(worker, 'const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024', '512 KiB fMP4 startup segment missing');
+assertIncludes(rangeModule, 'export const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024', '4 MiB continuation chunks missing');
+assertIncludes(worker, 'const VIDEO_UPSTREAM_FETCH_LIMIT = 6', 'Hard per-chunk upstream fetch budget missing');
+assert.ok(!worker.includes('requests > 128'), 'The legacy 128-range retry loop must stay removed');
+assertIncludes(worker, 'short-range-no-cache', 'Short upstream ranges must bypass shared chunk cache');
+assert.ok(!worker.includes('bytes.set(piece, offset)'), 'Legacy chunk buffer reassembly must stay removed');
+assertIncludes(rangeModule, 'export const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024', '1 MiB conventional MP4 startup segment missing');
+assertIncludes(rangeModule, 'export const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024', '512 KiB fMP4 startup segment missing');
 assertIncludes(worker, 'const starts = [0]', 'Cold-start prefetch must fetch only the first segment');
-assertIncludes(worker, 'const startupSize = fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE', 'Startup/continuation byte-range alignment missing');
+assertIncludes(rangeModule, 'const startupSize = fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE', 'Startup/continuation byte-range alignment missing');
 assertIncludes(worker, 'const VIDEO_CACHE_TTL = 24 * 60 * 60', '24-hour shared video cache TTL missing');
-assertIncludes(worker, "'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600'", 'Complete video chunks must remain cacheable for 24 hours');
+assertIncludes(worker, "headers.set('cache-control', 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600')", 'Complete video chunks must remain cacheable for 24 hours');
 assertIncludes(worker, 'props: cachedSourceProps(source, normalizedSourceVersion)', 'Video cache keys must use source identity and version, not viewer identity');
 assertIncludes(worker, 'function cachedSourceProps(source, normalizedSourceVersion)', 'Typed private Drive sources must participate in stable shared cache keys');
 assertIncludes(worker, 'https://archive.org/metadata/', 'Archive.org metadata discovery missing');
@@ -74,13 +79,17 @@ assertIncludes(worker, 'ARCHIVE_COOLDOWN', 'Archive.org failure cooldown missing
 assertIncludes(worker, 'ARCHIVE_FAST_MIRROR_BPS', 'Archive.org mirror health threshold missing');
 assertIncludes(worker, 'fetchVideoRangeFromMirrors', 'Archive.org per-range failover missing');
 assertIncludes(worker, 'const VIDEO_HEADER_PROBE_SIZE = 16 * 1024', 'Compact video header probe missing');
-assertIncludes(worker, 'mp4MoovEnd(bytes)', 'MP4 moov atom size detection missing');
-assertIncludes(worker, 'mp4HasMvex(bytes)', 'Fragmented MP4 detection missing');
-assertIncludes(worker, 'videoChunkStartForOffset(offset, fragmented)', 'Seek offset mapping missing');
-assertIncludes(worker, 'videoChunkSizeAt(chunkStart, fragmented)', 'Adaptive chunk sizing missing');
-assertIncludes(worker, 'const nextChunkStart = chunk.end + 1', 'Next-segment prefetch missing');
+assertIncludes(rangeModule, 'export function mp4MoovEnd(bytes)', 'MP4 moov atom size detection missing');
+assertIncludes(rangeModule, 'export function mp4HasMvex(bytes)', 'Fragmented MP4 detection missing');
+assertIncludes(worker, 'videoChunkStartForOffset', 'Seek offset mapping must be imported into the Worker');
+assertIncludes(rangeModule, 'export function videoChunkStartForOffset', 'Testable seek offset mapper missing from the pure module');
+assertIncludes(rangeModule, 'export function videoChunkSizeAt', 'Testable chunk sizing helper missing from the pure module');
+assertIncludes(worker, 'cursor >= midpoint', 'Next-segment prefetch must wait until half of the current chunk is consumed');
+assertIncludes(worker, 'const startNextPrefetch = (currentChunk) =>', 'Bounded successor prefetch helper missing');
+assertIncludes(worker, "if (req.method === 'HEAD')", 'HEAD requests must not warm video chunks');
+assertIncludes(worker, "const uncachedProbePiece", 'Small browser probes must bypass the shared video cache');
 assertIncludes(worker, 'ctx.waitUntil(Promise.allSettled([nextPromise]))', 'Next-segment prefetch must not block playback');
-assertIncludes(worker, "'cache-tag': 'video-chunks-' + movieId", 'Video chunks need a movie-level cache purge tag');
+assertIncludes(worker, "headers.set('cache-tag', 'video-chunks-' + movieId)", 'Video chunks need a movie-level cache purge tag');
 assertIncludes(worker, "ctx.exports.VideoChunk({", 'Cached chunk entrypoint not used');
 assertIncludes(worker, "ctx.exports.VideoHeader({", 'Cached header entrypoint not used');
 assertIncludes(worker, "'x-moviwatch-cache': cacheStatus", 'Cache diagnostics header missing');
@@ -111,6 +120,13 @@ assertIncludes(worker, 'content-disposition', 'Google Drive Worker download atta
 assert.ok(!worker.includes("Response.redirect(archiveDownloadUrl("), 'Protected downloads must not redirect users to provider URLs');
 assertIncludes(worker, "const PLAYBACK_COOKIE = 'moviwatch_playback'", 'HttpOnly playback session cookie missing');
 assertIncludes(worker, "playbackCookieName(movieId) + '=' + token", 'Playback sessions must use a separate cookie per movie so open tabs do not overwrite each other');
+assertIncludes(worker, "const existing = getCookieValue(req, playbackCookieName(movieId))", 'Playback session endpoint must reuse valid existing cookies');
+assertIncludes(worker, 'const PLAYBACK_VERIFY_CACHE_TTL = 15000', 'Playback JWT verification cache must be short-lived');
+assertIncludes(worker, "signingSecret(env, 'admin')", 'Admin JWT signing must use its purpose-derived key');
+assertIncludes(worker, "signingSecret(env, 'playback')", 'Playback JWT signing must use its purpose-derived key');
+assertIncludes(worker, "signingSecret(env, 'google-drive-oauth')", 'Drive OAuth state must use its purpose-derived key');
+assertIncludes(worker, 'const videoHeaderMemory = new Map()', 'Isolate-level video header metadata cache missing');
+assertIncludes(worker, 'const movieMetadataMemory = new Map()', 'Isolate-level movie metadata cache missing');
 assertIncludes(worker, 'async function makePlaybackToken(env, movieId)', 'Playback ticket must be cryptographically signed and movie-bound');
 assertIncludes(worker, 'async function validPlaybackToken(env, token)', 'Playback ticket verifier missing');
 assertIncludes(worker, 'claims.mid.toLowerCase() === movieId.toLowerCase()', 'Playback ticket must be bound to the requested movie');
@@ -131,7 +147,7 @@ assertIncludes(sourceModule, "return host==='archive.org'||host.endsWith('.archi
 assert.ok(!/doodstream|playmogo|voe\.sx/i.test(worker), 'Legacy hosts must not remain in the Worker');
 
 // Native HTML5 player: no custom player library, WASM, or browser range adapter.
-assertIncludes(watch, '<video id="video" controls playsinline preload="none"', 'Native HTML5 video element with controls and lazy preload missing');
+assertIncludes(watch, '<video id="video" controls playsinline preload="metadata" controlslist="nodownload">', 'Native HTML5 video element with metadata preload and native controls missing');
 assertIncludes(watch, "video.src='/api/watch/'", 'Native video must use the protected same-origin Worker range endpoint');
 assertIncludes(watch, "video.src='/api/watch/'+encodeURIComponent(movieId)+'/'+encodeURIComponent(source.source_index)", 'Native video source must be bound to the selected movie/source');
 assertIncludes(watch, "body:JSON.stringify({movieId})", 'Watch page must request a movie-bound playback session');
@@ -149,7 +165,13 @@ assertIncludes(watch, 'getNativeAudioTracks()', 'Native audio track feature dete
 assertIncludes(watch, 'list[index].enabled=index===selected', 'Audio selector must switch native AudioTrack.enabled state');
 assertIncludes(watch, "if(!list||list.length<2)", 'Audio selector must be hidden unless native video exposes multiple tracks');
 assertIncludes(watch, "video.addEventListener('loadedmetadata',bindNativeAudioTrackEvents)", 'Native audio tracks must be discovered after metadata loads');
-assertIncludes(watch, 'preload="none"', 'Native video must not preload media before the viewer plays');
+assertIncludes(watch, 'preload="metadata"', 'Native video should load metadata before playback');
+assertIncludes(watch, "video.preload='metadata'", 'Selected source must retain metadata preload');
+assertIncludes(watch, 'const sessionRequest=startSession()', 'Playback session lookup must run in parallel with content lookup');
+assertIncludes(watch, 'id="retryBtn"', 'Retry playback control missing');
+assertIncludes(watch, 'pendingResume', 'Playback recovery/resume state missing');
+assertIncludes(watch, 'moviwatch:pos:', 'Playback position persistence missing');
+assertIncludes(watch, 'automaticFallbackUsed', 'Alternate source fallback must be bounded');
 assertIncludes(watch, 'controlslist="nodownload"', 'Use native browser controls without a duplicate browser download action');
 assertIncludes(watch, 'aspect-ratio:16/9', 'Responsive 16:9 player shell missing');
 assertIncludes(watch, '/manifest.webmanifest', 'Watch page PWA manifest missing');
@@ -182,7 +204,7 @@ for (const file of ['public/index.html', 'public/watch.html', 'public/admin.html
 
 assertIncludes(readme, 'Drive and Archive.org byte-range streaming', 'README must describe the restored providers');
 assertIncludes(readme, 'cannot guarantee zero buffering', 'README must document realistic buffering limits');
-assertIncludes(readme, '8 MiB continuation chunks', 'README must document 8 MiB chunks');
+assertIncludes(readme, '4 MiB continuation chunks', 'README must document safer 4 MiB continuation chunks');
 assertIncludes(readme, 'Native HTML5', 'README must document native HTML5 playback');
 assertIncludes(readme, '24 hours', 'README must document the shared edge cache TTL');
 assertIncludes(readme, 'browser decides its own buffering', 'README must document native browser-controlled buffering');
@@ -195,7 +217,7 @@ console.log('Drive/Archive URL, provider, cache, native HTML5 playback, protecte
 // Google Drive Manager: OAuth, private references and management routes stay server-side.
 assertIncludes(worker, "provider:'google-drive-private'", 'Private Drive sources must use an internal provider marker');
 assertIncludes(worker, 'googleDriveApiRequest(sqlFor(env), env, mediaUrl', 'Private Drive video ranges must be authorized by the Worker');
-assertIncludes(worker, 'fetchConfiguredVideoRange(source, cursor, requestedEnd, env)', 'Private Drive bytes must enter the existing shared chunk cache');
+assertIncludes(worker, 'fetchConfiguredVideoRange(source, chunkStart, requestedEnd, env, 0, budget)', 'Private Drive bytes must enter the bounded shared chunk fill');
 assertIncludes(worker, "pathname === '/api/google-drive/oauth/callback'", 'OAuth callback route missing');
 assertIncludes(worker, "path.startsWith('/api/admin/google-drive/')", 'Google Drive management must stay under the admin API gate');
 assertIncludes(worker, 'refresh_token_ciphertext', 'Google refresh tokens must be encrypted at rest');

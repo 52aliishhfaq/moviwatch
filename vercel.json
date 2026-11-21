@@ -7,15 +7,31 @@
     },
     {
       "source": "/watch/:id",
-      "destination": "/watch.html?id=:id"
+      "destination": "https://moviwatch.52aliishhfaq.workers.dev/watch/:id"
+    },
+    {
+      "source": "/watch.html",
+      "destination": "https://moviwatch.52aliishhfaq.workers.dev/watch.html"
     },
     {
       "source": "/admin",
-      "destination": "/admin.html"
+      "destination": "https://moviwatch.52aliishhfaq.workers.dev/admin"
     },
     {
       "source": "/admin/",
-      "destination": "/admin.html"
+      "destination": "https://moviwatch.52aliishhfaq.workers.dev/admin"
+    },
+    {
+      "source": "/admin.html",
+      "destination": "https://moviwatch.52aliishhfaq.workers.dev/admin.html"
+    },
+    {
+      "source": "/index.html",
+      "destination": "https://moviwatch.52aliishhfaq.workers.dev/index.html"
+    },
+    {
+      "source": "/",
+      "destination": "https://moviwatch.52aliishhfaq.workers.dev/"
     }
   ],
   "headers": [
