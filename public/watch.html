@@ -419,6 +419,7 @@ async function prepare(){
     )));
     select.hidden=availableSources.length<2;
     selectLabel.hidden=availableSources.length<2;
+    $('#sourceBar').hidden=availableSources.length<2;
     select.disabled=availableSources.length<2;
     activeOptionIndex=0;
     setStatus('Ready to watch');
