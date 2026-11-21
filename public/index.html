@@ -354,7 +354,8 @@ function saveCatalogueCache(rows){
   const safeRows=rows.map(movie=>({
     id:movie.id,title:movie.title,category:movie.category||'Movie',
     poster_url:typeof movie.poster_url==='string'&&movie.poster_url.startsWith('https://')?movie.poster_url:'',
-    created_at:movie.created_at||''
+    created_at:movie.created_at||'',
+    content_type:movie.content_type==='series'?'series':'movie',episode_count:Number(movie.episode_count)||0
   }));
   try{localStorage.setItem(CATALOGUE_CACHE_KEY,JSON.stringify({savedAt:Date.now(),movies:safeRows}))}catch{}
 }
