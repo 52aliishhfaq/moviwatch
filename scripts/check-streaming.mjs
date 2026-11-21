@@ -214,5 +214,5 @@ assertIncludes(worker, 'session_ciphertext', 'Resumable upload session URLs must
 assertIncludes(worker, 'new FixedLengthStream', 'Download size regression guard must remain in place');
 assertIncludes(admin, 'id="googleDrivePanel"', 'Admin Google Drive Manager UI missing');
 assertIncludes(worker, 'drive-private://', 'Admin API must preserve private Drive references without exposing them publicly');
-assertIncludes(admin, "'Content-Range': 'bytes '+offset+'-'+end+'/'+file.size", 'Admin uploads must send explicit byte ranges');
+assertIncludes(admin, "'Content-Range':'bytes '+offset+'-'+end+'/'+file.size", 'Admin uploads must send explicit byte ranges');
 assert.ok(!/GOOGLE_CLIENT_SECRET|GOOGLE_DRIVE_ENCRYPTION_KEY|refresh_token=/.test(admin), 'Google OAuth secrets must never be embedded in the browser UI');
