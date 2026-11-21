@@ -102,6 +102,8 @@ assertIncludes(worker, "ctx.waitUntil(branches[1].pipeTo(new WritableStream({ wr
 assertIncludes(worker, 'fetchConfiguredVideoRange(source, chunkStart, requestedEnd, env, 0, true)', 'Cold chunk fills must stream directly from the upstream provider');
 assertIncludes(worker, "'x-moviwatch-stream-mode': streamMode", 'Progressive stream diagnostics missing');
 assertIncludes(worker, "'x-moviwatch-cache': firstChunk.cacheStatus", 'Cache status must survive the progressive relay');
+assertIncludes(worker, "const contentLength = contentLengthHeader === null\n    ? expectedLength", 'Streamed internal cache responses must tolerate an omitted Content-Length header');
+assertIncludes(worker, 'contentLength !== expectedLength', 'A supplied cached Content-Length must still match the declared byte range');
 const chunkFillStart = worker.indexOf('async function fetchAndCacheVideoChunk');
 const chunkFillEnd = worker.indexOf('export class VideoHeader', chunkFillStart);
 assert.ok(chunkFillStart >= 0 && chunkFillEnd > chunkFillStart &&
