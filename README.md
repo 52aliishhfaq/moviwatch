@@ -215,3 +215,14 @@ The production Vercel domain must be present in the Cloudflare Worker \`APP_ORIG
 - The proxy does not bypass upstream access controls, quotas, copyright restrictions, or host throttling.
 - Admin password verifier, pepper, JWT secret, Neon URL, and Redis token must be configured as Worker secrets, never committed.
 - A keyed HMAC verifier is used instead of a high-iteration password KDF to fit Workers Free CPU limits; use a long random password and keep the pepper secret.
+
+
+## Cloudflare Workers Free-plan request budgeting
+
+The Worker Free plan currently has 100,000 Worker requests per day, a 10 ms CPU-time limit per invocation, 128 MB memory per isolate, 50 external subrequests per invocation, and 1,000 subrequests to Cloudflare internal services per invocation. Redirect hops count toward subrequests.
+
+Important: the cached `VideoChunk` and `VideoHeader` WorkerEntrypoint calls are still Worker-to-Worker invocations. Workers Cache can serve a cache hit without running the entrypoint code, but the request is still charged against the daily Worker request quota. This means the current per-chunk entrypoint architecture does **not** guarantee 30 Worker requests for a full-length viewing session. The daily request budget depends heavily on video file size and the number of 4 MiB cached chunks requested. For example, a 2 GiB file contains 512 4 MiB chunks; a full watch can therefore consume at least roughly 512 chunk-entrypoint requests, before counting browser range requests, the header entrypoint, page/API requests, and metadata. Treat the 30-request target as an optimization goal that needs a different cache-dispatch architecture, not as a current measured result.
+
+The 4 MiB chunk size is selected to reduce peak buffering: holding a current chunk plus one successor is about 8 MiB of raw chunk data per active stream, versus about 16 MiB with 8 MiB chunks. Six concurrent streams would hold approximately 48 MiB versus 96 MiB respectively, before runtime, response, and cache overhead. Actual CPU and memory usage must be measured in Workers Metrics.
+
+Short valid upstream byte ranges are sent to the browser uncached rather than repeatedly fetched and copied to complete a canonical chunk. Complete canonical chunks retain the shared 24-hour cache and movie-level purge tag. This trades cache coverage for a strict, predictable upstream-request bound.
