@@ -6,6 +6,7 @@ import { getVideoRangeWindow } from '../src/video-range-window.js';
 import { createRangeRelayStream } from '../src/video-stream.js';
 
 const worker = readFileSync('src/index.js', 'utf8');
+const videoStream = readFileSync('src/video-stream.js', 'utf8');
 const sourceModule = readFileSync('src/video-sources.js', 'utf8');
 const watch = readFileSync('public/watch.html', 'utf8');
 const admin = readFileSync('public/admin.html', 'utf8');
@@ -240,11 +241,13 @@ console.log('Drive/Archive URL, provider, cache, native HTML5 playback, protecte
 // Google Drive Manager: OAuth, private references and management routes stay server-side.
 assertIncludes(worker, "provider:'google-drive-private'", 'Private Drive sources must use an internal provider marker');
 assertIncludes(worker, 'googleDriveApiRequest(sqlFor(env), env, mediaUrl', 'Private Drive video ranges must be authorized by the Worker');
-assertIncludes(worker, 'fetchConfiguredVideoRange(source, nextStart, nextEnd, env, 0, true)', 'Private Drive continuation ranges must enter the progressive shared chunk cache');
+assertIncludes(worker, 'fetchConfiguredVideoRange(source, nextStart, nextEnd, env, 0, true, signal)', 'Private Drive continuation ranges must enter the progressive shared chunk cache');
 assertIncludes(worker, 'recordArchiveFailure(details.identifier, candidate.host)', 'Archive.org stream failures must cool down the failed mirror');
 assertIncludes(worker, 'AbortSignal.any([timeoutSignal, externalSignal])', 'Viewer cancellation must abort pending provider range requests');
 assertIncludes(worker, 'fetchConfiguredVideoRange(source, responseStart, responseEnd, env, 0, true, req.signal)', 'Direct cold seeks must be tied to the browser request cancellation signal');
-assertIncludes(worker, "maxRetries = 2", 'Stream relay retries must be bounded');
+assertIncludes(videoStream, "maxRetries = 2", 'Stream relay retries must be bounded');
+assertIncludes(videoStream, "abortController.abort(reason)", 'Cancelled playback must abort a pending continuation fetch');
+assertIncludes(videoStream, "currentRange.start + currentBytes", 'A failed upstream stream must resume at the first missing byte');
 assertIncludes(worker, "pathname === '/api/google-drive/oauth/callback'", 'OAuth callback route missing');
 assertIncludes(worker, "path.startsWith('/api/admin/google-drive/')", 'Google Drive management must stay under the admin API gate');
 assertIncludes(worker, 'refresh_token_ciphertext', 'Google refresh tokens must be encrypted at rest');
