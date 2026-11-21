@@ -90,7 +90,8 @@ assert.deepEqual(wrangler.secrets.required, [
 assert.ok(worker.includes("path === '/api/admin/google-drive/uploads'"));
 assert.ok(worker.includes("path === '/api/admin/google-drive/attach'"));
 assert.ok(worker.includes("provider:'google-drive-private'"));
-assert.ok(worker.includes('fetchConfiguredVideoRange(source, cursor, requestedEnd, env)'));
+assert.ok(worker.includes('fetchConfiguredVideoRange(source, nextStart, nextEnd, env, 0, true, signal)'), 'Private Drive byte ranges must use the progressive relay');
+assert.ok(worker.includes('createRangeRelayStream({'), 'Private Drive streaming must use the validated progressive range relay');
 assert.ok(admin.includes('id="googleDrivePanel"'));
 assert.ok(admin.includes('stageDriveFileForMovie(file)'));
 assert.ok(admin.includes("publish.textContent=pendingPublishFile?.id===file.id?'Selected':'Publish'"));
