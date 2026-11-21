@@ -28,9 +28,14 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.15;margin:0;letter-spacing:-.7px
 .player-shell{overflow:hidden;padding:10px;background:#05080e;border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 60px #0005}
 .video-stage{position:relative;aspect-ratio:16/9;background:#000;border-radius:9px;overflow:hidden}
 video{display:block;width:100%;height:100%;background:#000;object-fit:contain}
+.spinner{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;background:#0006}
+.spinner::after{content:'';width:46px;height:46px;border:4px solid #ffffff40;border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 .status{margin:9px 4px 0;color:var(--muted);font-size:12px}
 .status.error{color:#ff9d9d}
 .status:empty{display:none}
+.retry{margin:8px 4px 2px;padding:8px 16px;border:1px solid #8294ff;border-radius:8px;background:#6578f5;color:#fff;font:inherit;font-size:13px;font-weight:700;cursor:pointer}
+.retry:hover{background:#5368e8}
 .source-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}
 .source-bar label,.audio-control{font-weight:700;font-size:12px;color:var(--muted)}
 select{min-width:150px;max-width:100%;height:38px;padding:0 30px 0 10px;background:#0d1627;color:#f4f6fc;border:1px solid #40506d;border-radius:8px;font:inherit;font-size:13px}
@@ -62,9 +67,11 @@ select{min-width:150px;max-width:100%;height:38px;padding:0 30px 0 10px;backgrou
 </div>
 <section id="playerShell" class="player-shell" aria-label="Native HTML5 video player">
   <div class="video-stage">
-    <video id="video" controls playsinline preload="none" controlslist="nodownload" disablepictureinpicture></video>
+    <video id="video" controls playsinline preload="metadata" controlslist="nodownload"></video>
+    <div id="spinner" class="spinner" hidden aria-hidden="true"></div>
   </div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
+  <button id="retryBtn" class="retry" type="button" hidden>Retry playback</button>
 </section>
 <div id="sourceBar" class="source-bar" hidden>
   <label id="sourceSelectLabel" for="sourceSelect" hidden>Video source</label>
@@ -92,20 +99,32 @@ const $=selector=>document.querySelector(selector);
 const movieId=decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||new URLSearchParams(location.search).get('id')||'');
 const video=$('#video');
 let availableSources=[],activeOptionIndex=-1,audioTrackList=null;
-
+let pendingResume=null,recoveries=0,lastSaved=0,automaticFallbackUsed=false;
+const POSITION_KEY='moviwatch:pos:'+movieId;
+function savedPosition(){try{const v=Number(localStorage.getItem(POSITION_KEY));return Number.isFinite(v)&&v>0?v:0}catch{return 0}}
+function savePosition(time){try{if(time>10)localStorage.setItem(POSITION_KEY,String(Math.floor(time)));else localStorage.removeItem(POSITION_KEY)}catch{}}
+function clearPosition(){try{localStorage.removeItem(POSITION_KEY)}catch{}}
+function showSpinner(on){$('#spinner').hidden=!on}
+function fmtTime(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;return (h?h+':'+String(m).padStart(2,'0'):m)+':'+String(s).padStart(2,'0')}
+function startSession(){
+  return fetch('/api/playback/session',{method:'POST',credentials:'same-origin',cache:'no-store',
+    headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({movieId})});
+}
 function setStatus(message,error=false){
   $('#status').textContent=message;
   $('#status').classList.toggle('error',error);
+  $('#retryBtn').hidden=!error;
 }
 function watchPath(id){return '/watch/'+encodeURIComponent(id)}
-function setActiveSource(index){
+function setActiveSource(index,resume){
+  pendingResume=resume||(activeOptionIndex>=0?{time:video.currentTime||0,play:!video.paused}:null);
   const source=availableSources[index];
   if(!source)return;
   activeOptionIndex=index;
   const select=$('#sourceSelect');
   if(!select.hidden)select.value=String(index);
   video.pause();
-  video.preload='none';
+  video.preload='metadata';
   // Media bytes are requested only by the browser's native media engine.
   // The same-origin Worker enforces the signed playback cookie and byte ranges.
   video.src='/api/watch/'+encodeURIComponent(movieId)+'/'+encodeURIComponent(source.source_index);
@@ -208,6 +227,7 @@ function renderEpisodeContext(content){
 }
 async function prepare(){
   try{
+    const sessionRequest=startSession(); sessionRequest.catch(()=>{});
     const response=await fetch('/api/content/'+encodeURIComponent(movieId),{cache:'no-store',headers:{Accept:'application/json'},credentials:'same-origin'});
     const data=await response.json();
     if(!response.ok||!data.content)throw new Error(data.error||'Could not load this content.');
@@ -221,11 +241,7 @@ async function prepare(){
     renderEpisodeContext(content);
     availableSources=Array.isArray(content.video_sources)?content.video_sources:[];
     if(!availableSources.length)throw new Error('No Google Drive or Archive.org source is configured for this video.');
-    const session=await fetch('/api/playback/session',{
-      method:'POST',credentials:'same-origin',cache:'no-store',
-      headers:{'Content-Type':'application/json','Accept':'application/json'},
-      body:JSON.stringify({movieId})
-    });
+    const session=await sessionRequest;
     if(!session.ok){
       let message='Could not establish a secure playback session.';
       try{const payload=await session.json();if(payload.error)message=payload.error}catch{}
@@ -243,7 +259,9 @@ async function prepare(){
     if(availableSources.length>1){
       select.hidden=false;selectLabel.hidden=false;
     }
-    setActiveSource(0);
+    recoveries=0;automaticFallbackUsed=false;
+    const resumeAt=savedPosition();
+    setActiveSource(0,resumeAt>10?{time:resumeAt,play:false,fromSaved:true}:null);
   }catch(error){
     setStatus(error.message||'This content is temporarily unavailable. Please try again.',true);
     $('#downloadNow').hidden=true;
@@ -251,17 +269,67 @@ async function prepare(){
 }
 video.addEventListener('loadedmetadata',bindNativeAudioTrackEvents);
 video.addEventListener('loadeddata',refreshNativeAudioTracks);
-video.addEventListener('error',()=>{
+video.addEventListener('loadedmetadata',()=>{
+  if(!pendingResume)return;
+  const {time,play,fromSaved}=pendingResume;pendingResume=null;
+  try{if(time>1&&(!Number.isFinite(video.duration)||time<video.duration-5))video.currentTime=time}catch{}
+  if(fromSaved)setStatus('Resumed from '+fmtTime(time)+' - press play to continue.');
+  if(play)video.play().catch(()=>{});
+});
+video.addEventListener('error',async()=>{
+  showSpinner(false);
   const code=video.error?.code;
-  const message=code===2?'The video connection was interrupted. Please retry.':
+  const resumeTime=video.currentTime||pendingResume?.time||0;
+  if((code===2||code===4)&&recoveries<2&&activeOptionIndex>=0){
+    recoveries++;setStatus('Connection interrupted - reconnecting...');
+    try{const session=await startSession();if(!session.ok)throw new Error('Session refresh failed')}catch{
+      setStatus('Could not renew playback. Press Retry.',true);return;
+    }
+    setActiveSource(activeOptionIndex,{time:resumeTime,play:true});
+    return;
+  }
+  if((code===2||code===4)&&availableSources.length>1&&!automaticFallbackUsed&&activeOptionIndex>=0){
+    automaticFallbackUsed=true;
+    recoveries=0;
+    const next=(activeOptionIndex+1)%availableSources.length;
+    setStatus('Current source failed - trying the next source...');
+    try{const session=await startSession();if(!session.ok)throw new Error('Session refresh failed')}
+    catch{setStatus('Could not renew playback. Press Retry.',true);return;}
+    setActiveSource(next,{time:resumeTime,play:true});
+    return;
+  }
+  const message=code===2?'The video connection was interrupted. Check your internet and press Retry.':
     code===3?'This browser could not decode the video format.':
-    code===4?'This video format is not supported by this browser.':'We could not play this video. Please try again.';
+    code===4?'This video could not be loaded (unsupported format or source unavailable). Try another source or press Retry.':
+    'We could not play this video. Please try again.';
   setStatus(message,true);
 });
-video.addEventListener('waiting',()=>setStatus('Buffering…'));
-video.addEventListener('playing',()=>setStatus(''));
-video.addEventListener('canplay',()=>setStatus(''));
-$('#sourceSelect').addEventListener('change',event=>setActiveSource(Number(event.target.value)));
+video.addEventListener('waiting',()=>{showSpinner(true);setStatus('Buffering...')});
+video.addEventListener('playing',()=>{showSpinner(false);setStatus('');recoveries=0});
+video.addEventListener('canplay',()=>{showSpinner(false);if(!$('#status').classList.contains('error'))setStatus('')});
+video.addEventListener('timeupdate',()=>{const now=Date.now();if(now-lastSaved>5000&&!video.paused){lastSaved=now;savePosition(video.currentTime)}});
+video.addEventListener('pause',()=>{if(!video.ended)savePosition(video.currentTime)});
+video.addEventListener('ended',()=>{clearPosition();showSpinner(false)});
+$('#retryBtn').addEventListener('click',async()=>{
+  recoveries=0;setStatus('Reconnecting...');
+  try{const session=await startSession();if(!session.ok)throw new Error('Session refresh failed')}
+  catch{setStatus('Could not renew playback. Check your connection and retry.',true);return;}
+  if(activeOptionIndex>=0)setActiveSource(activeOptionIndex,{time:video.currentTime||pendingResume?.time||0,play:true});
+});
+document.addEventListener('keydown',event=>{
+  if(event.ctrlKey||event.metaKey||event.altKey)return;
+  const tag=(event.target&&event.target.tagName)||'';
+  if(tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA'||tag==='BUTTON'||!video.currentSrc)return;
+  const key=event.key.toLowerCase();
+  if(key==='arrowright')video.currentTime=Math.min(video.duration||Infinity,video.currentTime+10);
+  else if(key==='arrowleft')video.currentTime=Math.max(0,video.currentTime-10);
+  else if(key==='f'){document.fullscreenElement?document.exitFullscreen():video.requestFullscreen?.()}
+  else if(key==='m')video.muted=!video.muted;
+  else if(key===' '||key==='k'){video.paused?video.play().catch(()=>{}):video.pause()}
+  else return;
+  event.preventDefault();
+});
+$('#sourceSelect').addEventListener('change',event=>{recoveries=0;automaticFallbackUsed=false;setActiveSource(Number(event.target.value));});
 $('#audioSelect').addEventListener('change',event=>selectNativeAudioTrack(event.target.value));
 prepare();
 </script>
