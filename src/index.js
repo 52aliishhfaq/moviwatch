@@ -594,13 +594,13 @@ async function googleDriveJson(sql, env, path, options = {}, connectionId = 'pri
 
 function driveSafeName(value) {
   if (typeof value !== 'string') throw new Error('File or folder name is required.');
-  const name = value.normalize('NFC').replace(/[\/:*\x00-\x1f\x7f]/g, '').trim();
+  const name = value.normalize('NFC').replace(/[\\/:*\x00-\x1f\x7f]/g, '').trim();
   if (!name || name === '.' || name === '..' || name.length > 240) throw new Error('Use a valid name (1–240 characters).');
   return name;
 }
 
 function driveQueryEscape(value) {
-  return String(value).replace(/\/g, '\\\\').replace(/'/g, "\\'");
+  return String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
 function isDriveVideoFile(file) {
@@ -2106,7 +2106,7 @@ async function api(req, env, ctx) {
 
     const cleanPart = (value) => String(value || '')
       .normalize('NFKC')
-      .replace(/[\/:*?"<>|\x00-\x1F]/g, '')
+      .replace(/[\\/:*?"<>|\x00-\x1F]/g, '')
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 90);
@@ -2135,7 +2135,7 @@ async function api(req, env, ctx) {
         const filename = baseName + (optionName ? ' - ' + optionName : '') + '.' + extension;
         const fallback = filename.normalize('NFKD')
           .replace(/[^\x20-\x7E]/g, '')
-          .replace(/[\/:*?"<>|\x00-\x1F]/g, '')
+          .replace(/[\\/:*?"<>|\x00-\x1F]/g, '')
           .replace(/[\r\n]/g, '')
           .trim() || 'Moviwatch-download.' + extension;
         const encoded = encodeURIComponent(filename).replace(/[!'()*]/g,
@@ -2172,7 +2172,7 @@ async function api(req, env, ctx) {
       const filename = baseName + (optionName ? ' - ' + optionName : '') + '.' + extension;
       const fallback = filename.normalize('NFKD')
         .replace(/[^\x20-\x7E]/g, '')
-        .replace(/[\/:*?"<>|\x00-\x1F]/g, '')
+        .replace(/[\\/:*?"<>|\x00-\x1F]/g, '')
         .replace(/[\r\n]/g, '')
         .trim() || 'Moviwatch-download.' + extension;
       const encoded = encodeURIComponent(filename).replace(/[!'()*]/g,
