@@ -1827,13 +1827,16 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   if (tinyProbe) {
     const probeChunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion,
       sourceHash, 0, end - start + 1);
-    if (probeChunk.unsatisfiedTotal !== undefined || probeChunk.total !== total || probeChunk.start !== start || probeChunk.end < end) {
+    if (probeChunk.unsatisfiedTotal !== undefined || probeChunk.total !== total ||
+        probeChunk.start !== start || probeChunk.end < start) {
       throw new Error('Video source could not satisfy the small initial probe');
     }
-    return new Response(probeChunk.bytes.subarray(0, end - start + 1), { status: 206, headers: {
+    const probeEnd = Math.min(end, probeChunk.end);
+    const probeBytes = probeChunk.bytes.subarray(0, probeEnd - start + 1);
+    return new Response(probeBytes, { status: 206, headers: {
       'content-type': contentType,
-      'content-range': 'bytes ' + start + '-' + end + '/' + total,
-      'content-length': String(end - start + 1),
+      'content-range': 'bytes ' + start + '-' + probeEnd + '/' + total,
+      'content-length': String(probeBytes.byteLength),
       'accept-ranges': 'bytes',
       'cache-control': 'private, no-store, max-age=0',
       'x-moviwatch-container': container,
