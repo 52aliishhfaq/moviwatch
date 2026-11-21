@@ -320,7 +320,7 @@ async function publicMovies(env,category,query){
  // Series support is additive. A missing table, failed index migration, or a
  // restricted DB role must never hide the pre-existing movie catalogue.
  try {
-  await ensureSeriesSchema(sql);
+  // Public catalogue reads are read-only. Admin initializes optional series tables.
   return await sql`WITH movie_rows AS (
     SELECT id,title,poster_url,category,created_at,'movie'::text AS content_type,
      NULL::integer AS episode_count,
@@ -387,20 +387,32 @@ export class MovieMetadata extends WorkerEntrypoint {
       return json({ movie: null }, 200, { 'cache-control': 'public, max-age=5' });
     }
     const sql = sqlFor(this.env);
-    await ensureSeriesSchema(sql);
-    const rows = await sql`SELECT id,title,poster_url,category,videos AS video_sources,updated_at,'movie'::text AS content_type,
-        NULL::uuid AS series_id,NULL::integer AS season_number,NULL::integer AS episode_number,NULL::text AS series_title
-      FROM public.movies WHERE id=${contentId} AND is_published=TRUE
-      UNION ALL
-      SELECT e.id,e.title,s.poster_url,s.category,e.videos AS video_sources,e.updated_at,'episode'::text AS content_type,
-        e.series_id,e.season_number,e.episode_number,s.title AS series_title
-      FROM public.episodes e JOIN public.series s ON s.id=e.series_id
-      WHERE e.id=${contentId} AND e.is_published=TRUE AND s.is_published=TRUE
-      LIMIT 1`;
-    return json({ movie: rows[0] || null }, 200, {
-      'cache-control': 'public, max-age=' + MOVIE_METADATA_CACHE_TTL + ', stale-while-revalidate=90',
-      'cache-tag': 'movie-meta-' + contentId
-    });
+    try {
+      // Series tables are optional for legacy movies. Never run DDL or let
+      // missing episode tables block metadata reads for existing movies.
+      const rows = await sql`SELECT id,title,poster_url,category,videos AS video_sources,updated_at,'movie'::text AS content_type,
+          NULL::uuid AS series_id,NULL::integer AS season_number,NULL::integer AS episode_number,NULL::text AS series_title
+        FROM public.movies WHERE id=${contentId} AND is_published=TRUE
+        UNION ALL
+        SELECT e.id,e.title,s.poster_url,s.category,e.videos AS video_sources,e.updated_at,'episode'::text AS content_type,
+          e.series_id,e.season_number,e.episode_number,s.title AS series_title
+        FROM public.episodes e JOIN public.series s ON s.id=e.series_id
+        WHERE e.id=${contentId} AND e.is_published=TRUE AND s.is_published=TRUE
+        LIMIT 1`;
+      return json({ movie: rows[0] || null }, 200, {
+        'cache-control': 'public, max-age=' + MOVIE_METADATA_CACHE_TTL + ', stale-while-revalidate=90',
+        'cache-tag': 'movie-meta-' + contentId
+      });
+    } catch (error) {
+      console.error('Series metadata unavailable; returning legacy movie metadata:', error?.message || error);
+      const rows = await sql`SELECT id,title,poster_url,category,videos AS video_sources,updated_at,'movie'::text AS content_type,
+          NULL::uuid AS series_id,NULL::integer AS season_number,NULL::integer AS episode_number,NULL::text AS series_title
+        FROM public.movies WHERE id=${contentId} AND is_published=TRUE LIMIT 1`;
+      return json({ movie: rows[0] || null }, 200, {
+        'cache-control': 'public, max-age=' + MOVIE_METADATA_CACHE_TTL + ', stale-while-revalidate=90',
+        'cache-tag': 'movie-meta-' + contentId
+      });
+    }
   }
 
   async invalidate(movieId) {
@@ -408,6 +420,7 @@ export class MovieMetadata extends WorkerEntrypoint {
     return this.ctx.cache.purge({ tags: ['movie-meta-' + movieId] });
   }
 }
+
 async function movieById(ctx, env, movieId) {
   if (!/^[0-9a-f-]{36}$/i.test(movieId)) return { movie: null, cacheStatus: 'BYPASS' };
   const metadataEntry = ctx.exports.MovieMetadata({ props: { movieId } });
@@ -1144,7 +1157,6 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
       file_id: file.id,
       account_id: connectionId,
       drive_id: file.driveId || null,
-      account_id: connectionId,
       modified_time: file.modifiedTime || null
     };
     if (sources.some((item) => item?.provider === source.provider && item?.file_id === source.file_id)) {
@@ -2055,16 +2067,20 @@ async function api(req, env, ctx) {
   if (contentMatch && method === 'GET') {
     const contentId = contentMatch[1];
     const sql = sqlFor(env);
-    await ensureSeriesSchema(sql);
-    const seriesRows = await sql`SELECT id,title,description,poster_url,category,created_at
-      FROM public.series WHERE id=${contentId} AND is_published=TRUE LIMIT 1`;
-    if (seriesRows[0]) {
-      const seasons = await sql`SELECT season_number,
-        jsonb_agg(jsonb_build_object('id',e.id,'episode_number',e.episode_number,'title',e.title,'description',e.description)
-          ORDER BY e.episode_number) AS episodes
-        FROM public.episodes e WHERE e.series_id=${contentId} AND e.is_published=TRUE
-        GROUP BY season_number ORDER BY season_number`;
-      return json({ content: { ...seriesRows[0], content_type: 'series', seasons } });
+    try {
+      // Public reads are read-only; series DDL belongs to authenticated Admin.
+      const seriesRows = await sql`SELECT id,title,description,poster_url,category,created_at
+        FROM public.series WHERE id=${contentId} AND is_published=TRUE LIMIT 1`;
+      if (seriesRows[0]) {
+        const seasons = await sql`SELECT season_number,
+          jsonb_agg(jsonb_build_object('id',e.id,'episode_number',e.episode_number,'title',e.title,'description',e.description)
+            ORDER BY e.episode_number) AS episodes
+          FROM public.episodes e WHERE e.series_id=${contentId} AND e.is_published=TRUE
+          GROUP BY season_number ORDER BY season_number`;
+        return json({ content: { ...seriesRows[0], content_type: 'series', seasons } });
+      }
+    } catch (error) {
+      console.error('Series detail unavailable; falling back to movie metadata:', error?.message || error);
     }
     const metadata = await movieById(ctx, env, contentId);
     const movie = metadata.movie;

@@ -48,6 +48,14 @@ includes(watch, 'id="seriesBrowser"', 'Season and episode browser');
 includes(watch, 'id="previousEpisode"', 'Previous episode navigation');
 includes(watch, 'id="nextEpisode"', 'Next episode navigation');
 
+// Existing movie detail and playback must remain independent of optional series tables.
+includes(worker, "Series metadata unavailable; returning legacy movie metadata:", 'Movie metadata fallback');
+includes(worker, "Series detail unavailable; falling back to movie metadata:", 'Public content detail fallback');
+includes(worker, 'Public catalogue reads are read-only. Admin initializes optional series tables.', 'No anonymous series DDL');
+const attachSource = worker.match(/const source = \{[\s\S]*?modified_time: file\.modifiedTime \|\| null[\s\S]*?\};/);
+assert.ok(attachSource, 'Private Drive attach source object is missing');
+assert.equal((attachSource[0].match(/account_id:/g) || []).length, 1, 'Private Drive attach source must not duplicate account_id');
+
 // A failed optional series migration must not hide legacy published movies.
 includes(worker, "Series catalogue unavailable; using movie-only fallback:", 'Movie-only catalogue fallback');
 includes(worker, "FROM public.movies WHERE is_published=TRUE", 'Fallback query reads legacy movies table');
