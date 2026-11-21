@@ -570,6 +570,63 @@ async function startGoogleDriveUpload(sql, env, body) {
   return { uploadId, chunkSize: 8 * 1024 * 1024, totalBytes: total, nextByte: 0 };
 }
 
+async function googleDriveUploadStatus(sql, env, uploadId) {
+  if (!/^[0-9a-f-]{36}$/i.test(uploadId)) throw new Error('Invalid upload ID.');
+  await ensureGoogleDriveSchema(sql);
+  const rows = await sql`SELECT id,file_name,total_bytes,next_byte,session_ciphertext,session_iv,
+      expires_at,state,file_id
+    FROM public.google_drive_uploads WHERE id=${uploadId} LIMIT 1`;
+  const upload = rows[0];
+  if (!upload) throw new Error('Upload not found.');
+  const total = Number(upload.total_bytes);
+  if (upload.state === 'complete') {
+    return { uploadId, state: 'complete', fileId: upload.file_id, totalBytes: total, nextByte: total };
+  }
+  if (upload.state !== 'active') {
+    return { uploadId, state: upload.state, totalBytes: total, nextByte: Number(upload.next_byte) };
+  }
+  if (new Date(upload.expires_at).getTime() <= Date.now()) {
+    await sql`UPDATE public.google_drive_uploads SET state='expired',updated_at=NOW() WHERE id=${uploadId}`;
+    return { uploadId, state: 'expired', totalBytes: total, nextByte: Number(upload.next_byte) };
+  }
+  const sessionUrl = await decryptGoogleDriveSecret(
+    env, upload.session_ciphertext, upload.session_iv, 'moviwatch-google-drive-upload:' + uploadId
+  );
+  const target = new URL(sessionUrl);
+  if (target.protocol !== 'https:' || target.origin !== 'https://www.googleapis.com' ||
+      !target.pathname.startsWith('/upload/drive/v3/')) throw new Error('Stored Google Drive upload session is invalid.');
+  const response = await googleDriveApiRequest(sql, env, sessionUrl, {
+    method: 'PUT',
+    headers: { 'content-length': '0', 'content-range': 'bytes */' + total }
+  });
+  if (response.status === 308) {
+    const received = /^bytes=0-([0-9]+)$/.exec(response.headers.get('range') || '');
+    const nextByte = received ? Number(received[1]) + 1 : 0;
+    await response.body?.cancel();
+    if (!Number.isSafeInteger(nextByte) || nextByte < 0 || nextByte > total) {
+      throw new Error('Google Drive returned an invalid resumable upload offset.');
+    }
+    await sql`UPDATE public.google_drive_uploads SET next_byte=${nextByte},updated_at=NOW()
+      WHERE id=${uploadId} AND state='active'`;
+    return { uploadId, state: 'active', totalBytes: total, nextByte };
+  }
+  if (response.status === 200 || response.status === 201) {
+    const payload = await response.json().catch(() => ({}));
+    const file = googleDrivePublicFileSummary(payload);
+    if (!file?.id) throw new Error('Google Drive completed the upload but returned invalid file metadata.');
+    await sql`UPDATE public.google_drive_uploads SET next_byte=${total},state='complete',file_id=${file.id},updated_at=NOW()
+      WHERE id=${uploadId}`;
+    return { uploadId, state: 'complete', totalBytes: total, nextByte: total, file };
+  }
+  if (response.status === 404 || response.status === 410) {
+    await sql`UPDATE public.google_drive_uploads SET state='expired',updated_at=NOW()
+      WHERE id=${uploadId} AND state='active'`;
+    return { uploadId, state: 'expired', totalBytes: total, nextByte: Number(upload.next_byte) };
+  }
+  const detail = await response.text().catch(() => '');
+  throw new Error('Google Drive upload status check failed (HTTP ' + response.status + '). ' + detail.slice(0, 160));
+}
+
 async function googleDriveUploadChunk(req, sql, env, uploadId) {
   if (!/^[0-9a-f-]{36}$/i.test(uploadId)) throw new Error('Invalid upload ID.');
   await ensureGoogleDriveSchema(sql);
@@ -752,14 +809,7 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
 
   const uploadMatch = /^\/api\/admin\/google-drive\/uploads\/([0-9a-f-]{36})$/.exec(path);
   if (uploadMatch && method === 'GET') {
-    const rows = await sql`SELECT id,file_name,total_bytes,next_byte,expires_at,state,file_id
-      FROM public.google_drive_uploads WHERE id=${uploadMatch[1]} LIMIT 1`;
-    if (!rows[0]) return json({ error: 'Upload not found.' }, 404);
-    return json({
-      uploadId: rows[0].id, fileName: rows[0].file_name,
-      totalBytes: Number(rows[0].total_bytes), nextByte: Number(rows[0].next_byte),
-      expiresAt: rows[0].expires_at, state: rows[0].state, fileId: rows[0].file_id
-    });
+    return json(await googleDriveUploadStatus(sql, env, uploadMatch[1]));
   }
   if (uploadMatch && method === 'PUT') {
     const progress = await googleDriveUploadChunk(req, sql, env, uploadMatch[1]);
