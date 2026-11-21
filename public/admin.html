@@ -222,7 +222,7 @@ function renderMovies(){
     title.textContent=movie.title;
     const small=document.createElement('small');
     const sources=Array.isArray(movie.video_sources)?movie.video_sources:[];
-    const drive=sources.filter(source=>source.provider==='google-drive').length;
+    const drive=sources.filter(source=>source.provider==='google-drive'||source.provider==='google-drive-private').length;
     const archive=sources.filter(source=>source.provider==='archive.org').length;
     small.textContent=movie.category+' · '+(movie.is_published?'Published':'Hidden')+' · '+sources.length+' source(s) ('+drive+' Drive, '+archive+' Archive.org)';
     info.append(title,small);
@@ -263,10 +263,12 @@ function updateDriveSelected(file){
   $('#driveSelectedMeta').textContent=file?
     [file.mimeType,formatDriveBytes(file.size),file.modifiedTime?new Date(file.modifiedTime).toLocaleString():''].filter(Boolean).join(' · '):
     'Select a video file to attach it or replace its contents.';
-  const enabled=Boolean(file&&file.mimeType!=='application/vnd.google-apps.folder');
+  const enabled=Boolean(file&&file.mimeType!=='application/vnd.google-apps.folder'&&
+    (/^video\//i.test(file.mimeType||'')||/\.(mp4|m4v|mov|mkv|webm|avi|mpg|mpeg|mpe|3gp|3g2|ts|ogv|flv)$/i.test(file.name||'')));
   $('#driveRename').disabled=!file||!file.capabilities?.canRename;
   $('#driveReplace').disabled=!enabled||!file.capabilities?.canEdit;
   $('#driveTrash').disabled=!file||!file.capabilities?.canDelete;
+  $('#driveTrash').textContent=file?.driveId?'Delete permanently':'Move to trash';
   $('#driveAttach').disabled=!enabled||!$('#driveAttachMovie').value;
 }
 async function refreshDriveStatus(){
@@ -413,64 +415,115 @@ $('#driveAttach').addEventListener('click',async()=>{
   }catch(error){driveMessage(error.message,true);}
 });
 $('#driveLoadMore').addEventListener('click',()=>loadDriveFiles(false).catch(error=>driveMessage(error.message,true)));
+const DRIVE_PENDING_UPLOAD_KEY='moviwatch-drive-pending-upload-v1';
+function readPendingDriveUpload(){
+  try{return JSON.parse(localStorage.getItem(DRIVE_PENDING_UPLOAD_KEY)||'null')}catch{return null}
+}
+function writePendingDriveUpload(value){
+  try{localStorage.setItem(DRIVE_PENDING_UPLOAD_KEY,JSON.stringify(value))}catch{}
+}
+function clearPendingDriveUpload(){
+  try{localStorage.removeItem(DRIVE_PENDING_UPLOAD_KEY)}catch{}
+}
 async function uploadDriveFile(replace){
   const file=$('#driveUploadFile').files?.[0];
   if(!file){driveMessage('Choose a file to upload.',true);return;}
   if(replace&&(!driveSelected||!driveSelected.capabilities?.canEdit)){driveMessage('Select a file that you can edit to replace it.',true);return;}
+  const replaceFileId=replace?driveSelected.id:'';
   const status=$('#driveUploadStatus'),bar=$('#driveProgressBar');
   $('#driveUploadNew').disabled=true;$('#driveReplace').disabled=true;
-  let activeUploadId='';
   try{
-    const init=await api('/api/admin/google-drive/uploads',{method:'POST',body:JSON.stringify({
-      fileName:file.name,totalBytes:file.size,mimeType:file.type||'application/octet-stream',
-      parentId:driveParentId(),driveId:currentDrive().id==='root'?'':currentDrive().id,
-      replaceFileId:replace?driveSelected.id:''
-    })});
-    activeUploadId=init.uploadId;
-    let offset=0;
-    status.textContent='Uploading '+file.name+'…';
-    bar.style.width='0%';
+    const pending=readPendingDriveUpload();
+    const samePending=pending&&pending.fileName===file.name&&pending.totalBytes===file.size&&
+      pending.lastModified===file.lastModified&&pending.replaceFileId===replaceFileId;
+    let init,offset=0;
+    if(samePending){
+      try{
+        const remote=await api('/api/admin/google-drive/uploads/'+encodeURIComponent(pending.uploadId));
+        if(remote.state==='active'){
+          init={uploadId:pending.uploadId,chunkSize:DRIVE_CHUNK_BYTES};
+          offset=remote.nextByte;
+          status.textContent='Resuming '+file.name+' at '+formatDriveBytes(offset)+'…';
+        }else if(remote.state==='complete'){
+          clearPendingDriveUpload();
+          status.textContent='This upload was already completed.';
+          await loadDriveFiles(true);
+          if(replace)await refresh();
+          return;
+        }else{
+          clearPendingDriveUpload();
+        }
+      }catch{clearPendingDriveUpload();}
+    }
+    if(!init){
+      init=await api('/api/admin/google-drive/uploads',{method:'POST',body:JSON.stringify({
+        fileName:file.name,totalBytes:file.size,mimeType:file.type||'application/octet-stream',
+        parentId:driveParentId(),driveId:currentDrive().id==='root'?'':currentDrive().id,
+        replaceFileId
+      })});
+      writePendingDriveUpload({
+        uploadId:init.uploadId,fileName:file.name,totalBytes:file.size,
+        lastModified:file.lastModified,replaceFileId
+      });
+      offset=init.nextByte||0;
+      status.textContent='Uploading '+file.name+'…';
+    }
+    bar.style.width=(offset/file.size*100).toFixed(1)+'%';
     while(offset<file.size){
-      const end=Math.min(file.size,offset+init.chunkSize)-1;
-      const blob=file.slice(offset,end+1);
-      let responseData=null,chunkError=null;
+      let recovered=false,lastError=null;
       for(let attempt=0;attempt<3;attempt++){
+        const end=Math.min(file.size,offset+init.chunkSize)-1;
+        const blob=file.slice(offset,end+1);
         try{
           const response=await fetch('/api/admin/google-drive/uploads/'+encodeURIComponent(init.uploadId),{
             method:'PUT',credentials:'same-origin',
             headers:{'Content-Range':'bytes '+offset+'-'+end+'/'+file.size,'Content-Type':'application/octet-stream'},
             body:blob
           });
-          responseData=await response.json().catch(()=>({}));
-          if(response.ok)break;
-          chunkError=new Error(responseData.error||'Upload failed (HTTP '+response.status+').');
-          if(response.status<500)throw chunkError;
-        }catch(error){chunkError=error;}
-        // A connection can drop after Google accepted the bytes. Never blindly
-        // resend the old chunk: query Google's resumable session to learn offset.
+          const data=await response.json().catch(()=>({}));
+          if(response.ok&&data.complete){
+            clearPendingDriveUpload();
+            bar.style.width='100%';
+            status.textContent='Upload complete: '+(data.file?.name||file.name)+' · '+formatDriveBytes(data.file?.size||file.size);
+            if(replace)await refresh();
+            await loadDriveFiles(true);
+            return;
+          }
+          if(response.ok&&Number.isSafeInteger(data.nextByte)&&data.nextByte>offset){
+            offset=data.nextByte;
+            recovered=true;
+            break;
+          }
+          if(response.ok){
+            lastError=new Error('Google Drive has not confirmed this chunk yet.');
+          }else{
+            lastError=new Error(data.error||'Upload failed (HTTP '+response.status+').');
+            if(response.status<500)throw lastError;
+          }
+        }catch(error){lastError=error;}
+
+        // Request the real upload cursor. A lost response must not cause
+        // an already-received chunk to be sent again at the old offset.
         const remote=await api('/api/admin/google-drive/uploads/'+encodeURIComponent(init.uploadId));
         if(remote.state==='complete'){
-          responseData={complete:true,file:remote.file||{name:file.name,size:file.size},nextByte:file.size};
+          clearPendingDriveUpload();
+          status.textContent='Upload complete: '+file.name+' · '+formatDriveBytes(file.size);
+          if(replace)await refresh();
+          await loadDriveFiles(true);
+          return;
+        }
+        if(remote.state!=='active')throw lastError||new Error('Google Drive upload session is no longer active.');
+        if(!Number.isSafeInteger(remote.nextByte)||remote.nextByte<0||remote.nextByte>file.size) {
+          throw new Error('Google Drive returned an invalid resume offset.');
+        }
+        if(remote.nextByte>offset){
+          offset=remote.nextByte;
+          recovered=true;
           break;
         }
-        if(remote.state!=='active')throw chunkError||new Error('Google Drive upload session is no longer active.');
-        if(!Number.isSafeInteger(remote.nextByte)||remote.nextByte<0||remote.nextByte>file.size)throw new Error('Google Drive returned an invalid resume offset.');
-        offset=remote.nextByte;
-        if(offset>0)status.textContent='Resuming at '+formatDriveBytes(offset)+'…';
-        if(attempt===2&&offset===end+1)responseData={complete:false,nextByte:offset};
-        else if(attempt===2&&offset<=end)throw chunkError||new Error('Upload interrupted. Try again.');
-        if(offset===end+1)responseData={complete:false,nextByte:offset};
+        if(attempt<2)await new Promise(resolve=>setTimeout(resolve,600*(attempt+1)));
       }
-      if(!responseData)throw chunkError||new Error('Upload chunk failed.');
-      if(responseData.complete){
-        offset=file.size;bar.style.width='100%';
-        status.textContent='Upload complete: '+(responseData.file?.name||file.name)+' · '+formatDriveBytes(responseData.file?.size||file.size);
-        if(replace){await refresh();driveMessage('Drive file replaced. Attached movies have had their cache refreshed.');}
-        await loadDriveFiles(true);
-        return;
-      }
-      if(!Number.isSafeInteger(responseData.nextByte)||responseData.nextByte<offset)throw new Error('Upload did not advance. Try again.');
-      offset=responseData.nextByte;
+      if(!recovered)throw lastError||new Error('Upload was interrupted. Select the same file and resume.');
       bar.style.width=(offset/file.size*100).toFixed(1)+'%';
       status.textContent='Uploaded '+formatDriveBytes(offset)+' of '+formatDriveBytes(file.size);
     }
