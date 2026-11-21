@@ -1203,7 +1203,14 @@ function sourceKind(host) {
   host = host.toLowerCase();
   return host === 'archive.org' || host.endsWith('.archive.org') ? 'Archive.org' : 'Google Drive';
 }
-async function videoSourceFetch(source, method, headers, signal) {
+function consumeUpstreamBudget(budget) {
+  if (!budget) return;
+  if (budget.used >= budget.limit) throw new Error('Video upstream fetch budget exhausted (' + budget.limit + ').');
+  budget.used++;
+}
+const VIDEO_UPSTREAM_FETCH_LIMIT = 6;
+
+async function videoSourceFetch(source, method, headers, signal, budget = null) {
   let url = new URL(source);
   // Normalize legacy database URLs to Google's direct download endpoint.
   if (url.hostname.toLowerCase() === 'drive.google.com' && url.pathname === '/uc') {
@@ -1220,6 +1227,7 @@ async function videoSourceFetch(source, method, headers, signal) {
     if (!allowedSourceHost(host)) throw new Error('Unsupported video-source redirect');
     const options = { method: currentMethod, headers, redirect: 'manual' };
     if (signal) options.signal = signal;
+    consumeUpstreamBudget(budget);
     const res = await fetch(url.toString(), options);
     if (![301, 302, 303, 307, 308].includes(res.status)) return res;
     const location = res.headers.get('Location');
@@ -1437,9 +1445,9 @@ function videoChunkSizeAt(chunkStart, fragmented) {
   return fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE;
 }
 
-async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverride = 0) {
+async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverride = 0, budget = null) {
   if (source?.provider !== 'google-drive-private') {
-    return fetchVideoRangeFromMirrors(source.url, start, end, timeoutOverride);
+    return fetchVideoRangeFromMirrors(source.url, start, end, timeoutOverride, budget);
   }
   if (!isGoogleDriveFileId(source.fileId) || source.url !== googleDriveMediaUrl(source.fileId)) {
     throw new Error('Invalid private Google Drive video source');
@@ -1450,8 +1458,8 @@ async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverrid
   let upstream = null;
   for (let hop = 0; hop <= 5; hop++) {
     upstream = hop === 0
-      ? await googleDriveApiRequest(sqlFor(env), env, mediaUrl, { headers: rangeHeaders, signal }, source.accountId || 'primary')
-      : await fetch(mediaUrl, { method: 'GET', headers: rangeHeaders, signal, redirect: 'manual' });
+      ? await googleDriveApiRequest(sqlFor(env), env, mediaUrl, { headers: rangeHeaders, signal }, source.accountId || 'primary', budget)
+      : (consumeUpstreamBudget(budget), await fetch(mediaUrl, { method: 'GET', headers: rangeHeaders, signal, redirect: 'manual' }));
     if (![301, 302, 303, 307, 308].includes(upstream.status)) break;
     const location = upstream.headers.get('location');
     try { await upstream.body?.cancel(); } catch {}
@@ -1504,7 +1512,7 @@ function isValidCachedSource(sourceUrl, sourceProviderName, sourceFileId, source
   } catch { return false; }
 }
 
-async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHUNK_SIZE, env) {
+async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHUNK_SIZE, env, budget = { limit: VIDEO_UPSTREAM_FETCH_LIMIT, used: 0 }) {
   // Fill one complete cache chunk; keep requesting if the upstream caps its Range size.
   const requestedEnd = chunkStart + chunkSize - 1;
   const pieces = [];
@@ -1516,7 +1524,7 @@ async function fetchAndCacheVideoChunk(source, chunkStart, chunkSize = VIDEO_CHU
 
   while (cursor <= expectedEnd) {
     if (++requests > 128) throw new Error('Video source returned too many small byte ranges');
-    const part = await fetchConfiguredVideoRange(source, cursor, requestedEnd, env);
+    const part = await fetchConfiguredVideoRange(source, cursor, requestedEnd, env, 0, budget);
     if (part.unsatisfiedTotal !== undefined) {
       if (cursor === chunkStart) return { unsatisfiedTotal: part.unsatisfiedTotal };
       throw new Error('Video source ended before the cached chunk was complete');
@@ -1576,7 +1584,8 @@ export class VideoHeader extends WorkerEntrypoint {
       const digest = await crypto.subtle.digest('SHA-256', enc.encode(sourceUrl + '|' + sourceVersion));
       const expectedHash = hex(new Uint8Array(digest)).slice(0, 32);
       if (expectedHash !== sourceHash) return json({ error: 'Video header cache key did not match its source' }, 400);
-      const probe = await fetchConfiguredVideoRange(source, 0, VIDEO_HEADER_PROBE_SIZE - 1, this.env, 20000);
+      const requestBudget = { limit: VIDEO_UPSTREAM_FETCH_LIMIT, used: 0 };
+      const probe = await fetchConfiguredVideoRange(source, 0, VIDEO_HEADER_PROBE_SIZE - 1, this.env, 20000, requestBudget);
       const range = probe.range;
       if (!range || probe.unsatisfiedTotal !== undefined || range.start !== 0 || range.end < 39) {
         throw new Error('Video source did not return a valid video header');
@@ -1647,7 +1656,8 @@ export class VideoChunk extends WorkerEntrypoint {
       const expectedHash = hex(new Uint8Array(digest)).slice(0, 32);
       if (expectedHash !== sourceHash) return json({ error: 'Video cache key did not match its source' }, 400);
 
-      const result = await fetchAndCacheVideoChunk(source, chunkStart, chunkSize, this.env);
+      const requestBudget = { limit: VIDEO_UPSTREAM_FETCH_LIMIT, used: 0 };
+      const result = await fetchAndCacheVideoChunk(source, chunkStart, chunkSize, this.env, requestBudget);
       if (result.unsatisfiedTotal !== undefined) {
         return new Response(null, {
           status: 416,
@@ -1723,7 +1733,7 @@ function archiveHost(value) {
     host !== 'archive.org' && !host.includes('..') ? host : null;
 }
 
-async function archiveRouting(identifier) {
+async function archiveRouting(identifier, budget = null) {
   const cached = archiveMeta.get(identifier);
   if (cached && cached.until > Date.now()) return cached.value;
   if (archiveMetaPending.has(identifier)) return archiveMetaPending.get(identifier);
@@ -1731,6 +1741,7 @@ async function archiveRouting(identifier) {
   const pending = (async () => {
     let value = null;
     try {
+      consumeUpstreamBudget(budget);
       const response = await fetch('https://archive.org/metadata/' + encodeURIComponent(identifier), {
         headers: { Accept: 'application/json' },
         signal: AbortSignal.timeout(12000)
@@ -1791,10 +1802,10 @@ function recordArchiveFailure(identifier, host) {
   });
 }
 
-async function archiveCandidates(sourceUrl) {
+async function archiveCandidates(sourceUrl, budget = null) {
   const details = archiveSourceParts(sourceUrl);
   if (!details) return [{ url: sourceUrl, host: '', identifier: '' }];
-  const route = await archiveRouting(details.identifier);
+  const route = await archiveRouting(details.identifier, budget);
   if (!route?.hosts?.length) return [{ url: details.original, host: '', identifier: details.identifier }];
   const ranked = route.hosts.map((host, order) => ({
     host, order, score: archiveScore(details.identifier, host)
@@ -1825,9 +1836,9 @@ function archiveTimeout(size, score) {
   return Math.max(45000, Math.min(5 * 60 * 1000, 30000 + size / rate * 2000));
 }
 
-async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeoutOverride = 0) {
+async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeoutOverride = 0, budget = null) {
   const details = archiveSourceParts(sourceUrl);
-  const candidates = details ? await archiveCandidates(sourceUrl) : [{ url: sourceUrl, host: '', identifier: '' }];
+  const candidates = details ? await archiveCandidates(sourceUrl, budget) : [{ url: sourceUrl, host: '', identifier: '' }];
   let lastError;
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i];
@@ -1838,7 +1849,7 @@ async function fetchVideoRangeFromMirrors(sourceUrl, start, requestedEnd, timeou
       const upstream = await videoSourceFetch(candidate.url, 'GET', new Headers({
         Range: 'bytes=' + start + '-' + requestedEnd,
         'Accept-Encoding': 'identity'
-      }), signal);
+      }), signal, budget);
       if (upstream.status === 416) {
         const unsatisfied = /^bytes \*\/([0-9]+)$/.exec(upstream.headers.get('content-range') || '');
         try { await upstream.body?.cancel(); } catch {}
