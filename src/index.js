@@ -2538,7 +2538,7 @@ export default {
       } else if ((url.pathname === '/admin' || url.pathname === '/admin/')) {
         response = await env.ASSETS.fetch(new Request(new URL('/admin.html', url), req));
       } else {
-        const watchMatch = /^\/watch\/([^/]+)\\/?$/.exec(url.pathname);
+        const watchMatch = /^\/watch\/([^/]+)\/?$/.exec(url.pathname);
         if (watchMatch) {
           let movieId = '';
           try { movieId = decodeURIComponent(watchMatch[1]); } catch {}
