@@ -2,6 +2,7 @@ import { neon } from '@neondatabase/serverless';
 import { Redis } from '@upstash/redis';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { videoSourceUrl, sourceProvider } from './video-sources.js';
+import { getVideoRangeWindow } from './video-range-window.js';
 import {
   clearGoogleDriveAccessTokenCache,
   decryptGoogleDriveSecret,
@@ -1207,9 +1208,10 @@ async function videoSourceFetch(source, method, headers, signal) {
   throw new Error('Video-source redirect limit reached');
 }
 
-// Video edge cache: store complete 8 MiB continuation chunks as cacheable 200 responses.
-// The public response is reconstructed as a standards-compliant 206 response.
-const VIDEO_CHUNK_SIZE = 8 * 1024 * 1024;
+// Video edge cache: store complete 4 MiB continuation chunks as cacheable 200 responses.
+// Public 206 responses are capped at the active chunk boundary so open-ended
+// browser ranges never stream the complete remainder of a movie in one response.
+const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024;
 // Keep cold-start transfers small; continuation chunks remain large for cache efficiency.
 const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024;
 // Fragmented MP4 keeps its initial moov + first media fragments even more compact.
@@ -1856,8 +1858,8 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
 
   // The cached header probe identifies fragmented MP4 for every range request,
-  // including seeks. Keep a compact first segment and 8 MiB continuation chunks
-  // so cold seeks do not have to wait for a 8 MiB Archive.org/Drive transfer.
+  // including seeks. Keep a compact first segment and 4 MiB continuation chunks
+  // to reduce the cold upstream transfer required after a seek.
   const header = await getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash);
   const fragmented = header.fragmented === true;
   const total = header.total;
@@ -1882,6 +1884,21 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
     return new Response(null, { status: 416, headers: { 'content-range': 'bytes */' + total, 'accept-ranges': 'bytes' } });
   }
 
+  // Return only the remainder of the cache chunk containing the requested
+  // offset. For bytes=N-, the browser will request the next window only when
+  // its media pipeline actually needs more data; never stream N through EOF.
+  const requestedEnd = end;
+  const responseWindow = getVideoRangeWindow({
+    start,
+    requestedEnd,
+    total,
+    fragmented,
+    continuationChunkSize: VIDEO_CHUNK_SIZE,
+    startupChunkSize: VIDEO_STARTUP_CHUNK_SIZE,
+    fragmentStartupChunkSize: VIDEO_FRAGMENT_START_CHUNK_SIZE
+  });
+  end = responseWindow.end;
+
   if (startupPrefetch) {
     const prefetchStarted = Date.now();
     // Fetch only the small first segment on the critical path. The next
@@ -1900,7 +1917,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
     startupPrefetchMs = Date.now() - prefetchStarted;
     cacheStatus = 'PREFETCH';
   } else {
-    const firstStart = videoChunkStartForOffset(start, fragmented);
+    const firstStart = responseWindow.chunkStart;
     const firstChunk = await getVideoChunk(
       ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
       firstStart, videoChunkSizeAt(firstStart, fragmented)
@@ -1943,19 +1960,6 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
           }
         }
 
-        // Keep one segment ahead warm while the browser consumes the current
-        // range. This is especially useful after a seek: the target segment is
-        // fetched immediately, and its successor starts filling in parallel.
-        const nextChunkStart = chunk.end + 1;
-        if (nextChunkStart < total && !prefetched.has(nextChunkStart)) {
-          const nextPromise = getVideoChunk(
-            ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
-            nextChunkStart, videoChunkSizeAt(nextChunkStart, fragmented)
-          );
-          prefetched.set(nextChunkStart, nextPromise);
-          ctx.waitUntil(Promise.allSettled([nextPromise]));
-        }
-
         const from = cursor - chunk.start;
         const through = Math.min(responseEnd, chunk.end) - chunk.start + 1;
         if (through <= from) throw new Error('Invalid cached video chunk boundary');
@@ -1969,6 +1973,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
     },
     cancel() {
       chunk = null;
+      prefetched.clear();
     }
   });
 
@@ -1991,6 +1996,8 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
       'x-moviwatch-cache': cacheStatus,
       'x-moviwatch-seek-range-start': String(responseStart),
       'x-moviwatch-seek-range-end': String(responseEnd),
+      'x-moviwatch-seek-requested-end': String(requestedEnd),
+      'x-moviwatch-seek-range-truncated': String(responseEnd < requestedEnd),
       'x-moviwatch-seek-first-chunk-start': String(videoChunkStartForOffset(responseStart, fragmented)),
       'x-moviwatch-seek-first-chunk-size': String(videoChunkSizeAt(videoChunkStartForOffset(responseStart, fragmented), fragmented)),
       'x-moviwatch-chunk-size': String(VIDEO_CHUNK_SIZE),
