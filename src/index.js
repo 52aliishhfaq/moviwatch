@@ -277,7 +277,7 @@ function episodeInput(body) {
   if (!Array.isArray(body.videoSources) || body.videoSources.length < 1 || body.videoSources.length > 8) throw new Error('Add 1 to 8 episode video sources');
   const sources = body.videoSources.map((item,index) => {
     const label = (typeof item?.label === 'string' && item.label.trim() ? item.label.trim() : 'Video ' + (index + 1)).slice(0,60);
-    const privateId = item?.provider === 'google-drive-private' ? item.fileId : (typeof item?.url === 'string' && item.url.startsWith('drive-private://') ? item.url.slice(15) : '');
+    const privateId = item?.provider === 'google-drive-private' ? item.fileId : (typeof item?.url === 'string' && item.url.startsWith('drive-private://') ? item.url.slice('drive-private://'.length) : '');
     if (privateId) {
       if (!isGoogleDriveFileId(privateId)) throw new Error('Invalid private Google Drive file reference');
       const accountId = typeof item.accountId === 'string' && /^(primary|[0-9a-f-]{36})$/i.test(item.accountId) ? item.accountId : 'primary';
@@ -2326,9 +2326,9 @@ async function api(req, env, ctx) {
             'id',e.id,'series_id',e.series_id,'season_number',e.season_number,'episode_number',e.episode_number,
             'title',e.title,'description',e.description,'is_published',e.is_published,'created_at',e.created_at,
             'video_sources',COALESCE((SELECT jsonb_agg(jsonb_build_object(
-              'label',v->>'label','provider',v->>'provider','url',CASE WHEN v->>'provider'='google-drive-private' THEN 'drive-private://' || (v->>'file_id') ELSE v->>'url' END,
-              'fileId',v->>'file_id','accountId',COALESCE(v->>'account_id','primary'),'driveId',v->>'drive_id','modifiedTime',v->>'modified_time'
-            )) FROM jsonb_array_elements(e.videos) v),'[]'::jsonb)
+              'label',source.value->>'label','provider',source.value->>'provider','url',CASE WHEN source.value->>'provider'='google-drive-private' THEN 'drive-private://' || (source.value->>'file_id') ELSE source.value->>'url' END,
+              'fileId',source.value->>'file_id','accountId',COALESCE(source.value->>'account_id','primary'),'driveId',source.value->>'drive_id','modifiedTime',source.value->>'modified_time'
+            )) FROM jsonb_array_elements(e.videos) AS source(value)),'[]'::jsonb)
           ) ORDER BY e.season_number,e.episode_number)
           FROM public.episodes e WHERE e.series_id=s.id),'[]'::jsonb) AS episodes
           FROM public.series s ORDER BY s.updated_at DESC LIMIT 500`;
@@ -2405,7 +2405,8 @@ async function api(req, env, ctx) {
               label: (source.label || 'Private Google Drive').slice(0, 60),
               url: 'drive-private://' + source.file_id,
               provider: 'google-drive-private',
-              fileId: source.file_id
+              fileId: source.file_id,
+              accountId: source.account_id || 'primary'
             }];
           }
           try {
@@ -2420,7 +2421,9 @@ async function api(req, env, ctx) {
     if (path === '/api/admin/stats' && method === 'GET') {
       const rows = await sql`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE is_published)::int AS published,
         COUNT(*) FILTER (WHERE category='Action')::int AS action, COUNT(*) FILTER (WHERE category='Romantic')::int AS romantic FROM movies`;
-      return json({ stats: rows[0] });
+      await ensureSeriesSchema(sql);
+      const seriesRows = await sql`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE is_published)::int AS published FROM public.series`;
+      return json({ stats: { ...rows[0], series: Number(seriesRows[0]?.total || 0), publishedSeries: Number(seriesRows[0]?.published || 0) } });
     }
     if (path === '/api/admin/movies' && method === 'POST') {
       const v = movieInput(await readBody(req));
