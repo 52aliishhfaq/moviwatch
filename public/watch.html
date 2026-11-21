@@ -81,7 +81,7 @@ movi-player::part(error-screen){display:none!important}
 </div>
 <section id="playerShell" class="player-shell" aria-label="Video player">
   <div class="video-stage">
-    <movi-player id="video" playsinline preload="none" buffersize="12" sw="auto" objectfit="contain" nohotkeys wasmurl="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/movi.wasm"></movi-player>
+    <movi-player id="video" playsinline preload="none" buffersize="12" sw="auto" objectfit="contain" nohotkeys persist="volume audiolang" persistkey="moviwatch"></movi-player>
     <button id="bigPlay" class="big-play" type="button" aria-label="Play movie" disabled><span>▶</span></button>
   </div>
   <div class="player-controls" aria-label="Playback controls">
@@ -168,74 +168,55 @@ function markPlayerReady(){
   updateTime();
   refreshAudioTracks();
 }
-function getPlayerCore(){
-  return video.player&&typeof video.player==='object'?video.player:video;
-}
-function refreshAudioTracks(event){
-  const core=getPlayerCore();
-  let tracks=Array.isArray(event?.detail)?event.detail.filter(track=>track&&track.type==='audio'):[];
-  if(!tracks.length){
-    try{
-      if(typeof core.getAudioTracks==='function')tracks=core.getAudioTracks()||[];
-      else if(typeof video.getAudioTracks==='function')tracks=video.getAudioTracks()||[];
-    }catch{}
-  }
-  if(!tracks.length){
-    try{
-      const langs=typeof video.getAudioLangs==='function'?video.getAudioLangs():
-        (typeof core.getAudioLangs==='function'?core.getAudioLangs():[]);
-      tracks=(Array.isArray(langs)?langs:[]).map((item,index)=>({
-        id:null,language:item.lang||'',title:item.label||'',active:Boolean(item.active),_lang:item.lang||'',_index:index
-      }));
-    }catch{}
-  }
-  currentAudioTracks=tracks;
+function refreshAudioTracks(){
+  let tracks=[];
+  try{
+    // The custom element intentionally exposes language-keyed track helpers.
+    // Numeric track IDs belong to its internal MoviPlayer instance.
+    if(typeof video.getAudioLangs==='function')tracks=video.getAudioLangs()||[];
+  }catch{}
+  currentAudioTracks=Array.isArray(tracks)?tracks.filter(track=>track&&typeof track==='object'):[];
   const control=$('#audioControl'),select=$('#audioSelect');
   select.replaceChildren();
-  if(tracks.length<2){
+  if(currentAudioTracks.length<2){
     control.hidden=true;
     return;
   }
-  tracks.forEach((track,index)=>{
-    const id=track.id===undefined||track.id===null?'lang:'+String(track._lang||track.language||index):'id:'+String(track.id);
-    const language=String(track.language||track._lang||'').trim();
-    const title=String(track.title||track.label||'').trim();
-    const codec=String(track.codec||'').trim();
-    const channels=Number(track.channels)||0;
-    let label=title||language||('Audio '+(index+1));
-    if(language&&title&&title.toLowerCase()!==language.toLowerCase())label+=' · '+language.toUpperCase();
-    if(codec)label+=' · '+codec.toUpperCase();
-    if(channels>2)label+=' · '+channels+'.1';
-    const option=new Option(label,id);
-    if(track.active)option.selected=true;
+  currentAudioTracks.forEach((track,index)=>{
+    const lang=String(track.lang||'').trim();
+    const label=String(track.label||'').trim()||lang.toUpperCase()||('Audio '+(index+1));
+    // Language codes are the stable selection key exposed by <movi-player>.
+    if(!lang)return;
+    const option=new Option(label,lang,Boolean(track.active),Boolean(track.active));
     select.add(option);
   });
-  const activeIndex=tracks.findIndex(track=>track.active);
-  if(activeIndex>=0)select.selectedIndex=activeIndex;
+  if(select.options.length<2){
+    control.hidden=true;
+    return;
+  }
+  const active=currentAudioTracks.find(track=>track.active&&track.lang);
+  if(active)select.value=String(active.lang);
   control.hidden=false;
 }
-function selectAudioTrack(value){
-  const index=Number($('#audioSelect').selectedIndex);
-  const track=currentAudioTracks[index];
-  if(!track)return;
-  const core=getPlayerCore();
-  let switched=false;
-  if(track.id!==undefined&&track.id!==null){
-    if(typeof core.selectAudioTrack==='function')switched=core.selectAudioTrack(Number(track.id))!==false;
-    else if(typeof video.selectAudioTrack==='function')switched=video.selectAudioTrack(Number(track.id))!==false;
+async function selectAudioTrack(language){
+  const lang=String(language||'');
+  if(!lang||typeof video.selectAudioLang!=='function'){
+    setStatus('Audio switching is not available for this file.',true);
+    return;
   }
-  if(!switched&&(track._lang||track.language)){
-    const language=String(track._lang||track.language);
-    if(typeof video.selectAudioLang==='function')switched=video.selectAudioLang(language)!==false;
-    else if(typeof core.selectAudioLang==='function')switched=core.selectAudioLang(language)!==false;
+  try{
+    const switched=await video.selectAudioLang(lang);
+    if(!switched)setStatus('This audio track could not be selected on this source.',true);
+    else setStatus('');
+    refreshAudioTracks();
+  }catch{
+    setStatus('This audio track could not be selected on this source.',true);
   }
-  if(!switched)setStatus('This audio track could not be selected on this source.',true);
 }
 function playSource(localIndex,playAfterLoad=true){
   const source=availableSources[localIndex];
   if(!source||!playerLibrariesReady||!window.MoviwatchRangeSource)return;
-  const wasPlaying=activeRangeSource&&!video.paused;
-  activeOptionIndex=localIndex;
+    activeOptionIndex=localIndex;
   $('#sourceSelect').value=String(localIndex);
   clearTimer();
   const current=++generation;
