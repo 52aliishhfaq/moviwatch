@@ -10,6 +10,7 @@ import {
   googleDriveAccessToken,
   googleDriveApiRequest,
   googleDriveConnection,
+  googleDriveConnections,
   googleDriveConfigurationIssues,
   googleDriveFileIdFromMediaUrl,
   googleDriveMediaUrl,
@@ -206,7 +207,8 @@ function movieInput(body){
       (typeof item?.url==='string'&&item.url.startsWith('drive-private://')?item.url.slice('drive-private://'.length):'');
     if(privateId){
       if(!isGoogleDriveFileId(privateId))throw new Error('Invalid private Google Drive file reference');
-      return {label,provider:'google-drive-private',file_id:privateId,
+      const accountId = typeof item.accountId === 'string' && /^(primary|[0-9a-f-]{36})$/i.test(item.accountId) ? item.accountId : 'primary';
+      return {label,provider:'google-drive-private',file_id:privateId,account_id:accountId,
         drive_id:isGoogleDriveFileId(item.driveId)?item.driveId:null,
         modified_time:typeof item.modifiedTime==='string'?item.modifiedTime:null};
     }
@@ -222,7 +224,7 @@ function storedVideoSource(movie,optionIndex){
   const raw=movie.video_sources?.[optionIndex];
   if(!raw||typeof raw!=='object')return null;
   if(raw.provider==='google-drive-private'&&isGoogleDriveFileId(raw.file_id)){
-    try{return{...raw,fileId:raw.file_id,url:googleDriveMediaUrl(raw.file_id),provider:'google-drive-private'}}catch{return null}
+    try{return{...raw,fileId:raw.file_id,accountId:raw.account_id||'primary',url:googleDriveMediaUrl(raw.file_id),provider:'google-drive-private'}}catch{return null}
   }
   if(typeof raw.url!=='string')return null;
   try{const url=videoSourceUrl(raw.url);return{...raw,url,provider:sourceProvider(url)}}catch{return null}
@@ -324,7 +326,7 @@ function driveOAuthStateCookie(nonce, verifier, env) {
   return (async () => {
     const head = b64(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
     const now = Math.floor(Date.now() / 1000);
-    const body = b64(JSON.stringify({ sub: 'google-drive-oauth', nonce, verifier, iat: now, exp: now + 600 }));
+    const body = b64(JSON.stringify({ sub: 'google-drive-oauth', nonce, verifier, connectionId, iat: now, exp: now + 600 }));
     const unsigned = head + '.' + body;
     return unsigned + '.' + b64(await hmac(enc.encode(env.JWT_SECRET), enc.encode(unsigned)));
   })();
@@ -341,6 +343,7 @@ async function verifyDriveOAuthState(token, env, expectedNonce) {
     if (head.alg !== 'HS256' || body.sub !== 'google-drive-oauth' ||
         typeof body.nonce !== 'string' || body.nonce !== expectedNonce ||
         typeof body.verifier !== 'string' || body.verifier.length < 43 ||
+        typeof body.connectionId !== 'string' || !/^(primary|[0-9a-f-]{36})$/i.test(body.connectionId) ||
         !Number.isInteger(body.iat) || body.iat > now + 60 ||
         !Number.isInteger(body.exp) || body.exp <= now || body.exp - body.iat > 600) return null;
     const expected = await hmac(enc.encode(env.JWT_SECRET), enc.encode(parts[0] + '.' + parts[1]));
@@ -363,11 +366,12 @@ function googleDriveAdminRedirect(env, result, clearCookie = '') {
   return new Response(null, { status: 302, headers });
 }
 
-async function startGoogleDriveOAuth(env, sql) {
+async function startGoogleDriveOAuth(env, sql, connectionId = 'primary') {
   if (!isGoogleDriveConfigured(env)) {
     throw new Error('Google Drive is not configured. Add the four Google OAuth/encryption secrets in Cloudflare first.');
   }
   if (!env.JWT_SECRET) throw new Error('JWT_SECRET must be configured before connecting Google Drive.');
+  if (typeof connectionId !== 'string' || !/^(primary|[0-9a-f-]{36})$/i.test(connectionId)) throw new Error('Invalid Google Drive account ID.');
   await ensureGoogleDriveSchema(sql);
   const random = new Uint8Array(48);
   crypto.getRandomValues(random);
@@ -376,7 +380,7 @@ async function startGoogleDriveOAuth(env, sql) {
   crypto.getRandomValues(nonceBytes);
   const nonce = b64(nonceBytes);
   const challenge = b64(new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(verifier))));
-  const stateCookie = await driveOAuthStateCookie(nonce, verifier, env);
+  const stateCookie = await driveOAuthStateCookie(nonce, verifier, env, connectionId);
   const authorization = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   authorization.search = new URLSearchParams({
     client_id: env.GOOGLE_CLIENT_ID,
@@ -445,7 +449,7 @@ async function completeGoogleDriveOAuth(req, env) {
     let refreshToken = tokenPayload.refresh_token;
     if (typeof refreshToken !== 'string' || refreshToken.length < 20) {
       const previous = await sql`SELECT refresh_token_ciphertext, refresh_token_iv
-        FROM public.google_drive_connections WHERE id='primary' LIMIT 1`;
+        FROM public.google_drive_connections WHERE id=${stateBody.connectionId} LIMIT 1`;
       if (previous[0]) {
         refreshToken = await decryptGoogleDriveSecret(
           env, previous[0].refresh_token_ciphertext, previous[0].refresh_token_iv,
@@ -461,7 +465,7 @@ async function completeGoogleDriveOAuth(req, env) {
     );
     await sql`INSERT INTO public.google_drive_connections
       (id,account_email,refresh_token_ciphertext,refresh_token_iv,scopes,connected_at,updated_at)
-      VALUES('primary',${profile.email},${encrypted.ciphertext},${encrypted.iv},${tokenPayload.scope || ''},NOW(),NOW())
+      VALUES(${stateBody.connectionId},${profile.email},${encrypted.ciphertext},${encrypted.iv},${tokenPayload.scope || ''},NOW(),NOW())
       ON CONFLICT(id) DO UPDATE SET account_email=EXCLUDED.account_email,
       refresh_token_ciphertext=EXCLUDED.refresh_token_ciphertext,
       refresh_token_iv=EXCLUDED.refresh_token_iv,scopes=EXCLUDED.scopes,updated_at=NOW()`;
@@ -473,9 +477,9 @@ async function completeGoogleDriveOAuth(req, env) {
   }
 }
 
-async function googleDriveJson(sql, env, path, options = {}) {
+async function googleDriveJson(sql, env, path, options = {}, connectionId = 'primary') {
   const url = new URL(path, 'https://www.googleapis.com');
-  const response = await googleDriveApiRequest(sql, env, url.toString(), options);
+  const response = await googleDriveApiRequest(sql, env, url.toString(), options, connectionId);
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = typeof payload.error?.message === 'string' ? payload.error.message : 'Google Drive request failed.';
@@ -501,18 +505,18 @@ function isDriveVideoFile(file) {
   return /\.(mp4|m4v|mov|mkv|webm|avi|mpg|mpeg|mpe|3gp|3g2|ts|ogv|flv)$/i.test(file.name || '');
 }
 
-async function driveFileMetadata(sql, env, fileId) {
+async function driveFileMetadata(sql, env, fileId, connectionId = 'primary') {
   if (!isGoogleDriveFileId(fileId)) throw new Error('Invalid Google Drive file ID.');
   const fields = 'id,name,mimeType,size,modifiedTime,parents,driveId,trashed,webViewLink,capabilities(canEdit,canDelete,canDownload,canRename)';
   const data = await googleDriveJson(sql, env, '/drive/v3/files/' + encodeURIComponent(fileId) +
-    '?supportsAllDrives=true&fields=' + encodeURIComponent(fields));
+    '?supportsAllDrives=true&fields=' + encodeURIComponent(fields), {}, connectionId);
   const summary = googleDrivePublicFileSummary(data);
   if (!summary) throw new Error('Google Drive returned invalid file metadata.');
   if (data.trashed) throw new Error('This Google Drive file is in the trash.');
   return summary;
 }
 
-async function startGoogleDriveUpload(sql, env, body) {
+async function startGoogleDriveUpload(sql, env, body, connectionId = 'primary') {
   const fileName = driveSafeName(body.fileName);
   const parentId = body.parentId === 'root' || !body.parentId ? 'root' : body.parentId;
   if (parentId !== 'root' && !isGoogleDriveFileId(parentId)) throw new Error('Invalid destination folder.');
@@ -532,7 +536,7 @@ async function startGoogleDriveUpload(sql, env, body) {
   let metadata = { name: fileName, mimeType };
   if (replaceFileId) {
     if (!isGoogleDriveFileId(replaceFileId)) throw new Error('Invalid file selected for replacement.');
-    const existing = await driveFileMetadata(sql, env, replaceFileId);
+    const existing = await driveFileMetadata(sql, env, replaceFileId, connectionId);
     if (!existing.capabilities.canEdit) throw new Error('You do not have permission to replace this Drive file.');
     targetPath += '/' + encodeURIComponent(replaceFileId);
     method = 'PATCH';
@@ -547,7 +551,7 @@ async function startGoogleDriveUpload(sql, env, body) {
   });
   const response = await googleDriveApiRequest(sql, env,
     'https://www.googleapis.com' + targetPath + '?' + params.toString(),
-    { method, headers, body: JSON.stringify(metadata) });
+    { method, headers, body: JSON.stringify(metadata) }, connectionId);
   const sessionUrl = response.headers.get('location');
   if (!response.ok || !sessionUrl) {
     try { await response.body?.cancel(); } catch {}
@@ -565,10 +569,10 @@ async function startGoogleDriveUpload(sql, env, body) {
   await ensureGoogleDriveSchema(sql);
   await sql`INSERT INTO public.google_drive_uploads
     (id,file_name,parent_id,drive_id,mime_type,total_bytes,next_byte,
-     session_ciphertext,session_iv,expires_at,state,file_id)
+     session_ciphertext,session_iv,expires_at,connection_id,state,file_id)
     VALUES(${uploadId},${fileName},${parentId},${driveId || null},${mimeType},
       ${total},0,${encryptedSession.ciphertext},${encryptedSession.iv},
-      NOW()+INTERVAL '7 days','active',${replaceFileId || null})`;
+      NOW()+INTERVAL '7 days',${connectionId},'active',${replaceFileId || null})`;
   return { uploadId, chunkSize: 8 * 1024 * 1024, totalBytes: total, nextByte: 0 };
 }
 
@@ -576,7 +580,7 @@ async function googleDriveUploadStatus(sql, env, uploadId) {
   if (!/^[0-9a-f-]{36}$/i.test(uploadId)) throw new Error('Invalid upload ID.');
   await ensureGoogleDriveSchema(sql);
   const rows = await sql`SELECT id,file_name,total_bytes,next_byte,session_ciphertext,session_iv,
-      expires_at,state,file_id
+      expires_at,connection_id,state,file_id
     FROM public.google_drive_uploads WHERE id=${uploadId} LIMIT 1`;
   const upload = rows[0];
   if (!upload) throw new Error('Upload not found.');
@@ -600,7 +604,7 @@ async function googleDriveUploadStatus(sql, env, uploadId) {
   const response = await googleDriveApiRequest(sql, env, sessionUrl, {
     method: 'PUT',
     headers: { 'content-length': '0', 'content-range': 'bytes */' + total }
-  });
+  }, upload.connection_id || 'primary');
   if (response.status === 308) {
     const received = /^bytes=0-([0-9]+)$/.exec(response.headers.get('range') || '');
     const nextByte = received ? Number(received[1]) + 1 : 0;
@@ -633,7 +637,7 @@ async function googleDriveUploadChunk(req, sql, env, uploadId) {
   if (!/^[0-9a-f-]{36}$/i.test(uploadId)) throw new Error('Invalid upload ID.');
   await ensureGoogleDriveSchema(sql);
   const rows = await sql`SELECT id,file_name,mime_type,total_bytes,next_byte,session_ciphertext,session_iv,
-      expires_at,state,file_id
+      expires_at,connection_id,state,file_id
     FROM public.google_drive_uploads WHERE id=${uploadId} LIMIT 1`;
   const upload = rows[0];
   if (!upload || upload.state !== 'active') throw new Error('Upload is not active.');
@@ -670,7 +674,7 @@ async function googleDriveUploadChunk(req, sql, env, uploadId) {
       'content-range': 'bytes ' + start + '-' + end + '/' + total
     },
     body: req.body
-  });
+  }, upload.connection_id || 'primary');
 
   if (response.status === 308) {
     const received = /^bytes=0-([0-9]+)$/.exec(response.headers.get('range') || '');
@@ -697,9 +701,9 @@ async function googleDriveUploadChunk(req, sql, env, uploadId) {
   throw new Error('Google Drive upload chunk failed (HTTP ' + response.status + '). ' + details.slice(0, 160));
 }
 
-async function refreshAttachedGoogleDriveReferences(ctx, sql, env, fileId) {
+async function refreshAttachedGoogleDriveReferences(ctx, sql, env, fileId, connectionId = 'primary') {
   if (!isGoogleDriveFileId(fileId)) return;
-  const metadata = await driveFileMetadata(sql, env, fileId);
+  const metadata = await driveFileMetadata(sql, env, fileId, connectionId);
   const affected = await sql`SELECT id FROM public.movies
     WHERE EXISTS (
       SELECT 1 FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) AS item
@@ -721,12 +725,22 @@ async function refreshAttachedGoogleDriveReferences(ctx, sql, env, fileId) {
 
 async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
   const sql = sqlFor(env);
+  const requestUrl = new URL(req.url);
+  const body = ['POST','PUT','PATCH'].includes(method) ? await readBody(req) : {};
+  const connectionId = String(requestUrl.searchParams.get('accountId') || body.accountId || 'primary');
+  if (!/^(primary|[0-9a-f-]{36})$/i.test(connectionId)) throw new Error('Invalid Google Drive account ID.');
+  if (path === '/api/admin/google-drive/accounts' && method === 'GET') {
+    const accounts = await googleDriveConnections(sql);
+    return json({ accounts: accounts.map(({id,account_email,scopes,connected_at}) => ({id,email:account_email,scopes,connectedAt:connected_at})) });
+  }
+
   if (path === '/api/admin/google-drive/status' && method === 'GET') {
-    const connection = await googleDriveConnection(sql);
+    const connection = await googleDriveConnection(sql, connectionId);
     return json({
       configured: isGoogleDriveConfigured(env),
       configurationIssues: googleDriveConfigurationIssues(env),
       connected: Boolean(connection),
+      accountId: connection?.id || connectionId,
       accountEmail: connection?.account_email || null,
       scopes: connection?.scopes || '',
       connectedAt: connection?.connected_at || null
@@ -734,22 +748,25 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
   }
 
   if (path === '/api/admin/google-drive/oauth/start' && method === 'POST') {
-    const flow = await startGoogleDriveOAuth(env, sql);
-    return json({ authorizationUrl: flow.authorizationUrl }, 200, { 'set-cookie': flow.cookie });
+    const requestedId = body.accountId;
+    const existingAccounts = await googleDriveConnections(sql);
+    const nextId = body.addAccount === true ? (existingAccounts.length ? crypto.randomUUID() : 'primary') : (requestedId || (existingAccounts.length ? 'primary' : 'primary'));
+    const flow = await startGoogleDriveOAuth(env, sql, nextId);
+    return json({ authorizationUrl: flow.authorizationUrl, accountId: nextId }, 200, { 'set-cookie': flow.cookie });
   }
 
   // An authenticated admin can clear a stale connection even if OAuth
   // settings are missing or the previous encryption key has been rotated.
   if (path === '/api/admin/google-drive/disconnect' && method === 'DELETE') {
     await ensureGoogleDriveSchema(sql);
-    await sql`DELETE FROM public.google_drive_connections WHERE id='primary'`;
-    await sql`UPDATE public.google_drive_uploads SET state='cancelled',updated_at=NOW() WHERE state='active'`;
-    clearGoogleDriveAccessTokenCache();
+    await sql`DELETE FROM public.google_drive_connections WHERE id=${connectionId}`;
+    await sql`UPDATE public.google_drive_uploads SET state='cancelled',updated_at=NOW() WHERE state='active' AND connection_id=${connectionId}`;
+    clearGoogleDriveAccessTokenCache(connectionId);
     return json({ ok: true });
   }
 
   if (path === '/api/admin/google-drive/diagnostics' && method === 'GET') {
-    const connection = await googleDriveConnection(sql);
+    const connection = await googleDriveConnection(sql, connectionId);
     const configurationIssues = googleDriveConfigurationIssues(env);
     const dbRows = await sql`SELECT current_database() AS database_name,
       current_schema() AS schema_name,
@@ -772,7 +789,7 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
     }
     let token;
     try {
-      token = await googleDriveAccessToken(sql, env);
+      token = await googleDriveAccessToken(sql, env, connectionId);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown token error';
       const stage = /cannot be decrypted/i.test(message) ? 'refresh_token_decryption' :
@@ -817,7 +834,7 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
 
   if (path === '/api/admin/google-drive/drives' && method === 'GET') {
     const data = await googleDriveJson(sql, env,
-      '/drive/v3/drives?pageSize=100&fields=' + encodeURIComponent('drives(id,name),nextPageToken'));
+      '/drive/v3/drives?pageSize=100&fields=' + encodeURIComponent('drives(id,name),nextPageToken'), {}, connectionId);
     return json({ drives: [{ id: 'root', name: 'My Drive', kind: 'user' }, ...(data.drives || []).map((drive) => ({
       id: drive.id, name: drive.name || 'Shared Drive', kind: 'shared'
     }))], nextPageToken: data.nextPageToken || null });
@@ -849,13 +866,12 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
       params.set('corpora', 'user');
     }
     if (pageToken) params.set('pageToken', pageToken);
-    const data = await googleDriveJson(sql, env, '/drive/v3/files?' + params.toString());
+    const data = await googleDriveJson(sql, env, '/drive/v3/files?' + params.toString(), {}, connectionId);
     const files = (data.files || []).map(googleDrivePublicFileSummary).filter(Boolean);
     return json({ files, nextPageToken: data.nextPageToken || null, parentId, driveId });
   }
 
   if (path === '/api/admin/google-drive/folders' && method === 'POST') {
-    const body = await readBody(req);
     const name = driveSafeName(body.name);
     const parentId = body.parentId || 'root';
     if (parentId !== 'root' && !isGoogleDriveFileId(parentId)) throw new Error('Invalid parent folder ID.');
@@ -865,12 +881,12 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(metadata)
-    });
+    }, connectionId);
     return json({ folder: googleDrivePublicFileSummary(data) }, 201);
   }
 
   if (path === '/api/admin/google-drive/uploads' && method === 'POST') {
-    const upload = await startGoogleDriveUpload(sql, env, await readBody(req));
+    const upload = await startGoogleDriveUpload(sql, env, body, connectionId);
     return json(upload, 201);
   }
 
@@ -902,20 +918,20 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
 
   const fileMatch = /^\/api\/admin\/google-drive\/files\/([A-Za-z0-9_-]{10,200})$/.exec(path);
   if (fileMatch && method === 'GET') {
-    const file = await driveFileMetadata(sql, env, fileMatch[1]);
+    const file = await driveFileMetadata(sql, env, fileMatch[1], connectionId);
     return json({ file });
   }
   if (fileMatch && method === 'PATCH') {
     const body = await readBody(req);
     const name = driveSafeName(body.name);
-    const current = await driveFileMetadata(sql, env, fileMatch[1]);
+    const current = await driveFileMetadata(sql, env, fileMatch[1], connectionId);
     if (!current.capabilities.canEdit || !current.capabilities.canRename) throw new Error('You do not have permission to rename this Drive file.');
     const data = await googleDriveJson(sql, env, '/drive/v3/files/' + encodeURIComponent(fileMatch[1]) +
       '?supportsAllDrives=true&fields=' + encodeURIComponent('id,name,mimeType,size,modifiedTime,parents,driveId,capabilities(canEdit,canDelete,canDownload,canRename)'), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name })
-    });
+    }, connectionId);
     const updatedFile = googleDrivePublicFileSummary(data);
     if (updatedFile) await refreshAttachedGoogleDriveReferences(ctx, sql, env, updatedFile.id);
     return json({ file: updatedFile });
@@ -928,7 +944,7 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
       // there is permanent and the UI asks for explicit confirmation.
       const response = await googleDriveApiRequest(sql, env,
         'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileMatch[1]) + '?supportsAllDrives=true',
-        { method: 'DELETE' });
+        { method: 'DELETE' }, connectionId);
       if (!response.ok && response.status !== 204) {
         const detail = await response.text().catch(() => '');
         throw new Error('Google Drive delete failed (HTTP ' + response.status + '). ' + detail.slice(0, 160));
@@ -939,7 +955,7 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ trashed: true })
-      });
+      }, connectionId);
     }
     const affected = await sql`SELECT id FROM public.movies
       WHERE EXISTS (
@@ -960,7 +976,7 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
     const body = await readBody(req);
     const movieId = typeof body.movieId === 'string' ? body.movieId : '';
     if (!/^[0-9a-f-]{36}$/i.test(movieId)) throw new Error('Choose a valid movie.');
-    const file = await driveFileMetadata(sql, env, String(body.fileId || ''));
+    const file = await driveFileMetadata(sql, env, String(body.fileId || ''), connectionId);
     if (!isDriveVideoFile(file)) throw new Error('Choose a video file (MP4, MKV, MOV, WebM, AVI, or another video MIME type).');
     if (file.capabilities.canDownload === false) throw new Error('This Google Drive file cannot be downloaded by the connected account.');
     const rows = await sql`SELECT videos FROM public.movies WHERE id=${movieId} LIMIT 1`;
@@ -971,7 +987,9 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
       label: (typeof body.label === 'string' && body.label.trim() ? body.label.trim() : file.name).slice(0, 60),
       provider: 'google-drive-private',
       file_id: file.id,
+      account_id: connectionId,
       drive_id: file.driveId || null,
+      account_id: connectionId,
       modified_time: file.modifiedTime || null
     };
     if (sources.some((item) => item?.provider === source.provider && item?.file_id === source.file_id)) {
@@ -1242,7 +1260,7 @@ async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverrid
   let upstream = null;
   for (let hop = 0; hop <= 5; hop++) {
     upstream = hop === 0
-      ? await googleDriveApiRequest(sqlFor(env), env, mediaUrl, { headers: rangeHeaders, signal })
+      ? await googleDriveApiRequest(sqlFor(env), env, mediaUrl, { headers: rangeHeaders, signal }, source.accountId || 'primary')
       : await fetch(mediaUrl, { method: 'GET', headers: rangeHeaders, signal, redirect: 'manual' });
     if (![301, 302, 303, 307, 308].includes(upstream.status)) break;
     const location = upstream.headers.get('location');
@@ -1281,13 +1299,14 @@ function cachedSourceProps(source, normalizedSourceVersion) {
     sourceUrl: source.url,
     sourceVersion: normalizedSourceVersion,
     sourceProvider: source.provider || '',
-    sourceFileId: source.provider === 'google-drive-private' ? source.fileId : ''
+    sourceFileId: source.provider === 'google-drive-private' ? source.fileId : '',
+    sourceAccountId: source.provider === 'google-drive-private' ? (source.accountId || 'primary') : ''
   };
 }
 
-function isValidCachedSource(sourceUrl, sourceProviderName, sourceFileId) {
+function isValidCachedSource(sourceUrl, sourceProviderName, sourceFileId, sourceAccountId) {
   if (sourceProviderName === 'google-drive-private') {
-    return isGoogleDriveFileId(sourceFileId) && sourceUrl === googleDriveMediaUrl(sourceFileId);
+    return isGoogleDriveFileId(sourceFileId) && sourceUrl === googleDriveMediaUrl(sourceFileId) && /^(primary|[0-9a-f-]{36})$/i.test(sourceAccountId || 'primary');
   }
   try {
     const parsed = new URL(sourceUrl);
@@ -1354,13 +1373,14 @@ export class VideoHeader extends WorkerEntrypoint {
     const sourceVersion = String(props.sourceVersion || '');
     const sourceProviderName = props.sourceProvider || '';
     const sourceFileId = props.sourceFileId || '';
-    const source = { url: sourceUrl, provider: sourceProviderName, fileId: sourceFileId };
+    const sourceAccountId = props.sourceAccountId || 'primary';
+    const source = { url: sourceUrl, provider: sourceProviderName, fileId: sourceFileId, accountId: sourceAccountId };
     if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex > 7 ||
         typeof sourceUrl !== 'string' || sourceUrl.length > 2048) {
       return json({ error: 'Invalid internal video header parameters' }, 400);
     }
     try {
-      if (!isValidCachedSource(sourceUrl, sourceProviderName, sourceFileId)) {
+      if (!isValidCachedSource(sourceUrl, sourceProviderName, sourceFileId, sourceAccountId)) {
         return json({ error: 'Unsupported video source' }, 400);
       }
       const digest = await crypto.subtle.digest('SHA-256', enc.encode(sourceUrl + '|' + sourceVersion));
@@ -1662,7 +1682,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   const baseSourceVersion = sourceVersion instanceof Date
     ? sourceVersion.toISOString()
     : String(sourceVersion || '');
-  const normalizedSourceVersion = baseSourceVersion + '|' + String(source.modified_time || '');
+  const normalizedSourceVersion = baseSourceVersion + '|' + String(source.modified_time || '') + '|' + String(source.account_id || 'primary');
   const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url + '|' + normalizedSourceVersion));
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
 
