@@ -809,7 +809,12 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
 
   const uploadMatch = /^\/api\/admin\/google-drive\/uploads\/([0-9a-f-]{36})$/.exec(path);
   if (uploadMatch && method === 'GET') {
-    return json(await googleDriveUploadStatus(sql, env, uploadMatch[1]));
+    const status = await googleDriveUploadStatus(sql, env, uploadMatch[1]);
+    if (status.state === 'complete' && status.fileId) {
+      const cacheUpdate = await refreshAttachedGoogleDriveReferences(ctx, sql, env, status.fileId);
+      status.updatedMovies = cacheUpdate?.updatedMovies || 0;
+    }
+    return json(status);
   }
   if (uploadMatch && method === 'PUT') {
     const progress = await googleDriveUploadChunk(req, sql, env, uploadMatch[1]);
