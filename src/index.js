@@ -1908,10 +1908,12 @@ async function cachedVideoRange(req, env, ctx, source, movieId, optionIndex, ran
   });
   end = responseWindow.end;
 
+  const cacheAcquireStartedAt = Date.now();
   const firstChunk = await getVideoChunk(
     ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
     responseWindow.chunkStart, videoChunkSizeAt(responseWindow.chunkStart, fragmented)
   );
+  const cacheAcquireMs = Date.now() - cacheAcquireStartedAt;
   if (firstChunk.unsatisfiedTotal !== undefined) {
     return new Response(null, {
       status: 416,
@@ -1930,13 +1932,16 @@ async function cachedVideoRange(req, env, ctx, source, movieId, optionIndex, ran
   let streamBody = firstChunk.body;
   let streamMode = firstChunk.cacheStatus === 'HIT' ? 'edge-cache' : 'progressive-cache-fill';
   let directSeek = false;
+  let directSeekSetupMs = 0;
 
   // On a cold seek deep inside a cache chunk, warm the aligned shared object
   // in parallel while a second exact upstream Range starts at the desired byte.
   // This duplicates bytes only for cold deep seeks; subsequent viewers reuse cache.
   if (firstChunk.cacheStatus !== 'HIT' && skipRemaining > VIDEO_DIRECT_SEEK_THRESHOLD) {
     try {
+      const directStartedAt = Date.now();
       const direct = await fetchConfiguredVideoRange(source, responseStart, responseEnd, env, 0, true);
+      directSeekSetupMs = Date.now() - directStartedAt;
       if (!direct.range || direct.range.start !== responseStart ||
           direct.range.total !== total || direct.range.end < responseStart ||
           direct.range.end > responseEnd || !direct.body) {
@@ -2025,7 +2030,9 @@ async function cachedVideoRange(req, env, ctx, source, movieId, optionIndex, ran
       'x-moviwatch-startup-prefetch-chunks': '0',
       'x-moviwatch-startup-prefetch-ms': '0',
       'x-moviwatch-cold-seek-direct': String(directSeek),
-      'x-moviwatch-direct-seek-threshold': String(VIDEO_DIRECT_SEEK_THRESHOLD)
+      'x-moviwatch-direct-seek-threshold': String(VIDEO_DIRECT_SEEK_THRESHOLD),
+      'x-moviwatch-cache-acquire-ms': String(cacheAcquireMs),
+      'x-moviwatch-direct-seek-setup-ms': String(directSeekSetupMs)
     }
   });
 }
@@ -2302,7 +2309,7 @@ async function api(req, env, ctx) {
     const source = storedVideoSource(movie, optionIndex);
     if (!source) return json({ error: 'Google Drive or Archive.org video source not found' }, 404);
 
-    // Serve HEAD and ordinary full-file GET through the same 8 MiB edge cache.
+    // Serve HEAD and ordinary full-file GET through the same 4 MiB edge cache.
     // Only If-Range stays on the origin path because it depends on origin validators.
     if (req.headers.has('If-Range') && source.provider !== 'google-drive-private') {
       const headers = new Headers();
