@@ -18,6 +18,8 @@ includes(drive, 'googleDriveConnections(sql)', 'Connected Drive account listing'
 includes(drive, 'accessTokenCache.get(connectionId)', 'Per-account access-token cache');
 includes(drive, 'googleDriveTokenAad(connectionId)', 'Per-account refresh-token encryption context');
 includes(worker, "body.addAccount === true ? (existingAccounts.length ? crypto.randomUUID() : 'primary')", 'New Drive account ID allocation');
+includes(worker, "prompt: 'consent select_account'", 'Google account chooser for additional accounts');
+includes(worker, 'WHERE LOWER(account_email)=LOWER(${profile.email})', 'Prevent duplicate Google email connections');
 includes(worker, "WHERE id=${connectionId}", 'Connection-scoped refresh-token storage');
 includes(worker, "account_id:accountId", 'Private video account binding');
 includes(worker, "source.accountId || 'primary'", 'Per-account private stream authorization');
