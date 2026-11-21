@@ -1631,9 +1631,12 @@ export class VideoChunk extends WorkerEntrypoint {
         (chunkStart - VIDEO_FRAGMENT_START_CHUNK_SIZE) % VIDEO_CHUNK_SIZE === 0));
     const initialStartupChunk = chunkStart === 0 &&
       (chunkSize === VIDEO_STARTUP_CHUNK_SIZE || chunkSize === VIDEO_FRAGMENT_START_CHUNK_SIZE);
+    const uncachedContinuationPiece = chunkStart > 0 && Number.isSafeInteger(chunkSize) &&
+      chunkSize > 0 && chunkSize <= VIDEO_CHUNK_SIZE;
     if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex > 7 ||
         !Number.isSafeInteger(chunkStart) || chunkStart < 0 ||
-        !(alignedContinuationChunk || initialStartupChunk) ||
+        !(alignedContinuationChunk || initialStartupChunk || uncachedContinuationPiece) ||
+        chunkSize > VIDEO_CHUNK_SIZE ||
         typeof sourceUrl !== 'string' || sourceUrl.length > 2048) {
       return json({ error: 'Invalid internal video chunk parameters' }, 400);
     }
@@ -1659,19 +1662,24 @@ export class VideoChunk extends WorkerEntrypoint {
         });
       }
 
-      return new Response(result.bytes, {
-        status: 200,
-        headers: {
-          'content-type': result.contentType,
-          'content-length': String(result.bytes.byteLength),
-          'cache-control': 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600',
-          'cache-tag': 'video-chunks-' + movieId,
-          'x-moviwatch-start': String(result.start),
-          'x-moviwatch-end': String(result.end),
-          'x-moviwatch-total': String(result.total),
-          'x-moviwatch-container': result.container
-        }
+      const cacheable = !result.partial && (alignedContinuationChunk || initialStartupChunk);
+      const headers = new Headers({
+        'content-type': result.contentType,
+        'content-length': String(result.bytes.byteLength),
+        'x-moviwatch-start': String(result.start),
+        'x-moviwatch-end': String(result.end),
+        'x-moviwatch-total': String(result.total),
+        'x-moviwatch-container': result.container
       });
+      if (cacheable) {
+        headers.set('cache-control', 'public, max-age=' + VIDEO_CACHE_TTL + ', stale-if-error=3600');
+        headers.set('cache-tag', 'video-chunks-' + movieId);
+        return new Response(result.bytes, { status: 200, headers });
+      }
+      headers.set('cache-control', 'private, no-store, max-age=0');
+      headers.set('content-range', 'bytes ' + result.start + '-' + result.end + '/' + result.total);
+      headers.set('x-moviwatch-upstream-mode', 'short-range-no-cache');
+      return new Response(result.bytes, { status: 206, headers });
     } catch (error) {
       console.error('Tiered video chunk fill failed:', error?.message || error);
       const detail = error instanceof Error ? error.message : 'Unknown video chunk error';
@@ -1879,10 +1887,6 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   const normalizedSourceVersion = baseSourceVersion + '|' + String(source.modified_time || '') + '|' + String(source.account_id || 'primary');
   const sourceDigest = await crypto.subtle.digest('SHA-256', enc.encode(source.url + '|' + normalizedSourceVersion));
   const sourceHash = hex(new Uint8Array(sourceDigest)).slice(0, 32);
-
-  // The cached header probe identifies fragmented MP4 for every range request,
-  // including seeks. Keep a compact first segment and 8 MiB continuation chunks
-  // so cold seeks do not have to wait for a 8 MiB Archive.org/Drive transfer.
   const header = await getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash);
   const fragmented = header.fragmented === true;
   const total = header.total;
@@ -1909,27 +1913,23 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
 
   if (startupPrefetch) {
     const prefetchStarted = Date.now();
-    // Fetch only the small first segment on the critical path. The next
-    // continuation segment is warmed asynchronously as the response streams.
     const starts = [0];
-
-    const chunkPromises = starts.map((chunkStart) =>
-      getVideoChunk(
-        ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
-        chunkStart, videoChunkSizeAt(chunkStart, fragmented)
-      )
-    );
-    for (let i = 0; i < starts.length; i++) prefetched.set(starts[i], chunkPromises[i]);
-    ctx.waitUntil(Promise.allSettled(chunkPromises));
+    for (const chunkStart of starts) {
+      const chunkPromise = getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
+        chunkStart, videoChunkSizeAt(chunkStart, fragmented)).catch((error) => {
+          prefetched.delete(chunkStart);
+          throw error;
+        });
+      prefetched.set(chunkStart, chunkPromise);
+    }
+    ctx.waitUntil(Promise.allSettled([...prefetched.values()]));
     startupPrefetchCount = starts.length;
     startupPrefetchMs = Date.now() - prefetchStarted;
     cacheStatus = 'PREFETCH';
   } else {
     const firstStart = videoChunkStartForOffset(start, fragmented);
-    const firstChunk = await getVideoChunk(
-      ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
-      firstStart, videoChunkSizeAt(firstStart, fragmented)
-    );
+    const firstChunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
+      firstStart, videoChunkSizeAt(firstStart, fragmented));
     if (firstChunk.unsatisfiedTotal !== undefined) {
       return new Response(null, {
         status: 416,
@@ -1946,6 +1946,22 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
   const contentLength = responseEnd - responseStart + 1;
   let cursor = responseStart;
   let chunk = null;
+  let uncachedStream = false;
+  let prefetchedForChunkStart = -1;
+
+  const startNextPrefetch = (currentChunk) => {
+    if (req.method !== 'GET' || uncachedStream || currentChunk.partial) return;
+    const nextChunkStart = currentChunk.end + 1;
+    if (nextChunkStart >= total || prefetched.has(nextChunkStart)) return;
+    const nextPromise = getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
+      nextChunkStart, videoChunkSizeAt(nextChunkStart, fragmented)).catch((error) => {
+        prefetched.delete(nextChunkStart);
+        throw error;
+      });
+    prefetched.set(nextChunkStart, nextPromise);
+    ctx.waitUntil(Promise.allSettled([nextPromise]));
+  };
+
   const body = new ReadableStream({
     async pull(controller) {
       try {
@@ -1953,40 +1969,42 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
           controller.close();
           return;
         }
-        const expectedChunkStart = videoChunkStartForOffset(cursor, fragmented);
-        if (!chunk || chunk.start !== expectedChunkStart) {
-          const pending = prefetched.get(expectedChunkStart);
-          chunk = pending
-            ? await pending
-            : await getVideoChunk(
-                ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
-                expectedChunkStart, videoChunkSizeAt(expectedChunkStart, fragmented)
-              );
-          prefetched.delete(expectedChunkStart);
-          if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total) {
-            throw new Error('Video source size changed during streaming');
+        if (!chunk || cursor > chunk.end) {
+          if (chunk?.partial) uncachedStream = true;
+          const nextStart = uncachedStream ? cursor : videoChunkStartForOffset(cursor, fragmented);
+          const nextSize = uncachedStream
+            ? Math.min(VIDEO_CHUNK_SIZE, responseEnd - cursor + 1)
+            : videoChunkSizeAt(nextStart, fragmented);
+          const pending = prefetched.get(nextStart);
+          if (pending) {
+            try { chunk = await pending; }
+            catch (error) { prefetched.delete(nextStart); throw error; }
+          } else {
+            chunk = await getVideoChunk(ctx, source, movieId, optionIndex, normalizedSourceVersion,
+              sourceHash, nextStart, nextSize);
           }
+          prefetched.delete(nextStart);
+          if (chunk.unsatisfiedTotal !== undefined || chunk.total !== total ||
+              chunk.start !== nextStart || chunk.end < cursor) {
+            throw new Error('Video source returned an inconsistent continuation range');
+          }
+          if (chunk.partial) uncachedStream = true;
         }
 
-        // Keep one segment ahead warm while the browser consumes the current
-        // range. This is especially useful after a seek: the target segment is
-        // fetched immediately, and its successor starts filling in parallel.
-        const nextChunkStart = chunk.end + 1;
-        if (nextChunkStart < total && !prefetched.has(nextChunkStart)) {
-          const nextPromise = getVideoChunk(
-            ctx, source, movieId, optionIndex, normalizedSourceVersion, sourceHash,
-            nextChunkStart, videoChunkSizeAt(nextChunkStart, fragmented)
-          );
-          prefetched.set(nextChunkStart, nextPromise);
-          ctx.waitUntil(Promise.allSettled([nextPromise]));
-        }
-
-        const from = cursor - chunk.start;
-        const through = Math.min(responseEnd, chunk.end) - chunk.start + 1;
-        if (through <= from) throw new Error('Invalid cached video chunk boundary');
-        const output = chunk.bytes.subarray(from, through);
+        const through = Math.min(responseEnd + 1, chunk.end + 1, cursor + 256 * 1024);
+        const fromOffset = cursor - chunk.start;
+        const output = chunk.bytes.subarray(fromOffset, through - chunk.start);
+        if (!output.byteLength) throw new Error('Invalid cached video chunk boundary');
         cursor += output.byteLength;
         controller.enqueue(output);
+
+        // Start at most one successor fetch only after the viewer has consumed
+        // half of the current cached chunk. Never prefetch for HEAD requests.
+        const midpoint = chunk.start + Math.ceil(chunk.bytes.byteLength / 2);
+        if (!chunk.partial && cursor >= midpoint && prefetchedForChunkStart !== chunk.start) {
+          prefetchedForChunkStart = chunk.start;
+          startNextPrefetch(chunk);
+        }
         if (cursor > responseEnd) controller.close();
       } catch (error) {
         controller.error(error);
@@ -1994,6 +2012,7 @@ async function cachedVideoRange(req, ctx, source, movieId, optionIndex, rangeHea
     },
     cancel() {
       chunk = null;
+      prefetched.clear();
     }
   });
 
