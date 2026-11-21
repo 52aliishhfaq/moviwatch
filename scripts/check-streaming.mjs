@@ -317,15 +317,21 @@ async function readAll(reader) {
   assert.equal(continuationCalls, 1);
 }
 {
+  let continuationCalls = 0;
   const relay = createRangeRelayStream({
     firstPart: { range: { start: 0, end: 1, total: 4 }, body: byteStream([[0]]) },
     end: 1,
     total: 4,
-    fetchPart: async () => { throw new Error('must not fetch continuation'); }
+    fetchPart: async (start, end) => {
+      continuationCalls++;
+      assert.equal(start, 1);
+      assert.equal(end, 1);
+      return { range: { start: 1, end: 1, total: 4 }, body: byteStream([[1]]) };
+    }
   });
   const reader = relay.getReader();
-  assert.deepEqual([...((await reader.read()).value)], [0]);
-  await assert.rejects(() => reader.read(), /ended before the requested byte range was complete/);
+  assert.deepEqual(await readAll(reader), [0, 1]);
+  assert.equal(continuationCalls, 1, 'A truncated upstream body must resume at the first missing byte');
 }
 {
   const relay = createRangeRelayStream({
