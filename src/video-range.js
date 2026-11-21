@@ -2,7 +2,7 @@ export const VIDEO_CHUNK_SIZE = 4 * 1024 * 1024;
 export const VIDEO_STARTUP_CHUNK_SIZE = 1024 * 1024;
 export const VIDEO_FRAGMENT_START_CHUNK_SIZE = 512 * 1024;
 
-function parseByteRange(value) {
+export function parseByteRange(value) {
   if (typeof value !== 'string' || !value.startsWith('bytes=')) return null;
   const spec = value.slice(6).trim();
   if (spec.includes(',')) return { invalid: true };
@@ -19,7 +19,7 @@ function parseByteRange(value) {
   return { start, end };
 }
 
-function parseContentRange(value) {
+export function parseContentRange(value) {
   const match = new RegExp('^bytes ([0-9]+)-([0-9]+)/([0-9]+)$').exec(value || '');
   if (!match) return null;
   const start = Number(match[1]), end = Number(match[2]), total = Number(match[3]);
@@ -27,7 +27,7 @@ function parseContentRange(value) {
   return { start, end, total };
 }
 
-function mp4MoovEnd(bytes) {
+export function mp4MoovEnd(bytes) {
   // Parse top-level ISO-BMFF boxes from the small cached file-header probe.
   let offset = 0;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -55,7 +55,7 @@ function mp4MoovEnd(bytes) {
   return null;
 }
 
-function mp4HasMvex(bytes) {
+export function mp4HasMvex(bytes) {
   // A fragmented MP4 has an mvex box as a direct child of its initial moov.
   // Return false when the complete moov is not present in the tiny probe.
   let offset = 0;
@@ -97,13 +97,13 @@ function mp4HasMvex(bytes) {
   return false;
 }
 
-function videoChunkStartForOffset(offset, fragmented) {
+export function videoChunkStartForOffset(offset, fragmented) {
   const startupSize = fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE;
   if (offset < startupSize) return 0;
   return startupSize + Math.floor((offset - startupSize) / VIDEO_CHUNK_SIZE) * VIDEO_CHUNK_SIZE;
 }
 
-function videoChunkSizeAt(chunkStart, fragmented) {
+export function videoChunkSizeAt(chunkStart, fragmented) {
   if (chunkStart !== 0) return VIDEO_CHUNK_SIZE;
   return fragmented ? VIDEO_FRAGMENT_START_CHUNK_SIZE : VIDEO_STARTUP_CHUNK_SIZE;
 }
