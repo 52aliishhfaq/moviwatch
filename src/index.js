@@ -808,22 +808,39 @@ async function refreshAttachedGoogleDriveReferences(ctx, sql, env, fileId, conne
   if (!isGoogleDriveFileId(fileId)) return;
   const metadata = await driveFileMetadata(sql, env, fileId, connectionId);
   const affected = await sql`SELECT id FROM public.movies
-    WHERE EXISTS (
-      SELECT 1 FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) AS item
+    WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) AS item
       WHERE item->>'provider'='google-drive-private' AND item->>'file_id'=${fileId}
-    )`;
+        AND COALESCE(item->>'account_id','primary')=${connectionId})`;
   for (const movie of affected) {
     const rows = await sql`SELECT videos FROM public.movies WHERE id=${movie.id} LIMIT 1`;
     const sources = Array.isArray(rows[0]?.videos) ? rows[0].videos : [];
     const updated = sources.map((source) => {
-      if (source?.provider !== 'google-drive-private' || source?.file_id !== fileId) return source;
+      if (source?.provider !== 'google-drive-private' || source?.file_id !== fileId ||
+          (source?.account_id || 'primary') !== connectionId) return source;
       return { ...source, modified_time: metadata.modifiedTime, drive_id: metadata.driveId || null };
     });
     await sql`UPDATE public.movies SET videos=${JSON.stringify(updated)}::jsonb,updated_at=NOW()
       WHERE id=${movie.id}`;
     await invalidateContentCaches(ctx, movie.id);
   }
-  return { updatedMovies: affected.length, modifiedTime: metadata.modifiedTime };
+  await ensureSeriesSchema(sql);
+  const affectedEpisodes = await sql`SELECT id FROM public.episodes
+    WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) AS item
+      WHERE item->>'provider'='google-drive-private' AND item->>'file_id'=${fileId}
+        AND COALESCE(item->>'account_id','primary')=${connectionId})`;
+  for (const episode of affectedEpisodes) {
+    const rows = await sql`SELECT videos FROM public.episodes WHERE id=${episode.id} LIMIT 1`;
+    const sources = Array.isArray(rows[0]?.videos) ? rows[0].videos : [];
+    const updated = sources.map((source) => {
+      if (source?.provider !== 'google-drive-private' || source?.file_id !== fileId ||
+          (source?.account_id || 'primary') !== connectionId) return source;
+      return { ...source, modified_time: metadata.modifiedTime, drive_id: metadata.driveId || null };
+    });
+    await sql`UPDATE public.episodes SET videos=${JSON.stringify(updated)}::jsonb,updated_at=NOW()
+      WHERE id=${episode.id}`;
+    await invalidateContentCaches(ctx, episode.id);
+  }
+  return { updatedMovies: affected.length, updatedEpisodes: affectedEpisodes.length, modifiedTime: metadata.modifiedTime };
 }
 
 async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
@@ -1060,18 +1077,31 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
       }, connectionId);
     }
     const affected = await sql`SELECT id FROM public.movies
-      WHERE EXISTS (
-        SELECT 1 FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) AS item
+      WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) AS item
         WHERE item->>'provider'='google-drive-private' AND item->>'file_id'=${fileMatch[1]}
-      )`;
+          AND COALESCE(item->>'account_id','primary')=${connectionId})`;
     for (const movie of affected) {
-      await sql`UPDATE public.movies SET videos=COALESCE((
-          SELECT jsonb_agg(item) FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) AS item
-          WHERE NOT (item->>'provider'='google-drive-private' AND item->>'file_id'=${fileMatch[1]})
-        ),'[]'::jsonb),updated_at=NOW() WHERE id=${movie.id}`;
+      const rows = await sql`SELECT videos FROM public.movies WHERE id=${movie.id} LIMIT 1`;
+      const sources = Array.isArray(rows[0]?.videos) ? rows[0].videos : [];
+      const remaining = sources.filter((item) => !(item?.provider==='google-drive-private' &&
+        item?.file_id===fileMatch[1] && (item?.account_id || 'primary')===connectionId));
+      await sql`UPDATE public.movies SET videos=${JSON.stringify(remaining)}::jsonb,updated_at=NOW() WHERE id=${movie.id}`;
       await invalidateContentCaches(ctx, movie.id);
     }
-    return json({ ok: true, detachedMovies: affected.length });
+    await ensureSeriesSchema(sql);
+    const affectedEpisodes = await sql`SELECT id FROM public.episodes
+      WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) AS item
+        WHERE item->>'provider'='google-drive-private' AND item->>'file_id'=${fileMatch[1]}
+          AND COALESCE(item->>'account_id','primary')=${connectionId})`;
+    for (const episode of affectedEpisodes) {
+      const rows = await sql`SELECT videos FROM public.episodes WHERE id=${episode.id} LIMIT 1`;
+      const sources = Array.isArray(rows[0]?.videos) ? rows[0].videos : [];
+      const remaining = sources.filter((item) => !(item?.provider==='google-drive-private' &&
+        item?.file_id===fileMatch[1] && (item?.account_id || 'primary')===connectionId));
+      await sql`UPDATE public.episodes SET videos=${JSON.stringify(remaining)}::jsonb,updated_at=NOW() WHERE id=${episode.id}`;
+      await invalidateContentCaches(ctx, episode.id);
+    }
+    return json({ ok: true, detachedMovies: affected.length, detachedEpisodes: affectedEpisodes.length });
   }
 
   if (path === '/api/admin/google-drive/attach' && method === 'POST') {
