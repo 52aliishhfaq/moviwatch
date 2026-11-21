@@ -43,7 +43,7 @@ The admin dashboard includes an optional Google Drive Manager. It uses the conne
 
 Features:
 - Browse My Drive and Shared Drives, open folders, search within the current folder, and create folders.
-- Upload new files to the selected folder using resumable 4 MiB chunks.
+- Upload new files to the selected folder using resumable 8 MiB chunks.
 - Replace the contents of an existing file without changing its Drive file ID.
 - Rename files, move My Drive files to Trash, and delete Shared Drive files (Shared Drive deletion is permanent).
 - Connect multiple Google accounts and switch between their My Drive and Shared Drives from the Admin selector; adding another account does not replace the first.
