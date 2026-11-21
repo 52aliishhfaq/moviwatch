@@ -638,6 +638,28 @@ async function googleDriveUploadChunk(req, sql, env, uploadId) {
   throw new Error('Google Drive upload chunk failed (HTTP ' + response.status + '). ' + details.slice(0, 160));
 }
 
+async function refreshAttachedGoogleDriveReferences(ctx, sql, env, fileId) {
+  if (!isGoogleDriveFileId(fileId)) return;
+  const metadata = await driveFileMetadata(sql, env, fileId);
+  const affected = await sql`SELECT id FROM public.movies
+    WHERE EXISTS (
+      SELECT 1 FROM jsonb_array_elements(COALESCE(videos,'[]'::jsonb)) AS item
+      WHERE item->>'provider'='google-drive-private' AND item->>'file_id'=${fileId}
+    )`;
+  for (const movie of affected) {
+    const rows = await sql`SELECT videos FROM public.movies WHERE id=${movie.id} LIMIT 1`;
+    const sources = Array.isArray(rows[0]?.videos) ? rows[0].videos : [];
+    const updated = sources.map((source) => {
+      if (source?.provider !== 'google-drive-private' || source?.file_id !== fileId) return source;
+      return { ...source, modified_time: metadata.modifiedTime, drive_id: metadata.driveId || null };
+    });
+    await sql`UPDATE public.movies SET videos=${JSON.stringify(updated)}::jsonb,updated_at=NOW()
+      WHERE id=${movie.id}`;
+    await invalidateContentCaches(ctx, movie.id);
+  }
+  return { updatedMovies: affected.length, modifiedTime: metadata.modifiedTime };
+}
+
 async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
   const sql = sqlFor(env);
   if (path === '/api/admin/google-drive/status' && method === 'GET') {
@@ -741,6 +763,13 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
   }
   if (uploadMatch && method === 'PUT') {
     const progress = await googleDriveUploadChunk(req, sql, env, uploadMatch[1]);
+    if (progress.complete && progress.file?.id) {
+      const uploadRows = await sql`SELECT file_id FROM public.google_drive_uploads WHERE id=${uploadMatch[1]} LIMIT 1`;
+      if (uploadRows[0]?.file_id) {
+        const cacheUpdate = await refreshAttachedGoogleDriveReferences(ctx, sql, env, progress.file.id);
+        progress.updatedMovies = cacheUpdate?.updatedMovies || 0;
+      }
+    }
     return json(progress);
   }
   if (uploadMatch && method === 'DELETE') {
@@ -765,7 +794,9 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name })
     });
-    return json({ file: googleDrivePublicFileSummary(data) });
+    const updatedFile = googleDrivePublicFileSummary(data);
+    if (updatedFile) await refreshAttachedGoogleDriveReferences(ctx, sql, env, updatedFile.id);
+    return json({ file: updatedFile });
   }
   if (fileMatch && method === 'DELETE') {
     const current = await driveFileMetadata(sql, env, fileMatch[1]);
