@@ -106,12 +106,7 @@ button.danger{background:#9c3847;border-color:#9c3847;width:auto;padding:7px 10p
         </div>
         <div class="drive-progress" style="margin-top:10px"><span id="driveProgressBar"></span></div>
         <p id="driveUploadStatus" class="drive-hint" role="status">Uploads use resumable 8 MB chunks.</p>
-        <label for="driveAttachMovie">Attach selected file to a catalogue movie (private streaming)</label>
-        <div class="drive-controls">
-          <select id="driveAttachMovie"><option value="">Choose a movie…</option></select>
-          <button id="driveAttach" type="button" disabled>Attach</button>
-        </div>
-        <p class="drive-hint">Attached files stream through Moviwatch’s protected Worker and shared 24-hour cache. Their Google Drive links are not shown to visitors.</p>
+        <p class="drive-hint">Use <strong>Publish</strong> beside a video to create a movie in one step. Use <strong>Manage</strong> for rename, replace or delete actions. Private videos stream through Moviwatch’s protected Worker and shared cache.</p>
         <p class="drive-workflow-hint">Easy publishing: click <strong>Publish</strong> beside a video, add its movie name and poster below, then click <strong>Publish movie</strong>.</p>
         <div id="driveFileList" style="margin-top:12px">Loading Drive files…</div>
         <button id="driveLoadMore" type="button" class="secondary hidden">Load more</button>
@@ -210,7 +205,6 @@ async function refresh(){
     const stats=statsData.stats||{};
     $('#stats').textContent=(stats.total||0)+' total · '+(stats.published||0)+' published · '+(stats.action||0)+' Action · '+(stats.romantic||0)+' Romantic';
     renderMovies();
-    driveMovieOptions();
     refreshDriveStatus();
   }catch(error){$('#formNotice').textContent=error.message;}
 }
@@ -259,12 +253,6 @@ function formatDriveBytes(value){
   while(size>=1024&&index<units.length-1){size/=1024;index++;}
   return size.toFixed(size>=10?1:2)+' '+units[index];
 }
-function driveMovieOptions(){
-  const select=$('#driveAttachMovie'),previous=select.value;
-  select.replaceChildren(new Option('Choose a movie…',''));
-  movies.forEach(movie=>select.add(new Option(movie.title,movie.id)));
-  if(movies.some(movie=>movie.id===previous))select.value=previous;
-}
 function setPendingPublishFile(file){
   pendingPublishFile=file||null;
   const panel=$('#publishDriveSelection');
@@ -301,14 +289,13 @@ function updateDriveSelected(file){
   $('#driveSelectedName').textContent=file?file.name:'No file selected';
   $('#driveSelectedMeta').textContent=file?
     [file.mimeType,formatDriveBytes(file.size),file.modifiedTime?new Date(file.modifiedTime).toLocaleString():''].filter(Boolean).join(' · '):
-    'Select a video file to attach it or replace its contents.';
+    'Select a file to manage it, or click Publish beside a video to create a movie.';
   const enabled=Boolean(file&&file.mimeType!=='application/vnd.google-apps.folder'&&
     (/^video\//i.test(file.mimeType||'')||/\.(mp4|m4v|mov|mkv|webm|avi|mpg|mpeg|mpe|3gp|3g2|ts|ogv|flv)$/i.test(file.name||'')));
   $('#driveRename').disabled=!file||!file.capabilities?.canRename;
   $('#driveReplace').disabled=!enabled||!file.capabilities?.canEdit;
   $('#driveTrash').disabled=!file||!file.capabilities?.canDelete;
   $('#driveTrash').textContent=file?.driveId?'Delete permanently':'Move to trash';
-  $('#driveAttach').disabled=!enabled||!$('#driveAttachMovie').value;
 }
 async function refreshDriveStatus(){
   try{
@@ -390,12 +377,9 @@ function renderDriveFiles(){
       publish.disabled=pendingPublishFile?.id===file.id;
       publish.addEventListener('click',()=>stageDriveFileForMovie(file));
       actions.append(publish);
-      const select=document.createElement('button');select.className='secondary';select.type='button';select.textContent=driveSelected?.id===file.id?'Selected':'Select';
+      const select=document.createElement('button');select.className='secondary';select.type='button';select.textContent=driveSelected?.id===file.id?'Managing':'Manage';
       select.addEventListener('click',()=>{updateDriveSelected(file);renderDriveFiles();});
       actions.append(select);
-      const attach=document.createElement('button');attach.type='button';attach.textContent='Attach';
-      attach.addEventListener('click',()=>{updateDriveSelected(file);renderDriveFiles();$('#driveAttachMovie').focus();});
-      actions.append(attach);
     }
     row.append(name,actions);list.append(row);
   });
@@ -447,14 +431,6 @@ $('#driveTrash').addEventListener('click',async()=>{
   try{
     const result=await api('/api/admin/google-drive/files/'+encodeURIComponent(driveSelected.id),{method:'DELETE'});
     updateDriveSelected(null);await loadDriveFiles(true);await refresh();driveMessage('File moved to trash. Detached from '+result.detachedMovies+' movie(s).');
-  }catch(error){driveMessage(error.message,true);}
-});
-$('#driveAttachMovie').addEventListener('change',()=>{$('#driveAttach').disabled=!(driveSelected&&driveSelected.mimeType!=='application/vnd.google-apps.folder'&&$('#driveAttachMovie').value);});
-$('#driveAttach').addEventListener('click',async()=>{
-  if(!driveSelected||!$('#driveAttachMovie').value)return;
-  try{
-    await api('/api/admin/google-drive/attach',{method:'POST',body:JSON.stringify({movieId:$('#driveAttachMovie').value,fileId:driveSelected.id,label:driveSelected.name})});
-    await refresh();driveMessage('Private Drive file attached to the selected movie.');
   }catch(error){driveMessage(error.message,true);}
 });
 $('#driveLoadMore').addEventListener('click',()=>loadDriveFiles(false).catch(error=>driveMessage(error.message,true)));
