@@ -1957,7 +1957,7 @@ async function cachedVideoRange(req, env, ctx, source, movieId, optionIndex, ran
   // On a cold seek deep inside a cache chunk, warm the aligned shared object
   // in parallel while a second exact upstream Range starts at the desired byte.
   // This duplicates bytes only for cold deep seeks; subsequent viewers reuse cache.
-  const directSeekCacheMiss = ['MISS', 'EXPIRED', 'REVALIDATED', 'UPDATING', 'STALE', 'BYPASS'].includes(firstChunk.cacheStatus);
+  const directSeekCacheMiss = ['MISS', 'EXPIRED'].includes(firstChunk.cacheStatus);
   if (directSeekCacheMiss && skipRemaining > VIDEO_DIRECT_SEEK_THRESHOLD) {
     try {
       const directStartedAt = Date.now();
