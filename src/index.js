@@ -593,13 +593,13 @@ async function googleDriveJson(sql, env, path, options = {}, connectionId = 'pri
 
 function driveSafeName(value) {
   if (typeof value !== 'string') throw new Error('File or folder name is required.');
-  const name = value.normalize('NFC').replace(/[\\/:*\x00-\x1f\x7f]/g, '').trim();
+  const name = value.normalize('NFC').replace(/[\/:*\x00-\x1f\x7f]/g, '').trim();
   if (!name || name === '.' || name === '..' || name.length > 240) throw new Error('Use a valid name (1–240 characters).');
   return name;
 }
 
 function driveQueryEscape(value) {
-  return String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return String(value).replace(/\/g, '\\\\').replace(/'/g, "\\'");
 }
 
 function isDriveVideoFile(file) {
@@ -997,7 +997,7 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
   if (uploadMatch && method === 'GET') {
     const status = await googleDriveUploadStatus(sql, env, uploadMatch[1]);
     if (status.state === 'complete' && status.fileId) {
-      const cacheUpdate = await refreshAttachedGoogleDriveReferences(ctx, sql, env, status.fileId);
+      const cacheUpdate = await refreshAttachedGoogleDriveReferences(ctx, sql, env, status.fileId, connectionId);
       status.updatedMovies = cacheUpdate?.updatedMovies || 0;
     }
     return json(status);
@@ -1005,9 +1005,9 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
   if (uploadMatch && method === 'PUT') {
     const progress = await googleDriveUploadChunk(req, sql, env, uploadMatch[1]);
     if (progress.complete && progress.file?.id) {
-      const uploadRows = await sql`SELECT file_id FROM public.google_drive_uploads WHERE id=${uploadMatch[1]} LIMIT 1`;
+      const uploadRows = await sql`SELECT file_id,connection_id FROM public.google_drive_uploads WHERE id=${uploadMatch[1]} LIMIT 1`;
       if (uploadRows[0]?.file_id) {
-        const cacheUpdate = await refreshAttachedGoogleDriveReferences(ctx, sql, env, progress.file.id);
+        const cacheUpdate = await refreshAttachedGoogleDriveReferences(ctx, sql, env, progress.file.id, uploadRows[0]?.connection_id || connectionId);
         progress.updatedMovies = cacheUpdate?.updatedMovies || 0;
       }
     }
@@ -1035,11 +1035,11 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
       body: JSON.stringify({ name })
     }, connectionId);
     const updatedFile = googleDrivePublicFileSummary(data);
-    if (updatedFile) await refreshAttachedGoogleDriveReferences(ctx, sql, env, updatedFile.id);
+    if (updatedFile) await refreshAttachedGoogleDriveReferences(ctx, sql, env, updatedFile.id, connectionId);
     return json({ file: updatedFile });
   }
   if (fileMatch && method === 'DELETE') {
-    const current = await driveFileMetadata(sql, env, fileMatch[1]);
+    const current = await driveFileMetadata(sql, env, fileMatch[1], connectionId);
     if (!current.capabilities.canDelete) throw new Error('You do not have permission to move this Drive file to trash.');
     if (current.driveId) {
       // Shared Drive items do not use an individual user's trash. Deleting
@@ -1075,7 +1075,6 @@ async function handleGoogleDriveAdmin(req, env, ctx, path, method) {
   }
 
   if (path === '/api/admin/google-drive/attach' && method === 'POST') {
-    const body = await readBody(req);
     const movieId = typeof body.movieId === 'string' ? body.movieId : '';
     if (!/^[0-9a-f-]{36}$/i.test(movieId)) throw new Error('Choose a valid movie.');
     const file = await driveFileMetadata(sql, env, String(body.fileId || ''), connectionId);
@@ -1998,7 +1997,7 @@ async function api(req, env, ctx) {
   }
   if (path === '/api/auth/me' && method === 'GET') return await isAdmin(req, env) ? json({ authenticated: true }) : json({ authenticated: false }, 401);
 
-  const contentMatch = /^\\/api\\/content\\/([0-9a-f-]{36})$/.exec(path);
+  const contentMatch = /^\/api\/content\/([0-9a-f-]{36})$/.exec(path);
   if (contentMatch && method === 'GET') {
     const contentId = contentMatch[1];
     const sql = sqlFor(env);
@@ -2076,7 +2075,7 @@ async function api(req, env, ctx) {
 
     const cleanPart = (value) => String(value || '')
       .normalize('NFKC')
-      .replace(/[\\/:*?"<>|\x00-\x1F]/g, '')
+      .replace(/[\/:*?"<>|\x00-\x1F]/g, '')
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 90);
@@ -2105,7 +2104,7 @@ async function api(req, env, ctx) {
         const filename = baseName + (optionName ? ' - ' + optionName : '') + '.' + extension;
         const fallback = filename.normalize('NFKD')
           .replace(/[^\x20-\x7E]/g, '')
-          .replace(/[\\/:*?"<>|\x00-\x1F]/g, '')
+          .replace(/[\/:*?"<>|\x00-\x1F]/g, '')
           .replace(/[\r\n]/g, '')
           .trim() || 'Moviwatch-download.' + extension;
         const encoded = encodeURIComponent(filename).replace(/[!'()*]/g,
@@ -2142,7 +2141,7 @@ async function api(req, env, ctx) {
       const filename = baseName + (optionName ? ' - ' + optionName : '') + '.' + extension;
       const fallback = filename.normalize('NFKD')
         .replace(/[^\x20-\x7E]/g, '')
-        .replace(/[\\/:*?"<>|\x00-\x1F]/g, '')
+        .replace(/[\/:*?"<>|\x00-\x1F]/g, '')
         .replace(/[\r\n]/g, '')
         .trim() || 'Moviwatch-download.' + extension;
       const encoded = encodeURIComponent(filename).replace(/[!'()*]/g,
@@ -2313,7 +2312,7 @@ async function api(req, env, ctx) {
         await invalidateContentCaches(ctx);
         return json({ series: rows[0] }, 201);
       }
-      const seriesMatch = /^\\/api\\/admin\\/series\\/([0-9a-f-]{36})$/.exec(path);
+      const seriesMatch = /^\/api\/admin\/series\/([0-9a-f-]{36})$/.exec(path);
       if (seriesMatch) {
         const seriesId = seriesMatch[1];
         if (method === 'PUT') {
@@ -2332,7 +2331,7 @@ async function api(req, env, ctx) {
           return json({ ok: true });
         }
       }
-      const episodeCreateMatch = /^\\/api\\/admin\\/series\\/([0-9a-f-]{36})\\/episodes$/.exec(path);
+      const episodeCreateMatch = /^\/api\/admin\/series\/([0-9a-f-]{36})\/episodes$/.exec(path);
       if (episodeCreateMatch && method === 'POST') {
         const seriesId = episodeCreateMatch[1];
         const value = episodeInput(await readBody(req));
@@ -2344,7 +2343,7 @@ async function api(req, env, ctx) {
         await invalidateContentCaches(ctx);
         return json({ episode: rows[0] }, 201);
       }
-      const episodeMatch = /^\\/api\\/admin\\/episodes\\/([0-9a-f-]{36})$/.exec(path);
+      const episodeMatch = /^\/api\/admin\/episodes\/([0-9a-f-]{36})$/.exec(path);
       if (episodeMatch) {
         const episodeId = episodeMatch[1];
         if (method === 'PUT') {
