@@ -114,6 +114,14 @@ Cloudflare Workers continue to store video chunks for 24 hours: the first conven
 
 For fragmented MP4, the Worker's first cached segment is 512 KiB; conventional MP4 starts with 1 MiB. Both formats use 4 MiB continuation chunks after the initial segment. Each 206 response ends at the current cache-chunk boundary, even for an open-ended bytes=N- request. The browser asks for later ranges only when its media pipeline needs more bytes; the Worker does not stream the remainder of the file or prefetch a successor chunk.
 
+## Progressive two-proxy streaming
+
+Vercel's /api/* external rewrite stays a thin same-origin gateway. It preserves the browser-facing URL and playback-cookie security; Vercel CDN rewrite caching is intentionally not enabled for private media responses. The Cloudflare Worker is the streaming and shared-cache layer. It forwards upstream response bodies as ReadableStreams and no longer builds a whole 4 MiB Uint8Array before returning video bytes. A bounded relay validates each upstream Content-Range, forwards each received body chunk immediately, and requests a contiguous continuation only if Google Drive or an Archive.org mirror caps the requested range.
+
+### Cold-seek fast path
+
+When a cache miss occurs and a seek begins more than 256 KiB into a 4 MiB cache segment, the Worker starts an exact byte-range request at the browser's requested offset while a separate branch completes the aligned shared-cache fill. This avoids downloading the unused prefix before playback can begin. The trade-off is intentional: a cold deep seek can temporarily read overlapping bytes from the provider twice. Once the segment is cached, later viewers use the shared edge object and do not need that duplicate upstream request. Cache hits never use the direct cold-seek path. The response exposes x-moviwatch-stream-mode, x-moviwatch-cold-seek-direct, and x-moviwatch-cache for diagnosis. The threshold is kept small to bound cold-miss duplication while avoiding most aligned-prefix wait.
+
 **Archive.org mirror handling:** the Worker reads Internet Archive item metadata (`server`, `workable_servers`, `d1`, and `d2`), tries available storage hosts for each byte range, measures successful transfer throughput, prefers previously faster mirrors, and temporarily cools down hosts after failed or timed-out requests. If item metadata is unavailable, the original public Archive.org URL remains the fallback.
 
 **Downloads:** Both Archive.org and Google Drive downloads are streamed through the Worker attachment endpoint after the same playback authorization checks. Provider URLs are not placed in the page, catalogue response, or redirect Location header. File bytes can still be saved by a visitor who is legitimately allowed to download them; this design prevents simple link reuse and third-party hotlinking, not copying captured media bytes after an authorized download.
