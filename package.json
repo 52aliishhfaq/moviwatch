@@ -7,7 +7,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "hash:password": "node scripts/hash-password.mjs",
-    "check": "node --check src/index.js && node --check src/google-drive.js && node --check scripts/hash-password.mjs && node --check public/pwa-install.js && node --check public/sw.js && node --check scripts/check-inline-html.mjs && node scripts/check-inline-html.mjs && node scripts/check-streaming.mjs && node scripts/check-google-drive.mjs && node scripts/check-series.mjs && node scripts/check-pwa.mjs"
+    "check": "node --check src/index.js && node --check src/video-range.js && node --test scripts/video-range.test.mjs && node --check src/google-drive.js && node --check scripts/hash-password.mjs && node --check public/pwa-install.js && node --check public/sw.js && node --check scripts/check-inline-html.mjs && node scripts/check-inline-html.mjs && node scripts/check-streaming.mjs && node scripts/check-google-drive.mjs && node scripts/check-series.mjs && node scripts/check-pwa.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.1",
