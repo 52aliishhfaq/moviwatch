@@ -1350,7 +1350,24 @@ async function getVideoHeader(ctx, source, movieId, optionIndex, normalizedSourc
   return value;
 }
 
-y { await upstream.body?.cancel(); } catch {}
+async function fetchConfiguredVideoRange(source, start, end, env, timeoutOverride = 0, budget = null) {
+  if (source?.provider !== 'google-drive-private') {
+    return fetchVideoRangeFromMirrors(source.url, start, end, timeoutOverride, budget);
+  }
+  if (!isGoogleDriveFileId(source.fileId) || source.url !== googleDriveMediaUrl(source.fileId)) {
+    throw new Error('Invalid private Google Drive video source');
+  }
+  const signal = AbortSignal.timeout(timeoutOverride || Math.max(45000, Math.min(5 * 60 * 1000, 30000 + (end - start + 1) / (192 * 1024) * 2000)));
+  const rangeHeaders = new Headers({ Range: 'bytes=' + start + '-' + end, 'Accept-Encoding': 'identity' });
+  let mediaUrl = source.url;
+  let upstream = null;
+  for (let hop = 0; hop <= 5; hop++) {
+    upstream = hop === 0
+      ? await googleDriveApiRequest(sqlFor(env), env, mediaUrl, { headers: rangeHeaders, signal }, source.accountId || 'primary', budget)
+      : (consumeUpstreamBudget(budget), await fetch(mediaUrl, { method: 'GET', headers: rangeHeaders, signal, redirect: 'manual' }));
+    if (![301, 302, 303, 307, 308].includes(upstream.status)) break;
+    const location = upstream.headers.get('location');
+    try { await upstream.body?.cancel(); } catch {}
     if (!location || hop === 5) throw new Error('Google Drive media redirect limit reached.');
     const redirected = new URL(location, mediaUrl);
     const host = redirected.hostname.toLowerCase();
@@ -1361,6 +1378,8 @@ y { await upstream.body?.cancel(); } catch {}
       throw new Error('Google Drive returned an untrusted media redirect.');
     }
     mediaUrl = redirected.toString();
+  }
+y { await upstream.body?.cancel(); } catch {} 
   }
   if (!upstream) throw new Error('Google Drive media request returned no response.');
   if (upstream.status === 416) {
