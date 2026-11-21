@@ -4,7 +4,9 @@ A movie catalogue with Google Drive and Archive.org byte-range streaming. The fr
 
 ## Features
 
-- Public movie catalogue with Action and Romantic categories; visitors can browse and play without accounts.
+- Public movie and web-series catalogue with Action and Romantic categories; visitors can browse and play without accounts.
+- Web series with one shared poster, multiple seasons, episode numbering, individual episode streams, and previous/next navigation.
+- Multiple Google Drive accounts connected simultaneously; every private source and resumable upload remains attached to its originating account.
 - Password-protected admin dashboard at \`/admin\`.
 - Add up to 8 labeled source links per movie from Google Drive and Archive.org.
 - Responsive Movi Player with a source selector, a protected Download Now action, and a 32 MiB per-browser LRU cache of 1 MiB HTTP range pieces.
@@ -41,11 +43,13 @@ Features:
 - Upload new files to the selected folder using resumable 8 MiB chunks.
 - Replace the contents of an existing file without changing its Drive file ID.
 - Rename files, move My Drive files to Trash, and delete Shared Drive files (Shared Drive deletion is permanent).
-- Attach a selected Drive video to a Moviwatch movie as a private source. Public catalogue responses include only the source label, provider and index; the Drive file ID and URL remain server-side.
-- Private video playback uses authenticated Google Drive byte-range requests, then the same Cloudflare shared 8 MiB/24-hour cache and protected movie-bound playback sessions as existing sources.
+- Connect multiple Google accounts and switch between their My Drive and Shared Drives from the Admin selector; adding another account does not replace the first.
+- Attach a selected Drive video to a movie or episode as a private source. Public catalogue responses include only the source label, provider and index; the Drive file ID, account ID and URL remain server-side.
+- Each private video stores its Drive connection ID; playback uses the correct account's OAuth token and authenticated Google Drive byte-range requests, then the same Cloudflare shared 8 MiB/24-hour cache and protected content-bound playback sessions.
+- Resumable uploads keep their connection ID so switching accounts does not resume an upload with the wrong Gmail.
 - Refresh or replace operations update attached movie source versions and purge related video cache tags.
 
-The Worker creates the `google_drive_connections` and `google_drive_uploads` PostgreSQL tables automatically on the first Admin Drive Manager request. Refresh tokens and resumable upload session URLs are encrypted with AES-256-GCM using a separate Cloudflare secret. Do not store OAuth credentials in Neon plaintext, GitHub, or browser storage.
+The Worker creates the `google_drive_connections` and `google_drive_uploads` PostgreSQL tables automatically on the first Admin Drive Manager request. Refresh tokens are encrypted with AES-256-GCM using an account-specific additional-authenticated-data value (the existing `primary` token retains its legacy context); resumable upload session URLs are encrypted with a separate context. The `GOOGLE_DRIVE_ENCRYPTION_KEY` secret is shared by all connected accounts. Do not store OAuth credentials in Neon plaintext, GitHub, or browser storage.
 
 ### Google Cloud setup
 
@@ -84,6 +88,12 @@ The full `drive` scope is a **Restricted** Google OAuth scope. Google may requir
 - File IDs are validated, Google API destinations are allowlisted, media redirects are restricted to trusted Google hosts, and byte ranges flow through the existing cache.
 - Deleting a file detaches it from any Moviwatch movie sources. For My Drive it is moved to Trash; Shared Drive deletion is permanent and requires an explicit confirmation.
 - A private Drive source means the original Drive file need not be public. The connected account must have access, and a movie attached and published on Moviwatch is then playable by Moviwatch visitors through its existing protected playback flow.
+
+## Web Series
+
+Create a series in the Admin dashboard with one title, poster, category and description. Then select its episodes from the Google Drive Manager using the **Episode** action, assign a season and episode number, and publish. One series poster is reused on the public catalogue card and all of its episode pages. Episodes are stored separately from movies, sorted by season and episode number, and use the same private Worker streaming, playback authorization and edge cache. The series page lists published seasons/episodes; an episode page links back to its series and exposes previous/next episode navigation. Deleting a series also deletes its episodes; deleting a Drive file detaches it from both movie and episode sources.
+
+The Worker creates `public.series` and `public.episodes` additively when the Admin first loads the Series Manager (or when the public catalogue is first requested). Existing `public.movies` rows are not migrated or overwritten. The same tables are included in `schema.sql` for new installations.
 
 ## Pakistan/mobile streaming behavior
 
