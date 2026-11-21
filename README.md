@@ -9,10 +9,11 @@ A movie catalogue with Google Drive and Archive.org byte-range streaming. The fr
 - Multiple Google Drive accounts connected simultaneously; every private source and resumable upload remains attached to its originating account.
 - Password-protected admin dashboard at \`/admin\`.
 - Add up to 8 labeled source links per movie from Google Drive and Archive.org.
-- Responsive Movi Player with a source selector, a protected Download Now action, and a 32 MiB per-browser LRU cache of 1 MiB HTTP range pieces.
+- Lightweight Movi-Player slim build with compact custom watch controls, lazy media attachment, and an audio-language selector shown only for dual/multi-audio files.
+- The watch page uses `preload=none`, a 12 MiB per-browser LRU cache, 1 MiB HTTP range reads, and one-piece playback prefetch; the larger FFmpeg WASM is kept as a separate cacheable asset by the slim bundle.
 - HTTP Range support for playback, browser seeking, and HEAD metadata requests. Both playback and downloads stay behind the same-origin Cloudflare Worker; neither provider's raw media URL is returned to public clients.
 - Cloudflare Workers Cache stores complete 8 MiB video chunks for 24 hours through separately cached Worker entrypoints. Chunk keys include the source URL hash, movie, option index, source version, range start, and chunk size—not a viewer or browser ID—so the same cached bytes can be reused by other viewers.
-- Fragmented MP4 detection uses a compact header probe, a 512 KiB initial Worker segment, and 8 MiB continuation chunks in Cloudflare's shared cache; the player requests at most 1 MiB at a time and prefetches the next two pieces during playback.
+- Fragmented MP4 detection uses a compact header probe, a 512 KiB initial Worker segment, and 8 MiB continuation chunks in Cloudflare's shared cache; the player requests at most 1 MiB at a time and prefetches one upcoming piece during playback.
 - Public catalogue responses expose only labels, providers, and source indexes. Raw Google Drive and Archive.org source URLs remain in the internal metadata path and are never sent to public watch pages.
 - Admin secrets stay in Cloudflare Worker Secrets.
 
@@ -97,9 +98,9 @@ The Worker creates `public.series` and `public.episodes` additively when the Adm
 
 ## Pakistan/mobile streaming behavior
 
-The watch page uses Movi Player's custom `SourceAdapter` to split the player's requested byte reads into HTTP Range requests of at most 1 MiB. The adapter deduplicates in-flight reads and keeps an LRU cache capped at 32 MiB in the current browser tab; older pieces are evicted as playback advances. This cache is private to that browser, is not shared between browsers, and is not visible to other visitors. A demuxer may still need several 1 MiB pieces to inspect the container and decode the first frame, so a 1 MiB request size does not mean that exactly 1 MiB total is always enough to start playback.
+The watch page uses Movi Player's slim build and custom `SourceAdapter` to split requested byte reads into HTTP Range requests of at most 1 MiB. The media source is not attached until the viewer presses Play (`preload=none`). The adapter deduplicates in-flight reads and keeps an LRU cache capped at 12 MiB in the current browser tab; older pieces are evicted as playback advances. The custom UI is limited to play/pause, seek, volume, fullscreen and an audio selector that appears only when two or more audio languages are detected. This cache is private to that browser, is not shared between browsers, and is not visible to other visitors. A demuxer may still need several 1 MiB pieces to inspect the container and decode the first frame, so a 1 MiB request size does not mean that exactly 1 MiB total is always enough to start playback.
 
-Once playback is active, each completed read warms the next two 1 MiB pieces in the background. Pausing or ending playback stops speculative prefetch, a seek cancels stale speculative requests, and the next demuxer read fetches the new position. The player does not download the whole movie.
+Once playback is active, each completed read warms one next 1 MiB piece in the background. Pausing or ending playback stops speculative prefetch, a seek cancels stale speculative requests, and the next demuxer read fetches the new position. The player does not download the whole movie.
 
 Cloudflare Workers continue to store complete 8 MiB video chunks for 24 hours. The player sends smaller 1 MiB ranges, and the Worker assembles those responses from the shared 8 MiB edge-cache chunks. Cache keys use the movie, source/version and byte position—not a viewer or browser ID—so later visitors can reuse the cached bytes instead of re-reading the same content from Drive or Archive.org. The first cold request in a Cloudflare cache location can still need an upstream fetch.
 
