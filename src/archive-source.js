@@ -24,7 +24,7 @@ export function parseArchiveSourceUrl(sourceUrl) {
           part.includes("\\") || /[\u0000-\u001f\u007f]/.test(part))) return null;
 
     const file = fileParts.join("/");
-    if (file.length > 1600) return null;
+    if (file.length > 1000) return null;
     return { identifier, file, search: url.search, original: url.toString() };
   } catch {
     return null;
@@ -71,8 +71,10 @@ export async function verifyArchiveSources(sources, probeFile, now = () => new D
         };
       } catch (error) {
         const detail = error instanceof Error ? error.message : "Unknown Archive.org probe error.";
-        throw new Error('Archive.org verification failed for "' +
+        const wrapped = new Error('Archive.org verification failed for "' +
           (source.label || ("source " + (offset + index + 1))) + '": ' + detail);
+        if (Number.isInteger(error?.status)) wrapped.status = error.status;
+        throw wrapped;
       }
     }));
     verified.push(...results);
