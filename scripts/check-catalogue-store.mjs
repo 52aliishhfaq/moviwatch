@@ -120,6 +120,16 @@ async function fakeSql(strings) {
   if (query.includes('from public.episodes')) return legacyEpisodes;
   throw new Error('Unexpected SQL query: '+query);
 }
+const stalePreparedRedis = new FakeRedis();
+await setMigrationState(stalePreparedRedis, {
+  status: 'prepared', source_movie_count: 2, migrated_movies: 2,
+  backed_up_movies: 2, backed_up_series: 1, backed_up_episodes: 1
+});
+const repairedSnapshot = await prepareNeonToRedisMigration(fakeSql, stalePreparedRedis);
+assert.equal(repairedSnapshot.migration.status, 'prepared');
+assert.equal(repairedSnapshot.migration.verification.ok, true);
+assert.equal(await countCatalogueMovies(stalePreparedRedis), 2);
+
 const migration = await prepareNeonToRedisMigration(fakeSql, migrationRedis);
 assert.equal(migration.migration.status, 'prepared');
 assert.equal(migration.migration.source_movie_count, 2);
@@ -179,6 +189,14 @@ assert.ok(workerSource.includes("Never expose stored source URLs"));
 assert.ok(workerSource.includes("storeMeta.active===true||storeMeta.migration?.status==='prepared'"));
 assert.ok(workerSource.includes("migrationRunning&&['POST','PUT','PATCH','DELETE'].includes(method)"));
 assert.ok(workerSource.includes("Movie deletion is locked until the Redis catalogue is activated"));
+assert.ok(workerSource.includes("Google Drive OAuth is disabled while Moviwatch is in Archive-only migration mode."));
+assert.ok(workerSource.includes("This legacy Neon-backed admin endpoint is disabled in Archive-only mode."));
+assert.ok(workerSource.includes("if(storeMeta.active){"));
+assert.ok(workerSource.includes("sourceMovieCount=Number(storeMeta.migration?.source_movie_count||0);"));
+assert.ok(migrationSource.includes("if (previous.migration?.status === \"prepared\")"));
+assert.ok(migrationSource.includes("if (existingVerification.ok) return previous;"));
+assert.ok(adminSource.includes("catalogueNeedsRebuild"));
+assert.ok(adminSource.includes("Rebuild and verify migration"));
 assert.ok(adminSource.includes("Deleting movies remains locked until activation"));
 assert.ok(workerSource.includes("video_sources:(Array.isArray(movie.video_sources)?movie.video_sources:[])"));
 assert.ok(migrationSource.includes('await clearStagedMovies(redis)'));
