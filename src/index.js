@@ -2729,8 +2729,12 @@ async function api(req, env, ctx) {
     }
     if(path==='/api/admin/collections'&&method==='POST'){
       const body=await readBody(req);const id=crypto.randomUUID();
-      const ids=Array.isArray(body.movieIds)?body.movieIds:[];
-      if(ids.length>500) return json({error:'A collection can contain at most 500 movies.'},400);
+      const requestedIds=Array.isArray(body.movieIds)?body.movieIds:[];
+      if(requestedIds.length<1||requestedIds.length>500) return json({error:'A collection must contain between 1 and 500 movies.'},400);
+      if(requestedIds.some(movieId=>typeof movieId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(movieId))) {
+        return json({error:'A collection contains an invalid movie ID.'},400);
+      }
+      const ids=[...new Set(requestedIds.map(movieId=>movieId.toLowerCase()))];
       const movies=await Promise.all(ids.map(movieId=>getMovie(storeRedis,movieId)));
       if(movies.some(movie=>!movie))return json({error:'A collection references a movie that does not exist in Redis catalogue.'},400);
       const collection=await saveCollection(storeRedis,{id,name:body.name,description:body.description,
@@ -2742,8 +2746,12 @@ async function api(req, env, ctx) {
       const id=collectionMatch[1];
       if(method==='PUT'){
         const old=await getCollection(storeRedis,id);if(!old)return json({error:'Collection not found.'},404);
-        const body=await readBody(req);const ids=Array.isArray(body.movieIds)?body.movieIds:old.movie_ids;
-        if(ids.length>500)return json({error:'A collection can contain at most 500 movies.'},400);
+        const body=await readBody(req);const requestedIds=Array.isArray(body.movieIds)?body.movieIds:old.movie_ids;
+        if(requestedIds.length<1||requestedIds.length>500)return json({error:'A collection must contain between 1 and 500 movies.'},400);
+        if(requestedIds.some(movieId=>typeof movieId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(movieId))) {
+          return json({error:'A collection contains an invalid movie ID.'},400);
+        }
+        const ids=[...new Set(requestedIds.map(movieId=>movieId.toLowerCase()))];
         const movies=await Promise.all(ids.map(movieId=>getMovie(storeRedis,movieId)));
         if(movies.some(movie=>!movie))return json({error:'A collection references a movie that does not exist in Redis catalogue.'},400);
         const collection=await saveCollection(storeRedis,{...old,name:body.name??old.name,
