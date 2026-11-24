@@ -414,7 +414,7 @@ export class MovieMetadata extends WorkerEntrypoint {
     const storeMeta=await getCatalogueMeta(storeRedis);
     if(storeMeta.active){
       const stored=await getMovie(storeRedis,contentId);
-      const movie=stored&&stored.is_published===true
+      const movie=isMoviePublishable(stored)
         ? {...stored,content_type:'movie',series_id:null,season_number:null,episode_number:null,series_title:null}
         : null;
       return json({movie},200,{
@@ -2262,7 +2262,7 @@ async function api(req, env, ctx) {
     for(const collection of collections){
       const movieRows=await getMovies(storeRedis,collection.movie_ids);
       // Never expose stored source URLs or internal source metadata from public collection responses.
-      const movies=movieRows.filter(movie=>movie&&movie.is_published===true).map(movie=>({
+      const movies=movieRows.filter(movie=>isMoviePublishable(movie)).map(movie=>({
         id:movie.id,title:movie.title,poster_url:movie.poster_url,category:movie.category,
         created_at:movie.created_at,content_type:'movie',is_featured:movie.is_featured===true
       }));
