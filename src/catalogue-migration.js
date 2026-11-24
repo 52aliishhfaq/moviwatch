@@ -128,7 +128,7 @@ export async function prepareNeonToRedisMigration(sql, redis) {
           poster_url: safePoster(row.poster_url),
           category: typeof row.category === "string" && row.category.trim() ? row.category.trim().slice(0, 80) : "Action",
           video_sources: sources,
-          is_published: row.is_published === true && sources.length > 0,
+          is_published: false, // Archive.org URLs are candidates until each file passes an admin byte-range probe.
           is_featured: false,
           created_at: row.created_at || preparedAt,
           updated_at: row.updated_at || row.created_at || preparedAt
