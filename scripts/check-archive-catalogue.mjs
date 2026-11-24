@@ -77,4 +77,20 @@ await assert.rejects(() => probeArchiveFile('sample_movie', '../movie.mp4', asyn
 }), /filename/);
 await assert.rejects(() => probeArchiveFile('sample_movie', 'movie.mp4', async () => new Response(null, { status: 200 })), /byte-range/);
 
+
+for (const [code, expected] of [[101,'creation_pending'],[102,'temporarily_offline'],[103,'unbacked_item'],[104,'deleted']]) {
+  const result = await getArchiveItem('status_item', async () => new Response(JSON.stringify({
+    metadata: { title: 'Status item' }, error: code, files: []
+  }), { status: 200 }));
+  assert.equal(result.availability, expected);
+}
+const missing = await getArchiveItem('missing_item', async () => new Response(JSON.stringify({
+  metadata: { title: 'Missing item' }, error: 'Item not found', files: []
+}), { status: 200 }));
+assert.equal(missing.availability, 'unavailable');
+
+await assert.rejects(() => probeArchiveFile('sample_movie', 'movie.mp4', async () =>
+  new Response(null, { status: 302, headers: { location: 'https://evil.invalid/movie.mp4' } })
+), /untrusted host/);
+
 console.log('Archive.org search validation, metadata/file filtering, identifier safety and range-probe checks passed.');
