@@ -446,4 +446,36 @@ async function readAll(reader) {
   await pending.catch(() => {});
 }
 
+// Repeated short reads must consume one shared retry budget. Receiving a
+// single chunk is not a successful range: only consuming the complete range
+// resets the failure counter.
+{
+  let continuationCalls = 0;
+  const oneByteThenReset = (byte) => new ReadableStream({
+    pull(controller) {
+      if (this.sent) {
+        controller.error(new Error('simulated repeated upstream reset'));
+        return;
+      }
+      this.sent = true;
+      controller.enqueue(Uint8Array.from([byte]));
+    }
+  });
+  const relay = createRangeRelayStream({
+    firstPart: { range: { start: 0, end: 3, total: 4 }, body: oneByteThenReset(0) },
+    end: 3,
+    total: 4,
+    maxRetries: 2,
+    retryDelayMs: 0,
+    fetchPart: async (start, end) => {
+      continuationCalls++;
+      return { range: { start, end, total: 4 }, body: oneByteThenReset(start) };
+    }
+  });
+  const reader = relay.getReader();
+  assert.deepEqual([...((await reader.read()).value)], [0]);
+  await assert.rejects(() => readAll(reader), /simulated repeated upstream reset/);
+  assert.equal(continuationCalls, 2, 'Repeated partial reads must stop at the configured retry budget');
+}
+
 console.log('Progressive range relay, upstream continuation, truncation, discontinuity and cancellation checks passed.');
