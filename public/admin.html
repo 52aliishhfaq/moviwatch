@@ -534,7 +534,8 @@ function renderMovies(){
     const archive=archiveSources.length;
     const unverified=archiveSources.filter(source=>!source.verified_at||!Number.isSafeInteger(source.verified_size)||source.verified_size<=0).length;
     const verificationLabel=unverified?' · '+unverified+' Archive.org source(s) need range verification':' · Archive.org sources verified';
-    small.textContent=movie.category+' · '+(movie.is_published?'Published':'Hidden')+(movie.is_featured?' · Featured':'')+' · '+sources.length+' source(s) ('+drive+' Drive, '+archive+' Archive.org)'+(archive?verificationLabel:'');
+    const publicationState=unverified?'Needs range probe':(movie.is_published?'Published':'Hidden');
+    small.textContent=movie.category+' · '+publicationState+(movie.is_featured?' · Featured':'')+' · '+sources.length+' source(s) ('+drive+' Drive, '+archive+' Archive.org)'+(archive?verificationLabel:'');
     info.append(title,small);
     const actions=document.createElement('div');
     actions.className='actions';
