@@ -330,7 +330,7 @@ async function refreshMigrationStatus(){
   if(Number.isFinite(result.redisMovieCount))countParts.push('Redis movies: '+result.redisMovieCount);
   if(Number.isFinite(migration.backed_up_series))countParts.push('Series backups: '+migration.backed_up_series);
   if(Number.isFinite(migration.backed_up_episodes))countParts.push('Episode backups: '+migration.backed_up_episodes);
-  if(Number.isFinite(migration.archive_playable_movies))countParts.push('Archive.org playable: '+migration.archive_playable_movies);
+  if(Number.isFinite(migration.archive_source_candidates))countParts.push('Archive.org source candidates (not yet probed): '+migration.archive_source_candidates);
   if(Number.isFinite(migration.hidden_movies))countParts.push('Hidden legacy items: '+migration.hidden_movies);
   if(state==='prepared')countParts.push('Backup verification: '+(backupVerified?'PASSED':'FAILED'));
   $('#migrationCounts').textContent=countParts.join(' · ');
@@ -422,7 +422,7 @@ $('#prepareMigration').addEventListener('click',async()=>{
     const result=await api('/api/admin/catalogue/migration/prepare',{
       method:'POST',body:JSON.stringify({confirm:'PREPARE_ARCHIVE_ONLY_MIGRATION'})
     });
-    $('#migrationStatus').textContent='Preparation complete. '+(result.migration?.archive_playable_movies||0)+' Archive.org movie(s) are playable candidates; legacy non-Archive entries remain hidden.';
+    $('#migrationStatus').textContent='Preparation complete. '+(result.migration?.archive_source_candidates||0)+' Archive.org movie(s) have Archive.org source links; each still needs an availability probe before publication; legacy non-Archive entries remain hidden.';
     await refresh();
   }catch(error){$('#migrationStatus').textContent=error.message;await refreshMigrationStatus().catch(()=>{});}
   finally{await refreshMigrationStatus().catch(()=>{});}

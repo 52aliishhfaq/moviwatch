@@ -129,7 +129,7 @@ export async function prepareNeonToRedisMigration(sql, redis) {
     await inBatches(series, 50, (batch) => backupLegacyRecords(redis, "series", batch));
     await inBatches(episodes, 50, (batch) => backupLegacyRecords(redis, "episode", batch));
 
-    const archivePlayableMovies = movies.filter((row) => archiveSourcesOnly(row.videos).length > 0).length;
+    const archiveSourceCandidates = movies.filter((row) => archiveSourcesOnly(row.videos).length > 0).length;
     const migratedCount = await countCatalogueMovies(redis);
     if (migratedCount !== movies.length) {
       throw new Error("Redis movie count does not match the Neon source count.");
@@ -143,8 +143,8 @@ export async function prepareNeonToRedisMigration(sql, redis) {
       backed_up_movies: movies.length,
       backed_up_series: series.length,
       backed_up_episodes: episodes.length,
-      archive_playable_movies: archivePlayableMovies,
-      hidden_movies: movies.length - archivePlayableMovies,
+      archive_source_candidates: archiveSourceCandidates,
+      hidden_movies: movies.length - archiveSourceCandidates,
       prepared_at: new Date().toISOString(),
       error: null
     });
