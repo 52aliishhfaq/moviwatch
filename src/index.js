@@ -2202,7 +2202,11 @@ async function api(req, env, ctx) {
     const result=[];
     for(const collection of collections){
       const movieRows=await Promise.all(collection.movie_ids.map(id=>getMovie(storeRedis,id)));
-      const movies=movieRows.filter(movie=>movie&&movie.is_published===true);
+      // Never expose stored source URLs or internal source metadata from public collection responses.
+      const movies=movieRows.filter(movie=>movie&&movie.is_published===true).map(movie=>({
+        id:movie.id,title:movie.title,poster_url:movie.poster_url,category:movie.category,
+        created_at:movie.created_at,content_type:'movie',is_featured:movie.is_featured===true
+      }));
       result.push({...collection,movies});
     }
     return json({collections:result},200,{'cache-control':'public, max-age=30, stale-while-revalidate=120'});
