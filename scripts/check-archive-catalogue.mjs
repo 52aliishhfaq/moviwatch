@@ -11,6 +11,9 @@ assert.equal(searchUrl.hostname, 'archive.org');
 assert.equal(searchUrl.pathname, '/advancedsearch.php');
 assert.match(searchUrl.searchParams.get('q'), /mediatype:movies/);
 assert.match(searchUrl.searchParams.get('q'), /year:1977/);
+const grouped = buildArchiveSearchUrl({ query: 'star wars' }).searchParams.get('q');
+assert.match(grouped, /\\(title:\\(star\\).*creator:\\(star\\)\\) AND \\(title:\\(wars\\)/);
+assert.throws(() => buildArchiveSearchUrl({ query: 'x'.repeat(161) }), /160 characters/);
 assert.equal(searchUrl.searchParams.get('rows'), '24');
 assert.equal(searchUrl.searchParams.get('page'), '2');
 assert.throws(() => buildArchiveSearchUrl({ year: '20x6' }), /four digits/);
@@ -55,6 +58,7 @@ assert.equal(item.availability, 'available');
 assert.deepEqual(item.files.map((file) => file.name), ['movie.mp4', 'movie.webm']);
 assert.equal(item.files[0].md5, 'a'.repeat(32));
 assert.equal(item.storage.server, 'ia600000.us.archive.org');
+assert.equal(item.files.some((file) => file.name.endsWith('.mkv')), false);
 
 await assert.rejects(() => getArchiveItem('../invalid', async () => {
   throw new Error('fetch must not be called');
