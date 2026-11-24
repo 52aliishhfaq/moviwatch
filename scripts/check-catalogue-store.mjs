@@ -129,6 +129,40 @@ async function fakeSql(strings) {
   if (query.includes('from public.episodes')) return legacyEpisodes;
   throw new Error('Unexpected SQL query: '+query);
 }
+const legacyPreparedRedis = new FakeRedis();
+await setMigrationState(legacyPreparedRedis, {
+  status: 'prepared', source: 'neon', source_movie_count: 2, migrated_movies: 2,
+  backed_up_movies: 2, backed_up_series: 1, backed_up_episodes: 1
+});
+for (const row of legacyMovies) {
+  const sources = row.id === legacyMovies[0].id
+    ? [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/legacy/movie.mp4' }]
+    : [];
+  const legacyMovie = {
+    id: row.id, title: row.title, poster_url: row.poster_url, category: row.category,
+    video_sources: sources, is_published: row.is_published && sources.length > 0,
+    is_featured: false, created_at: row.created_at, updated_at: row.updated_at
+  };
+  await legacyPreparedRedis.set('moviwatch:catalogue:v1:movie:'+row.id, legacyMovie);
+  await legacyPreparedRedis.zadd('moviwatch:catalogue:v1:movies', { score: Date.parse(row.updated_at), member: row.id });
+  await legacyPreparedRedis.sadd('moviwatch:catalogue:v1:legacy-movie-ids', row.id);
+  await legacyPreparedRedis.set('moviwatch:catalogue:v1:legacy-backup:movie:'+row.id, row);
+  await legacyPreparedRedis.sadd('moviwatch:catalogue:v1:backed-up-movie-ids', row.id);
+}
+await legacyPreparedRedis.set('moviwatch:catalogue:v1:legacy-backup:series:'+legacySeries[0].id, legacySeries[0]);
+await legacyPreparedRedis.sadd('moviwatch:catalogue:v1:backed-up-series-ids', legacySeries[0].id);
+await legacyPreparedRedis.set('moviwatch:catalogue:v1:legacy-backup:episode:'+legacyEpisodes[0].id, legacyEpisodes[0]);
+await legacyPreparedRedis.sadd('moviwatch:catalogue:v1:backed-up-episode-ids', legacyEpisodes[0].id);
+const legacySnapshotVerification = await verifyCatalogueMigration(legacyPreparedRedis, {
+  movieCount: 2, seriesCount: 1, episodeCount: 1
+});
+assert.equal(legacySnapshotVerification.ok, false);
+assert.ok(legacySnapshotVerification.errors.some(error => error.includes('without a successful Archive.org byte-range verification')));
+const repairedLegacySnapshot = await prepareNeonToRedisMigration(fakeSql, legacyPreparedRedis);
+assert.equal(repairedLegacySnapshot.migration.status, 'prepared');
+assert.equal(repairedLegacySnapshot.migration.verification.ok, true);
+assert.equal((await getMovie(legacyPreparedRedis, legacyMovies[0].id)).is_published, false);
+
 const stalePreparedRedis = new FakeRedis();
 await setMigrationState(stalePreparedRedis, {
   status: 'prepared', source_movie_count: 2, migrated_movies: 2,
@@ -209,6 +243,7 @@ const workerSource = readFileSync('src/index.js', 'utf8');
 const adminSource = readFileSync('public/admin.html', 'utf8');
 const homeSource = readFileSync('public/index.html', 'utf8');
 const migrationSource = readFileSync('src/catalogue-migration.js', 'utf8');
+const storeSource = readFileSync('src/catalogue-store.js', 'utf8');
 assert.ok(workerSource.includes("Never expose stored source URLs"));
 assert.ok(workerSource.includes("storeMeta.active===true||storeMeta.migration?.status==='prepared'"));
 assert.ok(workerSource.includes("migrationRunning&&['POST','PUT','PATCH','DELETE'].includes(method)"));
@@ -236,9 +271,13 @@ assert.ok(adminSource.includes('id="featured"'));
 assert.ok(homeSource.includes("async function loadCollections()"));
 assert.ok(homeSource.includes("featured-tag"));
 assert.ok(workerSource.includes("async function verifyArchiveVideoSources(sources)"));
-assert.ok(workerSource.includes("probeArchiveFile(parsed.identifier, parsed.file)"));
+assert.ok(workerSource.includes("verifyArchiveSources(sources, probeArchiveFile)"));
+assert.ok(workerSource.includes("const value=await prepareRedisMovieInput(req,env)"));
+assert.ok(workerSource.includes("isMoviePublishable(movie)"));
+assert.ok(adminSource.includes("Re-checks every source again when you save a movie as Published"));
 assert.ok(workerSource.includes("const movie=isMoviePublishable(stored)"));
 assert.ok(migrationSource.includes("is_published: false, // Archive.org URLs are candidates"));
+assert.ok(storeSource.includes("without a successful Archive.org byte-range verification"));
 assert.ok(adminSource.includes("need range verification"));
 assert.ok(workerSource.includes("parseArchiveSourceUrl"));
 
