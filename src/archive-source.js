@@ -9,7 +9,7 @@ export function parseArchiveSourceUrl(sourceUrl) {
     const url = new URL(sourceUrl);
     if (url.protocol !== "https:" ||
         (url.hostname !== "archive.org" && !url.hostname.endsWith(".archive.org")) ||
-        url.username || url.password || url.port) return null;
+        url.username || url.password || url.port || url.search || url.hash) return null;
 
     const rawParts = url.pathname.split("/").filter(Boolean);
     const parts = rawParts.map((part) => decodeURIComponent(part));
