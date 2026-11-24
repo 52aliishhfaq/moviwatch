@@ -4,7 +4,7 @@ import {
   activateCatalogueStore, backupLegacyRecord, countCatalogueMovies, deleteCategory,
   deleteCollection, deleteMovie, getCatalogueMeta, getCollection, getMovie, getMovies,
   listCategories, listCollections, listMovies, saveCategory, saveCollection,
-  saveMovie, setMigrationState
+  saveMigratedMovieBatch, saveMovie, setMigrationState
 } from '../src/catalogue-store.js';
 import { prepareNeonToRedisMigration } from '../src/catalogue-migration.js';
 
@@ -76,7 +76,7 @@ assert.equal(await deleteCollection(redis, collectionId), true);
 assert.equal(await listCollections(redis).then((rows) => rows.length), 0);
 
 assert.ok((await backupLegacyRecord(redis, 'movie', movieA.id, { original: true })).includes('legacy-backup'));
-await saveMovie(redis, movieA);
+await saveMigratedMovieBatch(redis, [{ legacy: { id: movieA.id, original: true }, movie: movieA }]);
 await setMigrationState(redis, { status: 'prepared', migrated_movies: 1, backed_up_movies: 1 });
 await assert.rejects(() => activateCatalogueStore(redis, { movieCount: 2 }), /counts do not match/);
 await deleteMovie(redis, movieB.id);
@@ -131,8 +131,22 @@ assert.deepEqual(migratedDriveOnly.video_sources, []);
 const repeated = await prepareNeonToRedisMigration(fakeSql, migrationRedis);
 assert.equal(repeated.migration.status, 'prepared');
 assert.equal(await countCatalogueMovies(migrationRedis), 2);
+const stagedNew = {
+  id: 'c0000000-0000-4000-8000-000000000003',
+  title: 'Newly Curated Archive Movie',
+  poster_url: 'https://archive.org/services/img/new-title',
+  category: 'Documentary',
+  video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/new-title/movie.mp4' }],
+  is_published: true,
+  is_featured: true
+};
+await saveMovie(migrationRedis, stagedNew);
+await deleteMovie(migrationRedis, legacyMovies[0].id);
+await assert.rejects(() => activateCatalogueStore(migrationRedis, { movieCount: 2 }), /legacy movie is missing/);
+await saveMovie(migrationRedis, migratedArchive);
 const activated = await activateCatalogueStore(migrationRedis, { movieCount: 2 });
 assert.equal(activated.active, true);
+assert.equal(await countCatalogueMovies(migrationRedis), 3);
 
 
 const workerSource = readFileSync('src/index.js', 'utf8');
@@ -142,8 +156,8 @@ const migrationSource = readFileSync('src/catalogue-migration.js', 'utf8');
 assert.ok(workerSource.includes("Never expose stored source URLs"));
 assert.ok(workerSource.includes("storeMeta.active===true||storeMeta.migration?.status==='prepared'"));
 assert.ok(workerSource.includes("migrationRunning&&['POST','PUT','PATCH','DELETE'].includes(method)"));
-assert.ok(workerSource.includes("Movie changes are locked after snapshot preparation"));
-assert.ok(adminSource.includes('Movie editing is locked after snapshot preparation'));
+assert.ok(workerSource.includes("Movie deletion is locked until the Redis catalogue is activated"));
+assert.ok(adminSource.includes("deleting movies locked until the Redis catalogue is activated"));
 assert.ok(workerSource.includes("video_sources:(Array.isArray(movie.video_sources)?movie.video_sources:[])"));
 assert.ok(migrationSource.includes('await clearStagedMovies(redis)'));
 assert.ok(!/DELETE\\s+FROM\\s+public\\.(movies|series|episodes)/i.test(migrationSource));
