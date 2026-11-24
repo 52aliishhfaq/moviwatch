@@ -8,7 +8,7 @@ import { searchArchiveItems, getArchiveItem, probeArchiveFile } from './archive-
 import {
   activateCatalogueStore, backupLegacyRecord, countCatalogueMovies,
   deleteCategory, deleteCollection, deleteMovie, getCatalogueMeta,
-  getCollection, getMovie, listCategories, listCollections, listMovies,
+  getCollection, getMovie, getMovies, listCategories, listCollections, listMovies,
   saveCategory, saveCollection, saveMovie
 } from './catalogue-store.js';
 import { prepareNeonToRedisMigration } from './catalogue-migration.js';
@@ -2201,7 +2201,7 @@ async function api(req, env, ctx) {
     const collections=meta.active?await listCollections(storeRedis,{publishedOnly:true,limit:100}):[];
     const result=[];
     for(const collection of collections){
-      const movieRows=await Promise.all(collection.movie_ids.map(id=>getMovie(storeRedis,id)));
+      const movieRows=await getMovies(storeRedis,collection.movie_ids);
       // Never expose stored source URLs or internal source metadata from public collection responses.
       const movies=movieRows.filter(movie=>movie&&movie.is_published===true).map(movie=>({
         id:movie.id,title:movie.title,poster_url:movie.poster_url,category:movie.category,
@@ -2746,7 +2746,7 @@ async function api(req, env, ctx) {
         return json({error:'A collection contains an invalid movie ID.'},400);
       }
       const ids=[...new Set(requestedIds.map(movieId=>movieId.toLowerCase()))];
-      const movies=await Promise.all(ids.map(movieId=>getMovie(storeRedis,movieId)));
+      const movies=await getMovies(storeRedis,ids);
       if(movies.some(movie=>!movie))return json({error:'A collection references a movie that does not exist in Redis catalogue.'},400);
       const collection=await saveCollection(storeRedis,{id,name:body.name,description:body.description,
         movie_ids:ids,is_published:body.isPublished===true});
