@@ -452,6 +452,12 @@ export async function verifyCatalogueMigration(redis, expectedCounts = {}) {
     records.length === ids.length && records.every((record, index) =>
       record && typeof record === "object" && String(record.id || "").toLowerCase() === ids[index]);
   if (!recordsMatchManifest(movieRecords, movieIds)) errors.push("migrated movie records are missing or their IDs do not match the baseline manifest");
+  const unverifiedPublishedMovies = movieRecords.filter((movie) =>
+    movie && movie.is_published === true && !isMoviePublishable(movie)
+  ).length;
+  if (unverifiedPublishedMovies > 0) {
+    errors.push(unverifiedPublishedMovies + " migrated movie(s) are marked published without a successful Archive.org byte-range verification");
+  }
   if (!recordsMatchManifest(movieBackups, backedUpMovieIds)) errors.push("original movie backups are missing or their IDs do not match the backup manifest");
   if (!recordsMatchManifest(seriesBackups, seriesIds)) errors.push("original series backups are missing or their IDs do not match the backup manifest");
   if (!recordsMatchManifest(episodeBackups, episodeIds)) errors.push("original episode backups are missing or their IDs do not match the backup manifest");
