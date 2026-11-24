@@ -2760,8 +2760,10 @@ async function api(req, env, ctx) {
     if(storeReady&&(path==='/api/admin/movies'||path==='/api/admin/stats')){
       const all=await listMovies(storeRedis,{limit:5000});
       if(path==='/api/admin/stats'&&method==='GET'){
+        const categories=await listCategories(storeRedis);
+        const byCategory=Object.fromEntries(categories.map(name=>[name,all.filter(movie=>movie.category===name).length]));
         return json({stats:{total:all.length,published:all.filter(x=>x.is_published).length,
-          action:all.filter(x=>x.category==='Action').length,romantic:all.filter(x=>x.category==='Romantic').length,
+          action:byCategory.Action||0,romantic:byCategory.Romantic||0,categories:byCategory,
           featured:all.filter(x=>x.is_featured).length,series:0,publishedSeries:0}});
       }
       if(path==='/api/admin/movies'&&method==='GET')return json({movies:await listMovies(storeRedis,{limit:500})});
