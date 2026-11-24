@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
   activateCatalogueStore, backupLegacyRecord, countCatalogueMovies, deleteCategory,
   deleteCollection, deleteMovie, getCatalogueMeta, getCollection, getMovie, getMovies,
-  listCategories, listCollections, listMovies, saveCategory, saveCollection,
+  listCategories, listCollections, listMovies, isMoviePublishable, saveCategory, saveCollection,
   saveMigratedMovieBatch, saveMovie, setMigrationState, verifyCatalogueMigration
 } from '../src/catalogue-store.js';
 import { prepareNeonToRedisMigration } from '../src/catalogue-migration.js';
@@ -43,7 +43,7 @@ const movieA = {
   title: 'First Movie',
   poster_url: 'https://archive.org/services/img/first',
   category: 'Action',
-  video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/first/movie.mp4' }],
+  video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/first/movie.mp4', verified_at: '2026-11-24T10:00:00.000Z', verified_size: 12345 }],
   is_published: true,
   is_featured: true,
   created_at: '2026-01-01T00:00:00.000Z',
@@ -56,6 +56,15 @@ assert.equal((await getMovie(redis, movieA.id)).title, 'First Movie');
 assert.deepEqual((await getMovies(redis, [movieA.id, movieB.id])).map(movie => movie.title), ['First Movie', 'Second Movie']);
 assert.equal(await countCatalogueMovies(redis), 2);
 assert.equal((await listMovies(redis, { publishedOnly: true })).length, 2);
+assert.equal(isMoviePublishable(await getMovie(redis, movieA.id)), true);
+await saveMovie(redis, { ...movieA, id: 'a0000000-0000-4000-8000-000000000003',
+  video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/unprobed/movie.mp4' }] ,
+  is_published: false });
+assert.equal((await listMovies(redis, { publishedOnly: true })).length, 2);
+assert.equal(isMoviePublishable(await getMovie(redis, 'a0000000-0000-4000-8000-000000000003')), false);
+await assert.rejects(() => saveMovie(redis, {
+  ...movieA, video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/unprobed/movie.mp4' }]
+}), /server-side Archive.org byte-range verification/);
 assert.equal((await listMovies(redis, { category: 'Romantic' }))[0].id, movieB.id);
 assert.equal((await listMovies(redis, { query: 'first' }))[0].is_featured, true);
 await assert.rejects(() => saveMovie(redis, { ...movieA, id: 'not-a-uuid' }), /movie ID/);
@@ -148,7 +157,8 @@ const verifiedPrepared = await verifyCatalogueMigration(migrationRedis, {
 assert.equal(verifiedPrepared.ok, true);
 const migratedArchive = await getMovie(migrationRedis, legacyMovies[0].id);
 const migratedDriveOnly = await getMovie(migrationRedis, legacyMovies[1].id);
-assert.equal(migratedArchive.is_published, true);
+assert.equal(migratedArchive.is_published, false);
+assert.equal(isMoviePublishable(migratedArchive), false);
 assert.equal(migratedArchive.video_sources[0].provider, 'archive.org');
 assert.equal(migratedDriveOnly.is_published, false);
 assert.deepEqual(migratedDriveOnly.video_sources, []);
@@ -160,7 +170,7 @@ const stagedNew = {
   title: 'Newly Curated Archive Movie',
   poster_url: 'https://archive.org/services/img/new-title',
   category: 'Documentary',
-  video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/new-title/movie.mp4' }],
+  video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/new-title/movie.mp4', verified_at: '2026-11-24T10:00:00.000Z', verified_size: 4096 }],
   is_published: true,
   is_featured: true
 };
@@ -224,5 +234,11 @@ assert.ok(adminSource.includes('id="collectionForm"'));
 assert.ok(adminSource.includes('id="featured"'));
 assert.ok(homeSource.includes("async function loadCollections()"));
 assert.ok(homeSource.includes("featured-tag"));
+assert.ok(workerSource.includes("async function verifyArchiveVideoSources(sources)"));
+assert.ok(workerSource.includes("probeArchiveFile(parsed.identifier, parsed.file)"));
+assert.ok(workerSource.includes("const movie=isMoviePublishable(stored)"));
+assert.ok(migrationSource.includes("is_published: false, // Archive.org URLs are candidates"));
+assert.ok(adminSource.includes("need range verification"));
+assert.ok(workerSource.includes("parseArchiveSourceUrl"));
 
 console.log('Transactional Redis movie, category, collection, backup and activation checks passed.');
