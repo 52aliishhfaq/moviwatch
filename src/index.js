@@ -459,11 +459,11 @@ export class MovieMetadata extends WorkerEntrypoint {
 
 async function movieById(ctx, env, movieId) {
   if (!/^[0-9a-f-]{36}$/i.test(movieId)) return { movie: null, cacheStatus: 'BYPASS' };
-  // v4 deliberately bypasses metadata cached by the legacy Neon/Drive route
+  // v5 deliberately bypasses prior unverified-publication metadata cached under the previous namespace
   // so the first request after a Worker deploy cannot reuse a pre-cutover URL.
   const metadataEntry = ctx.exports.MovieMetadata({ props: { movieId } });
   const response = await metadataEntry.fetch(
-    new Request('https://moviwatch.internal/__movie_metadata__v4/' + encodeURIComponent(movieId))
+    new Request('https://moviwatch.internal/__movie_metadata__v5/' + encodeURIComponent(movieId))
   );
   if (!response.ok) throw new Error('Movie metadata lookup failed (HTTP ' + response.status + ')');
   const payload = await response.json();
@@ -2251,7 +2251,7 @@ async function api(req, env, ctx) {
     const allowedCategories=storeMeta.active?new Set(await listCategories(storeRedis)):CATEGORIES;
     if (category && !allowedCategories.has(category)) return json({ error: 'Unknown category' }, 400);
 
-    const catalogueUrl = new URL('https://moviwatch.internal/__public_catalogue__v4');
+    const catalogueUrl = new URL('https://moviwatch.internal/__public_catalogue__v5');
     if (category) catalogueUrl.searchParams.set('category', category);
     if (query) catalogueUrl.searchParams.set('q', query);
     const catalogueEntry = ctx.exports.PublicCatalogue({ props: { category, query } });
