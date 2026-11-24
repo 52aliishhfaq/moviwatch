@@ -2673,8 +2673,12 @@ async function api(req, env, ctx) {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) sameOrigin(req, env);
     const storeRedis=redisFor(env);
     const storeMeta=await getCatalogueMeta(storeRedis);
-    if(storeMeta.active&&path.startsWith('/api/admin/google-drive/')){
-      return json({error:'Google Drive management is disabled after Archive-only catalogue activation.'},410);
+    const storeReady=storeMeta.active===true||storeMeta.migration?.status==='prepared';
+    if(storeReady&&path.startsWith('/api/admin/google-drive/')){
+      return json({error:'Google Drive management is disabled after Archive-only migration preparation.'},410);
+    }
+    if(storeReady&&(path==='/api/admin/series'||path.startsWith('/api/admin/series/')||path.startsWith('/api/admin/episodes/'))){
+      return json({error:'Series management is disabled after Archive-only migration preparation; legacy records are preserved in migration backups.'},410);
     }
     if(path==='/api/admin/catalogue/migration/status'&&method==='GET'){
       let sourceMovieCount=null,sourceSeriesCount=null,sourceEpisodeCount=null;
@@ -2708,6 +2712,7 @@ async function api(req, env, ctx) {
       await invalidateContentCaches(ctx);
       return json({store:activated});
     }
+    if(path.startsWith('/api/admin/categories')&&!storeReady)return json({error:'Prepare the Archive-only migration before managing catalogue categories.'},409);
     if(path==='/api/admin/categories'&&method==='GET')return json({categories:await listCategories(storeRedis)});
     if(path==='/api/admin/categories'&&method==='POST'){
       const body=await readBody(req);const category=await saveCategory(storeRedis,body.name);
@@ -2718,6 +2723,7 @@ async function api(req, env, ctx) {
       const name=decodeURIComponent(categoryMatch[1]);await deleteCategory(storeRedis,name);
       await invalidateContentCaches(ctx);return json({ok:true});
     }
+    if(path.startsWith('/api/admin/collections')&&!storeReady)return json({error:'Prepare the Archive-only migration before managing collections.'},409);
     if(path==='/api/admin/collections'&&method==='GET'){
       return json({collections:await listCollections(storeRedis,{limit:500})});
     }
@@ -2751,7 +2757,7 @@ async function api(req, env, ctx) {
         await invalidateContentCaches(ctx);return json({ok:true});
       }
     }
-    if(storeMeta.active&&(path==='/api/admin/movies'||path==='/api/admin/stats')){
+    if(storeReady&&(path==='/api/admin/movies'||path==='/api/admin/stats')){
       const all=await listMovies(storeRedis,{limit:5000});
       if(path==='/api/admin/stats'&&method==='GET'){
         return json({stats:{total:all.length,published:all.filter(x=>x.is_published).length,
@@ -2766,7 +2772,7 @@ async function api(req, env, ctx) {
         await invalidateContentCaches(ctx,movie.id);return json({movie},201);
       }
     }
-    if(storeMeta.active&&path.startsWith('/api/admin/movies/')){
+    if(storeReady&&path.startsWith('/api/admin/movies/')){
       const id=path.split('/')[4];
       if(!/^[0-9a-f-]{36}$/i.test(id||''))return json({error:'Invalid movie ID.'},400);
       const existing=await getMovie(storeRedis,id);
