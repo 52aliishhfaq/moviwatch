@@ -7,7 +7,7 @@ import { getVideoRangeWindow } from './video-range-window.js';
 import { createRangeRelayStream } from './video-stream.js';
 import { searchArchiveItems, getArchiveItem, probeArchiveFile } from './archive-catalogue.js';
 import {
-  activateCatalogueStore, backupLegacyRecord, countCatalogueMovies,
+  activateCatalogueStore, rollbackCatalogueActivation, backupLegacyRecord, countCatalogueMovies,
   deleteCategory, deleteCollection, deleteMovie, getCatalogueMeta, isMoviePublishable,
   getCollection, getMovie, getMovies, listCategories, listCollections, listMovies,
   saveCategory, saveCollection, saveMovie, verifyCatalogueMigration
@@ -2759,6 +2759,13 @@ async function api(req, env, ctx) {
       const sql=sqlFor(env);
       const result=await prepareNeonToRedisMigration(sql,storeRedis);
       return json({migration:result.migration,redisMovieCount:await countCatalogueMovies(storeRedis)});
+    }
+    if(path==='/api/admin/catalogue/migration/rollback'&&method==='POST'){
+      const body=await readBody(req);
+      if(body.confirm!=='ROLLBACK_TO_NEON')return json({error:'Catalogue rollback confirmation is required.'},400);
+      const rolledBack=await rollbackCatalogueActivation(storeRedis);
+      await invalidateContentCaches(ctx);
+      return json({store:rolledBack,message:'Redis reads are disabled. Neon remains the active catalogue source; Redis records and verified backups were preserved.'});
     }
     if(path==='/api/admin/catalogue/migration/activate'&&method==='POST'){
       const body=await readBody(req);

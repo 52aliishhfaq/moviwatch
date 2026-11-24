@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  activateCatalogueStore, backupLegacyRecord, countCatalogueMovies, deleteCategory,
+  activateCatalogueStore, rollbackCatalogueActivation, backupLegacyRecord, countCatalogueMovies, deleteCategory,
   deleteCollection, deleteMovie, getCatalogueMeta, getCollection, getMovie, getMovies,
   listCategories, listCollections, listMovies, isMoviePublishable, saveCategory, saveCollection,
   saveMigratedMovieBatch, saveMovie, setMigrationState, verifyCatalogueMigration
@@ -230,6 +230,12 @@ await saveMovie(migrationRedis, migratedArchive);
 const activated = await activateCatalogueStore(migrationRedis, { movieCount: 2 });
 assert.equal(activated.active, true);
 assert.equal(await countCatalogueMovies(migrationRedis), 3);
+
+const rolledBack = await rollbackCatalogueActivation(migrationRedis);
+assert.equal(rolledBack.active, false);
+assert.ok(rolledBack.migration.rollback_at);
+assert.equal(await countCatalogueMovies(migrationRedis), 3);
+await assert.rejects(() => rollbackCatalogueActivation(migrationRedis), /not active/);
 
 const incompleteRedis = new FakeRedis();
 await prepareNeonToRedisMigration(fakeSql, incompleteRedis);
