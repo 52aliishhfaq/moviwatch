@@ -127,7 +127,7 @@ assert.equal(migration.migration.migrated_movies, 2);
 assert.equal(migration.migration.backed_up_movies, 2);
 assert.equal(migration.migration.backed_up_series, 1);
 assert.equal(migration.migration.backed_up_episodes, 1);
-assert.equal(migration.migration.archive_playable_movies, 1);
+assert.equal(migration.migration.archive_source_candidates, 1);
 assert.equal(migration.migration.hidden_movies, 1);
 assert.equal(migration.migration.verification.ok, true);
 assert.equal(migration.migration.verification.actual.seriesBackups, 1);
