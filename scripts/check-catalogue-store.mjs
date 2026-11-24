@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   activateCatalogueStore, backupLegacyRecord, countCatalogueMovies, deleteCategory,
   deleteCollection, deleteMovie, getCatalogueMeta, getCollection, getMovie,
@@ -130,5 +131,24 @@ assert.equal(repeated.migration.status, 'prepared');
 assert.equal(await countCatalogueMovies(migrationRedis), 2);
 const activated = await activateCatalogueStore(migrationRedis, { movieCount: 2 });
 assert.equal(activated.active, true);
+
+
+const workerSource = readFileSync('src/index.js', 'utf8');
+const adminSource = readFileSync('public/admin.html', 'utf8');
+const homeSource = readFileSync('public/index.html', 'utf8');
+const migrationSource = readFileSync('src/catalogue-migration.js', 'utf8');
+assert.ok(workerSource.includes("Never expose stored source URLs"));
+assert.ok(workerSource.includes("storeMeta.active===true||storeMeta.migration?.status==='prepared'"));
+assert.ok(workerSource.includes("migrationRunning&&['POST','PUT','PATCH','DELETE'].includes(method)"));
+assert.ok(workerSource.includes("video_sources:(Array.isArray(movie.video_sources)?movie.video_sources:[])"));
+assert.ok(migrationSource.includes('await clearStagedMovies(redis)'));
+assert.ok(!/DELETE\\s+FROM\\s+public\\.(movies|series|episodes)/i.test(migrationSource));
+assert.ok(adminSource.includes("PREPARE_ARCHIVE_ONLY_MIGRATION"));
+assert.ok(adminSource.includes("ACTIVATE_REDIS_CATALOGUE"));
+assert.ok(adminSource.includes('id="categoryForm"'));
+assert.ok(adminSource.includes('id="collectionForm"'));
+assert.ok(adminSource.includes('id="featured"'));
+assert.ok(homeSource.includes("async function loadCollections()"));
+assert.ok(homeSource.includes("featured-tag"));
 
 console.log('Transactional Redis movie, category, collection, backup and activation checks passed.');
