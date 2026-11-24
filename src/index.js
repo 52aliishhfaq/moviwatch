@@ -2673,12 +2673,18 @@ async function api(req, env, ctx) {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) sameOrigin(req, env);
     const storeRedis=redisFor(env);
     const storeMeta=await getCatalogueMeta(storeRedis);
+    const migrationRunning=storeMeta.migration?.status==='running';
     const storeReady=storeMeta.active===true||storeMeta.migration?.status==='prepared';
-    if(storeReady&&path.startsWith('/api/admin/google-drive/')){
-      return json({error:'Google Drive management is disabled after Archive-only migration preparation.'},410);
+    const legacyWritesFrozen=migrationRunning||storeReady;
+    if(legacyWritesFrozen&&path.startsWith('/api/admin/google-drive/')){
+      return json({error:'Google Drive management is paused while the Archive-only catalogue migration is prepared.'},410);
     }
-    if(storeReady&&(path==='/api/admin/series'||path.startsWith('/api/admin/series/')||path.startsWith('/api/admin/episodes/'))){
-      return json({error:'Series management is disabled after Archive-only migration preparation; legacy records are preserved in migration backups.'},410);
+    if(legacyWritesFrozen&&(path==='/api/admin/series'||path.startsWith('/api/admin/series/')||path.startsWith('/api/admin/episodes/'))){
+      return json({error:'Series management is paused during the Archive-only catalogue migration; legacy records are preserved in migration backups.'},410);
+    }
+    if(migrationRunning&&['POST','PUT','PATCH','DELETE'].includes(method)&&
+       (path==='/api/admin/movies'||path.startsWith('/api/admin/movies/'))){
+      return json({error:'Movie writes are paused while the migration snapshot is being prepared.'},409);
     }
     if(path==='/api/admin/catalogue/migration/status'&&method==='GET'){
       let sourceMovieCount=null,sourceSeriesCount=null,sourceEpisodeCount=null;
