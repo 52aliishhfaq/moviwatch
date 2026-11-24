@@ -169,6 +169,8 @@ export async function listMovies(redis, {
     .filter((movie) => !publishedOnly || movie.is_published === true)
     .filter((movie) => !category || movie.category === category)
     .filter((movie) => !normalizedQuery || String(movie.title || "").toLocaleLowerCase().includes(normalizedQuery))
+    .sort((a, b) => (publishedOnly ? Number(b.is_featured === true) - Number(a.is_featured === true) : 0) ||
+      safeScore(b.updated_at || b.created_at) - safeScore(a.updated_at || a.created_at))
     .slice(0, boundedLimit);
 }
 
