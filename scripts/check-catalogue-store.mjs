@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
   activateCatalogueStore, backupLegacyRecord, countCatalogueMovies, deleteCategory,
   deleteCollection, deleteMovie, getCatalogueMeta, getCollection, getMovie, getMovies,
-  listCategories, listCollections, listMovies, saveCategory, saveCollection,
+  listCategories, listCollections, listMovies, isMoviePublishable, saveCategory, saveCollection,
   saveMigratedMovieBatch, saveMovie, setMigrationState, verifyCatalogueMigration
 } from '../src/catalogue-store.js';
 import { prepareNeonToRedisMigration } from '../src/catalogue-migration.js';
@@ -43,7 +43,7 @@ const movieA = {
   title: 'First Movie',
   poster_url: 'https://archive.org/services/img/first',
   category: 'Action',
-  video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/first/movie.mp4' }],
+  video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/first/movie.mp4', verified_at: '2026-11-24T10:00:00.000Z', verified_size: 12345 }],
   is_published: true,
   is_featured: true,
   created_at: '2026-01-01T00:00:00.000Z',
@@ -56,6 +56,29 @@ assert.equal((await getMovie(redis, movieA.id)).title, 'First Movie');
 assert.deepEqual((await getMovies(redis, [movieA.id, movieB.id])).map(movie => movie.title), ['First Movie', 'Second Movie']);
 assert.equal(await countCatalogueMovies(redis), 2);
 assert.equal((await listMovies(redis, { publishedOnly: true })).length, 2);
+assert.equal(isMoviePublishable(await getMovie(redis, movieA.id)), true);
+await saveMovie(redis, { ...movieA, id: 'a0000000-0000-4000-8000-000000000003',
+  video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/unprobed/movie.mp4' }] ,
+  is_published: false });
+assert.equal((await listMovies(redis, { publishedOnly: true })).length, 2);
+assert.equal(isMoviePublishable(await getMovie(redis, 'a0000000-0000-4000-8000-000000000003')), false);
+assert.equal(await deleteMovie(redis, 'a0000000-0000-4000-8000-000000000003'), true);
+await assert.rejects(() => saveMovie(redis, {
+  ...movieA, video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/unprobed/movie.mp4' }]
+}), /server-side Archive.org byte-range verification/);
+const legacyUnverified = {
+  ...movieA,
+  id: 'a0000000-0000-4000-8000-000000000004',
+  video_sources: [{ label: 'Old Archive URL', provider: 'archive.org', url: 'https://archive.org/download/old-unprobed/movie.mp4' }],
+  is_published: true,
+  is_featured: true
+};
+await redis.set('moviwatch:catalogue:v1:movie:'+legacyUnverified.id, legacyUnverified);
+await redis.zadd('moviwatch:catalogue:v1:movies', { score: Date.parse(legacyUnverified.updated_at), member: legacyUnverified.id });
+assert.equal(isMoviePublishable(await getMovie(redis, legacyUnverified.id)), false);
+assert.equal((await listMovies(redis, { publishedOnly: true })).length, 2);
+await redis.del('moviwatch:catalogue:v1:movie:'+legacyUnverified.id);
+await redis.zrem('moviwatch:catalogue:v1:movies', legacyUnverified.id);
 assert.equal((await listMovies(redis, { category: 'Romantic' }))[0].id, movieB.id);
 assert.equal((await listMovies(redis, { query: 'first' }))[0].is_featured, true);
 await assert.rejects(() => saveMovie(redis, { ...movieA, id: 'not-a-uuid' }), /movie ID/);
@@ -120,6 +143,40 @@ async function fakeSql(strings) {
   if (query.includes('from public.episodes')) return legacyEpisodes;
   throw new Error('Unexpected SQL query: '+query);
 }
+const legacyPreparedRedis = new FakeRedis();
+await setMigrationState(legacyPreparedRedis, {
+  status: 'prepared', source: 'neon', source_movie_count: 2, migrated_movies: 2,
+  backed_up_movies: 2, backed_up_series: 1, backed_up_episodes: 1
+});
+for (const row of legacyMovies) {
+  const sources = row.id === legacyMovies[0].id
+    ? [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/legacy/movie.mp4' }]
+    : [];
+  const legacyMovie = {
+    id: row.id, title: row.title, poster_url: row.poster_url, category: row.category,
+    video_sources: sources, is_published: row.is_published && sources.length > 0,
+    is_featured: false, created_at: row.created_at, updated_at: row.updated_at
+  };
+  await legacyPreparedRedis.set('moviwatch:catalogue:v1:movie:'+row.id, legacyMovie);
+  await legacyPreparedRedis.zadd('moviwatch:catalogue:v1:movies', { score: Date.parse(row.updated_at), member: row.id });
+  await legacyPreparedRedis.sadd('moviwatch:catalogue:v1:legacy-movie-ids', row.id);
+  await legacyPreparedRedis.set('moviwatch:catalogue:v1:legacy-backup:movie:'+row.id, row);
+  await legacyPreparedRedis.sadd('moviwatch:catalogue:v1:backed-up-movie-ids', row.id);
+}
+await legacyPreparedRedis.set('moviwatch:catalogue:v1:legacy-backup:series:'+legacySeries[0].id, legacySeries[0]);
+await legacyPreparedRedis.sadd('moviwatch:catalogue:v1:backed-up-series-ids', legacySeries[0].id);
+await legacyPreparedRedis.set('moviwatch:catalogue:v1:legacy-backup:episode:'+legacyEpisodes[0].id, legacyEpisodes[0]);
+await legacyPreparedRedis.sadd('moviwatch:catalogue:v1:backed-up-episode-ids', legacyEpisodes[0].id);
+const legacySnapshotVerification = await verifyCatalogueMigration(legacyPreparedRedis, {
+  movieCount: 2, seriesCount: 1, episodeCount: 1
+});
+assert.equal(legacySnapshotVerification.ok, false);
+assert.ok(legacySnapshotVerification.errors.some(error => error.includes('without a successful Archive.org byte-range verification')));
+const repairedLegacySnapshot = await prepareNeonToRedisMigration(fakeSql, legacyPreparedRedis);
+assert.equal(repairedLegacySnapshot.migration.status, 'prepared');
+assert.equal(repairedLegacySnapshot.migration.verification.ok, true);
+assert.equal((await getMovie(legacyPreparedRedis, legacyMovies[0].id)).is_published, false);
+
 const stalePreparedRedis = new FakeRedis();
 await setMigrationState(stalePreparedRedis, {
   status: 'prepared', source_movie_count: 2, migrated_movies: 2,
@@ -139,6 +196,7 @@ assert.equal(migration.migration.backed_up_series, 1);
 assert.equal(migration.migration.backed_up_episodes, 1);
 assert.equal(migration.migration.archive_source_candidates, 1);
 assert.equal(migration.migration.hidden_movies, 1);
+assert.equal(migration.migration.needs_probe_movies, 1);
 assert.equal(migration.migration.verification.ok, true);
 assert.equal(migration.migration.verification.actual.seriesBackups, 1);
 assert.equal(migration.migration.verification.actual.episodeBackups, 1);
@@ -148,7 +206,8 @@ const verifiedPrepared = await verifyCatalogueMigration(migrationRedis, {
 assert.equal(verifiedPrepared.ok, true);
 const migratedArchive = await getMovie(migrationRedis, legacyMovies[0].id);
 const migratedDriveOnly = await getMovie(migrationRedis, legacyMovies[1].id);
-assert.equal(migratedArchive.is_published, true);
+assert.equal(migratedArchive.is_published, false);
+assert.equal(isMoviePublishable(migratedArchive), false);
 assert.equal(migratedArchive.video_sources[0].provider, 'archive.org');
 assert.equal(migratedDriveOnly.is_published, false);
 assert.deepEqual(migratedDriveOnly.video_sources, []);
@@ -160,7 +219,7 @@ const stagedNew = {
   title: 'Newly Curated Archive Movie',
   poster_url: 'https://archive.org/services/img/new-title',
   category: 'Documentary',
-  video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/new-title/movie.mp4' }],
+  video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/new-title/movie.mp4', verified_at: '2026-11-24T10:00:00.000Z', verified_size: 4096 }],
   is_published: true,
   is_featured: true
 };
@@ -198,6 +257,7 @@ const workerSource = readFileSync('src/index.js', 'utf8');
 const adminSource = readFileSync('public/admin.html', 'utf8');
 const homeSource = readFileSync('public/index.html', 'utf8');
 const migrationSource = readFileSync('src/catalogue-migration.js', 'utf8');
+const storeSource = readFileSync('src/catalogue-store.js', 'utf8');
 assert.ok(workerSource.includes("Never expose stored source URLs"));
 assert.ok(workerSource.includes("storeMeta.active===true||storeMeta.migration?.status==='prepared'"));
 assert.ok(workerSource.includes("migrationRunning&&['POST','PUT','PATCH','DELETE'].includes(method)"));
@@ -206,9 +266,9 @@ assert.ok(workerSource.includes("Google Drive OAuth is disabled while Moviwatch 
 assert.ok(workerSource.includes("This legacy Neon-backed admin endpoint is disabled in Archive-only mode."));
 assert.ok(workerSource.includes("if(storeMeta.active){"));
 assert.ok(workerSource.includes("sourceMovieCount=Number(storeMeta.migration?.source_movie_count||0);"));
-assert.ok(workerSource.includes("__movie_metadata__v4/"));
-assert.ok(workerSource.includes("__public_catalogue__v4"));
-assert.ok(workerSource.includes("v4 deliberately bypasses metadata cached by the legacy Neon/Drive route"));
+assert.ok(workerSource.includes("__movie_metadata__v5/"));
+assert.ok(workerSource.includes("__public_catalogue__v5"));
+assert.ok(workerSource.includes("v5 deliberately bypasses prior unverified-publication metadata cached under the previous namespace"));
 assert.ok(migrationSource.includes("if (previous.migration?.status === \"prepared\")"));
 assert.ok(migrationSource.includes("if (existingVerification.ok) return previous;"));
 assert.ok(adminSource.includes("catalogueNeedsRebuild"));
@@ -224,5 +284,17 @@ assert.ok(adminSource.includes('id="collectionForm"'));
 assert.ok(adminSource.includes('id="featured"'));
 assert.ok(homeSource.includes("async function loadCollections()"));
 assert.ok(homeSource.includes("featured-tag"));
+assert.ok(workerSource.includes("async function verifyArchiveVideoSources(sources)"));
+assert.ok(workerSource.includes("verifyArchiveSources(sources, probeArchiveFile)"));
+assert.ok(workerSource.includes("const value=await prepareRedisMovieInput(req,env)"));
+assert.ok(workerSource.includes("isMoviePublishable(movie)"));
+assert.ok(adminSource.includes("re-checks every source again when you save a movie as Published"));
+assert.ok(workerSource.includes("const movie=isMoviePublishable(stored)"));
+assert.ok(workerSource.includes("published:all.filter(isMoviePublishable).length"));
+assert.ok(workerSource.includes("featured:all.filter(x=>isMoviePublishable(x)&&x.is_featured).length"));
+assert.ok(migrationSource.includes("is_published: false, // Archive.org URLs are candidates"));
+assert.ok(storeSource.includes("without a successful Archive.org byte-range verification"));
+assert.ok(adminSource.includes("need range verification"));
+assert.ok(workerSource.includes("parseArchiveSourceUrl"));
 
 console.log('Transactional Redis movie, category, collection, backup and activation checks passed.');

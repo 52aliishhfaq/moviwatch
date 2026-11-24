@@ -80,10 +80,22 @@ function normalizeMovie(movie) {
     seenSources.add(url);
     const label = typeof source.label === "string" && source.label.trim()
       ? source.label.trim().slice(0, 60) : "Archive.org " + (index + 1);
-    return { label, url, provider: "archive.org" };
+    const verifiedAt = typeof source.verified_at === "string" &&
+      Number.isFinite(Date.parse(source.verified_at))
+      ? new Date(source.verified_at).toISOString() : null;
+    const verifiedSize = Number.isSafeInteger(source.verified_size) && source.verified_size > 0
+      ? source.verified_size : null;
+    return {
+      label, url, provider: "archive.org",
+      ...(verifiedAt && verifiedSize ? { verified_at: verifiedAt, verified_size: verifiedSize } : {})
+    };
   });
   if (movie.is_published === true && sources.length === 0) {
     throw new Error("A published catalogue movie must have at least one Archive.org source.");
+  }
+  if (movie.is_published === true &&
+      sources.some((source) => !source.verified_at || !source.verified_size)) {
+    throw new Error("A published catalogue movie requires a successful server-side Archive.org byte-range verification for every source.");
   }
   return {
     id: movie.id.toLowerCase(),
@@ -203,6 +215,18 @@ export async function getMovies(redis, ids) {
   return readMoviesByKeys(redis, keys);
 }
 
+
+export function isMoviePublishable(movie) {
+  if (!movie || typeof movie !== "object" || movie.is_published !== true ||
+      !Array.isArray(movie.video_sources) || movie.video_sources.length < 1) return false;
+  return movie.video_sources.every((source) =>
+    source && source.provider === "archive.org" &&
+    typeof source.url === "string" &&
+    typeof source.verified_at === "string" && Number.isFinite(Date.parse(source.verified_at)) &&
+    Number.isSafeInteger(source.verified_size) && source.verified_size > 0
+  );
+}
+
 export async function listMovies(redis, {
   category = "",
   query = "",
@@ -217,7 +241,7 @@ export async function listMovies(redis, {
   const normalizedQuery = typeof query === "string" ? query.trim().toLocaleLowerCase() : "";
   return (Array.isArray(records) ? records : [])
     .filter((movie) => movie && typeof movie === "object" && !Array.isArray(movie))
-    .filter((movie) => !publishedOnly || movie.is_published === true)
+    .filter((movie) => !publishedOnly || isMoviePublishable(movie))
     .filter((movie) => !category || movie.category === category)
     .filter((movie) => !normalizedQuery || String(movie.title || "").toLocaleLowerCase().includes(normalizedQuery))
     .sort((a, b) => (publishedOnly ? Number(b.is_featured === true) - Number(a.is_featured === true) : 0) ||
@@ -431,6 +455,12 @@ export async function verifyCatalogueMigration(redis, expectedCounts = {}) {
     records.length === ids.length && records.every((record, index) =>
       record && typeof record === "object" && String(record.id || "").toLowerCase() === ids[index]);
   if (!recordsMatchManifest(movieRecords, movieIds)) errors.push("migrated movie records are missing or their IDs do not match the baseline manifest");
+  const unverifiedPublishedMovies = movieRecords.filter((movie) =>
+    movie && movie.is_published === true && !isMoviePublishable(movie)
+  ).length;
+  if (unverifiedPublishedMovies > 0) {
+    errors.push(unverifiedPublishedMovies + " migrated movie(s) are marked published without a successful Archive.org byte-range verification");
+  }
   if (!recordsMatchManifest(movieBackups, backedUpMovieIds)) errors.push("original movie backups are missing or their IDs do not match the backup manifest");
   if (!recordsMatchManifest(seriesBackups, seriesIds)) errors.push("original series backups are missing or their IDs do not match the backup manifest");
   if (!recordsMatchManifest(episodeBackups, episodeIds)) errors.push("original episode backups are missing or their IDs do not match the backup manifest");

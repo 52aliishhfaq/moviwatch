@@ -332,7 +332,8 @@ async function refreshMigrationStatus(){
   if(Number.isFinite(migration.backed_up_series))countParts.push('Series backups: '+migration.backed_up_series);
   if(Number.isFinite(migration.backed_up_episodes))countParts.push('Episode backups: '+migration.backed_up_episodes);
   if(Number.isFinite(migration.archive_source_candidates))countParts.push('Archive.org source candidates (not yet probed): '+migration.archive_source_candidates);
-  if(Number.isFinite(migration.hidden_movies))countParts.push('Hidden legacy items: '+migration.hidden_movies);
+  if(Number.isFinite(migration.needs_probe_movies))countParts.push('Migrated movies awaiting byte-range verification: '+migration.needs_probe_movies);
+  if(Number.isFinite(migration.hidden_movies))countParts.push('Legacy movies without Archive.org sources: '+migration.hidden_movies);
   if(state==='prepared')countParts.push('Backup verification: '+(backupVerified?'PASSED':'FAILED'));
   $('#migrationCounts').textContent=countParts.join(' · ');
   if(state==='prepared'&&!backupVerified&&Array.isArray(result.verification?.errors)){
@@ -427,7 +428,7 @@ $('#prepareMigration').addEventListener('click',async()=>{
     const result=await api('/api/admin/catalogue/migration/prepare',{
       method:'POST',body:JSON.stringify({confirm:'PREPARE_ARCHIVE_ONLY_MIGRATION'})
     });
-    $('#migrationStatus').textContent='Preparation complete. '+(result.migration?.archive_source_candidates||0)+' Archive.org movie(s) have Archive.org source links; each still needs an availability probe before publication; legacy non-Archive entries remain hidden.';
+    $('#migrationStatus').textContent='Preparation complete. '+(result.migration?.archive_source_candidates||0)+' Archive.org source candidates were copied but all migrated movies remain hidden until each selected file passes publication-time byte-range verification.';
     await refresh();
   }catch(error){$('#migrationStatus').textContent=error.message;await refreshMigrationStatus().catch(()=>{});}
   finally{await refreshMigrationStatus().catch(()=>{});}
@@ -529,8 +530,12 @@ function renderMovies(){
     const small=document.createElement('small');
     const sources=Array.isArray(movie.video_sources)?movie.video_sources:[];
     const drive=sources.filter(source=>source.provider==='google-drive'||source.provider==='google-drive-private').length;
-    const archive=sources.filter(source=>source.provider==='archive.org').length;
-    small.textContent=movie.category+' · '+(movie.is_published?'Published':'Hidden')+(movie.is_featured?' · Featured':'')+' · '+sources.length+' source(s) ('+drive+' Drive, '+archive+' Archive.org)';
+    const archiveSources=sources.filter(source=>source.provider==='archive.org');
+    const archive=archiveSources.length;
+    const unverified=archiveSources.filter(source=>!source.verified_at||!Number.isSafeInteger(source.verified_size)||source.verified_size<=0).length;
+    const verificationLabel=unverified?' · '+unverified+' Archive.org source(s) need range verification':' · Archive.org sources verified';
+    const publicationState=unverified?'Needs range probe':(movie.is_published?'Published':'Hidden');
+    small.textContent=movie.category+' · '+publicationState+(movie.is_featured?' · Featured':'')+' · '+sources.length+' source(s) ('+drive+' Drive, '+archive+' Archive.org)'+(archive?verificationLabel:'');
     info.append(title,small);
     const actions=document.createElement('div');
     actions.className='actions';
@@ -1120,7 +1125,9 @@ async function inspectArchiveItem(identifier){
     const meta=document.createElement('p');meta.className='muted';
     meta.textContent=[item.year,item.creator,item.mediatype,item.availability,'Identifier: '+item.identifier].filter(Boolean).join(' · ');
     const rights=document.createElement('p');rights.textContent='Rights / licence: '+(item.rights||item.licenseurl||'Not specified by item metadata. Verify distribution rights before publishing.');
-    target.append(heading,meta,rights);
+    const validationNotice=document.createElement('p');validationNotice.className='muted';
+    validationNotice.textContent='Files selected here are range-probed once. The Worker re-checks every source again when you save a movie as Published; migration URLs remain hidden until this check succeeds.';
+    target.append(heading,meta,rights,validationNotice);
     if(item.availability!=='available'){
       const warning=document.createElement('p');warning.textContent='Item availability: '+item.availability+'. It may not be playable right now.';target.append(warning);
     }
