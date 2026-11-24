@@ -2103,6 +2103,23 @@ async function cachedVideoRange(req, env, ctx, source, movieId, optionIndex, ran
 
 async function api(req, env, ctx) {
   if (new URL(req.url).pathname === '/api/google-drive/oauth/callback' && req.method === 'GET') {
+    // OAuth callbacks are write-capable: deny them once Archive-only migration
+    // starts. Fail closed if Redis cannot confirm the current catalogue mode.
+    let catalogueMeta;
+    try {
+      catalogueMeta = await getCatalogueMeta(redisFor(env));
+    } catch (error) {
+      console.error('Could not verify catalogue mode for Google OAuth callback:', error?.message || error);
+      return json({ error: 'Google Drive OAuth is temporarily disabled until catalogue mode can be verified.' }, 503, {
+        'set-cookie': 'moviwatch_google_oauth=; HttpOnly; Secure; SameSite=Lax; Path=/api/google-drive/oauth/callback; Max-Age=0'
+      });
+    }
+    const migrationState = catalogueMeta.migration?.status;
+    if (catalogueMeta.active || migrationState === 'running' || migrationState === 'prepared') {
+      return json({ error: 'Google Drive OAuth is disabled while Moviwatch is in Archive-only migration mode.' }, 410, {
+        'set-cookie': 'moviwatch_google_oauth=; HttpOnly; Secure; SameSite=Lax; Path=/api/google-drive/oauth/callback; Max-Age=0'
+      });
+    }
     return await completeGoogleDriveOAuth(req, env);
   }
   const url = new URL(req.url);
@@ -2676,11 +2693,12 @@ async function api(req, env, ctx) {
     const migrationRunning=storeMeta.migration?.status==='running';
     const storeReady=storeMeta.active===true||storeMeta.migration?.status==='prepared';
     const legacyWritesFrozen=migrationRunning||storeReady;
-    if(legacyWritesFrozen&&path.startsWith('/api/admin/google-drive/')){
-      return json({error:'Google Drive management is paused while the Archive-only catalogue migration is prepared.'},410);
+    if(legacyWritesFrozen&&(path==='/api/admin/google-drive'||path.startsWith('/api/admin/google-drive/'))){
+      return json({error:'Google Drive management is disabled while Moviwatch is in Archive-only migration mode.'},410);
     }
-    if(legacyWritesFrozen&&(path==='/api/admin/series'||path.startsWith('/api/admin/series/')||path.startsWith('/api/admin/episodes/'))){
-      return json({error:'Series management is paused during the Archive-only catalogue migration; legacy records are preserved in migration backups.'},410);
+    if(legacyWritesFrozen&&(path==='/api/admin/series'||path.startsWith('/api/admin/series/')||
+       path==='/api/admin/episodes'||path.startsWith('/api/admin/episodes/'))){
+      return json({error:'Series management is disabled during Archive-only migration; original records are preserved in Redis backups.'},410);
     }
     if(migrationRunning&&['POST','PUT','PATCH','DELETE'].includes(method)&&
        (path==='/api/admin/movies'||path.startsWith('/api/admin/movies/'))){
@@ -2824,6 +2842,11 @@ async function api(req, env, ctx) {
         const client = /required|invalid|permission|not found|expired|configured|upload|must |between |valid|already attached|folder|Drive file/i.test(message);
         return json({ error: client ? message : 'Google Drive request failed.' }, client ? 400 : 502);
       }
+    }
+    if(storeMeta.active){
+      // The Redis-backed routes above are the complete admin surface in
+      // Archive-only mode. Never fall through to Neon-backed legacy CRUD.
+      return json({error:'This legacy Neon-backed admin endpoint is disabled in Archive-only mode.'},410);
     }
     const sql = sqlFor(env);
     if (path === '/api/admin/catalogue-diagnostics' && method === 'GET') {
