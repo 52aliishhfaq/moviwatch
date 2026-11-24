@@ -427,10 +427,13 @@ export async function verifyCatalogueMigration(redis, expectedCounts = {}) {
   const movieBackups = await readValuesByKeys(redis, backedUpMovieIds.map((id) => BACKUP_PREFIX + "movie:" + id));
   const seriesBackups = await readValuesByKeys(redis, seriesIds.map((id) => BACKUP_PREFIX + "series:" + id));
   const episodeBackups = await readValuesByKeys(redis, episodeIds.map((id) => BACKUP_PREFIX + "episode:" + id));
-  if (movieRecords.length !== expected.movies || movieRecords.some((value) => !value)) errors.push("one or more migrated movie records are missing");
-  if (movieBackups.length !== expected.movies || movieBackups.some((value) => !value)) errors.push("one or more original movie backups are missing");
-  if (seriesBackups.length !== expected.series || seriesBackups.some((value) => !value)) errors.push("one or more original series backups are missing");
-  if (episodeBackups.length !== expected.episodes || episodeBackups.some((value) => !value)) errors.push("one or more original episode backups are missing");
+  const recordsMatchManifest = (records, ids) =>
+    records.length === ids.length && records.every((record, index) =>
+      record && typeof record === "object" && String(record.id || "").toLowerCase() === ids[index]);
+  if (!recordsMatchManifest(movieRecords, movieIds)) errors.push("migrated movie records are missing or their IDs do not match the baseline manifest");
+  if (!recordsMatchManifest(movieBackups, backedUpMovieIds)) errors.push("original movie backups are missing or their IDs do not match the backup manifest");
+  if (!recordsMatchManifest(seriesBackups, seriesIds)) errors.push("original series backups are missing or their IDs do not match the backup manifest");
+  if (!recordsMatchManifest(episodeBackups, episodeIds)) errors.push("original episode backups are missing or their IDs do not match the backup manifest");
   return {
     ok: errors.length === 0,
     expected,
