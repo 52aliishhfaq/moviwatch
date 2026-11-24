@@ -276,6 +276,8 @@ assert.ok(workerSource.includes("const value=await prepareRedisMovieInput(req,en
 assert.ok(workerSource.includes("isMoviePublishable(movie)"));
 assert.ok(adminSource.includes("Re-checks every source again when you save a movie as Published"));
 assert.ok(workerSource.includes("const movie=isMoviePublishable(stored)"));
+assert.ok(workerSource.includes("published:all.filter(isMoviePublishable).length"));
+assert.ok(workerSource.includes("featured:all.filter(x=>isMoviePublishable(x)&&x.is_featured).length"));
 assert.ok(migrationSource.includes("is_published: false, // Archive.org URLs are candidates"));
 assert.ok(storeSource.includes("without a successful Archive.org byte-range verification"));
 assert.ok(adminSource.includes("need range verification"));
