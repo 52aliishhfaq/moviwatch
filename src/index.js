@@ -4,6 +4,7 @@ import { WorkerEntrypoint } from 'cloudflare:workers';
 import { videoSourceUrl, sourceProvider } from './video-sources.js';
 import { getVideoRangeWindow } from './video-range-window.js';
 import { createRangeRelayStream } from './video-stream.js';
+import { searchArchiveItems, getArchiveItem, probeArchiveFile } from './archive-catalogue.js';
 import {
   clearGoogleDriveAccessTokenCache,
   decryptGoogleDriveSecret,
@@ -2572,6 +2573,38 @@ async function api(req, env, ctx) {
       return json({ error: detail.slice(0, 300) }, 502);
     }
 
+  }
+
+  if (path.startsWith('/api/admin/archive/')) {
+    if (!await isAdmin(req, env)) return json({ error: 'Admin login required' }, 401);
+    try {
+      if (path === '/api/admin/archive/search' && method === 'GET') {
+        const page = Number(url.searchParams.get('page') || 1);
+        const year = url.searchParams.get('year') || '';
+        const sort = url.searchParams.get('sort') || 'downloads desc';
+        const query = url.searchParams.get('q') || '';
+        const result = await searchArchiveItems({ query, year, page, sort, rows: 24 });
+        return json(result, 200, { 'cache-control': 'private, max-age=30' });
+      }
+      const itemMatch = /^\\/api\\/admin\\/archive\\/items\\/([A-Za-z0-9._-]{1,200})$/.exec(path);
+      if (itemMatch && method === 'GET') {
+        const item = await getArchiveItem(itemMatch[1]);
+        return json({ item }, 200, { 'cache-control': 'private, max-age=60' });
+      }
+      const probeMatch = /^\\/api\\/admin\\/archive\\/items\\/([A-Za-z0-9._-]{1,200})\\/probe$/.exec(path);
+      if (probeMatch && method === 'POST') {
+        sameOrigin(req, env);
+        const body = await readBody(req);
+        const result = await probeArchiveFile(probeMatch[1], body.filename);
+        return json({ probe: result }, 200, { 'cache-control': 'no-store' });
+      }
+      return json({ error: 'Archive.org admin endpoint not found.' }, 404);
+    } catch (error) {
+      const status = Number.isInteger(error?.status) ? error.status : 502;
+      const message = error instanceof Error ? error.message : 'Archive.org request failed.';
+      console.error('Archive.org admin request failed:', message);
+      return json({ error: message }, status);
+    }
   }
 
   if (path.startsWith('/api/admin/')) {
