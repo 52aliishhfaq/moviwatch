@@ -120,6 +120,16 @@ async function fakeSql(strings) {
   if (query.includes('from public.episodes')) return legacyEpisodes;
   throw new Error('Unexpected SQL query: '+query);
 }
+const stalePreparedRedis = new FakeRedis();
+await setMigrationState(stalePreparedRedis, {
+  status: 'prepared', source_movie_count: 2, migrated_movies: 2,
+  backed_up_movies: 2, backed_up_series: 1, backed_up_episodes: 1
+});
+const repairedSnapshot = await prepareNeonToRedisMigration(fakeSql, stalePreparedRedis);
+assert.equal(repairedSnapshot.migration.status, 'prepared');
+assert.equal(repairedSnapshot.migration.verification.ok, true);
+assert.equal(await countCatalogueMovies(stalePreparedRedis), 2);
+
 const migration = await prepareNeonToRedisMigration(fakeSql, migrationRedis);
 assert.equal(migration.migration.status, 'prepared');
 assert.equal(migration.migration.source_movie_count, 2);
@@ -170,6 +180,19 @@ await assert.rejects(
   /series backups are missing/
 );
 
+const corruptedRedis = new FakeRedis();
+await prepareNeonToRedisMigration(fakeSql, corruptedRedis);
+await corruptedRedis.set(
+  'moviwatch:catalogue:v1:legacy-backup:episode:'+legacyEpisodes[0].id,
+  { ...legacyEpisodes[0], id: 'e0000000-0000-4000-8000-000000000099' }
+);
+const corruptedVerification = await verifyCatalogueMigration(corruptedRedis, {
+  movieCount: 2, seriesCount: 1, episodeCount: 1
+});
+assert.equal(corruptedVerification.ok, false);
+assert.ok(corruptedVerification.errors.some((error) => error.includes('episode backups') ||
+  error.includes('episode backup manifest')));
+
 
 const workerSource = readFileSync('src/index.js', 'utf8');
 const adminSource = readFileSync('public/admin.html', 'utf8');
@@ -179,6 +202,17 @@ assert.ok(workerSource.includes("Never expose stored source URLs"));
 assert.ok(workerSource.includes("storeMeta.active===true||storeMeta.migration?.status==='prepared'"));
 assert.ok(workerSource.includes("migrationRunning&&['POST','PUT','PATCH','DELETE'].includes(method)"));
 assert.ok(workerSource.includes("Movie deletion is locked until the Redis catalogue is activated"));
+assert.ok(workerSource.includes("Google Drive OAuth is disabled while Moviwatch is in Archive-only migration mode."));
+assert.ok(workerSource.includes("This legacy Neon-backed admin endpoint is disabled in Archive-only mode."));
+assert.ok(workerSource.includes("if(storeMeta.active){"));
+assert.ok(workerSource.includes("sourceMovieCount=Number(storeMeta.migration?.source_movie_count||0);"));
+assert.ok(workerSource.includes("__movie_metadata__v4/"));
+assert.ok(workerSource.includes("__public_catalogue__v4"));
+assert.ok(workerSource.includes("v4 deliberately bypasses metadata cached by the legacy Neon/Drive route"));
+assert.ok(migrationSource.includes("if (previous.migration?.status === \"prepared\")"));
+assert.ok(migrationSource.includes("if (existingVerification.ok) return previous;"));
+assert.ok(adminSource.includes("catalogueNeedsRebuild"));
+assert.ok(adminSource.includes("Rebuild and verify migration"));
 assert.ok(adminSource.includes("Deleting movies remains locked until activation"));
 assert.ok(workerSource.includes("video_sources:(Array.isArray(movie.video_sources)?movie.video_sources:[])"));
 assert.ok(migrationSource.includes('await clearStagedMovies(redis)'));

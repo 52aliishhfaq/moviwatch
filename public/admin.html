@@ -253,7 +253,7 @@ Archive.org 720p | https://archive.org/download/IDENTIFIER/video.mp4"></textarea
 <script>
 const $=selector=>document.querySelector(selector);
 let movies=[],editing=null,driveAccounts=[],driveAccountId='primary',pendingEpisodeFile=null,seriesData=[];
-let catalogueStoreStatus=null,catalogueReady=false,catalogueFrozen=false,catalogueCategories=[];
+let catalogueStoreStatus=null,catalogueReady=false,catalogueFrozen=false,catalogueNeedsRebuild=false,catalogueCategories=[];
 
 async function api(path,options={}){
   const response=await fetch(path,{
@@ -312,6 +312,7 @@ async function refreshMigrationStatus(){
   const status=$('#migrationStatus');
   const prepare=$('#prepareMigration'),activate=$('#activateMigration');
   const backupVerified=result.verification?result.verification.ok===true:migration.verification?.ok===true;
+  catalogueNeedsRebuild=state==='prepared'&&!backupVerified;
   if(catalogueStoreStatus.active){
     status.textContent='Active: public catalogue reads are now served from Upstash Redis. Neon is preserved as the legacy backup source.';
   }else if(state==='prepared'){
@@ -338,8 +339,9 @@ async function refreshMigrationStatus(){
     status.textContent+=' Details: '+result.verification.errors.join('; ');
   }
   const staleRunning=state==='running'&&Number.isFinite(Date.parse(migration.started_at))&&Date.now()-Date.parse(migration.started_at)>15*60*1000;
-  prepare.disabled=catalogueStoreStatus.active||state==='prepared'||(state==='running'&&!staleRunning);
-  prepare.textContent=state==='failed'||staleRunning?'Retry migration preparation':'Prepare migration and backups';
+  prepare.disabled=catalogueStoreStatus.active||(state==='prepared'&&backupVerified)||(state==='running'&&!staleRunning);
+  prepare.textContent=catalogueNeedsRebuild?'Rebuild and verify migration':
+    (state==='failed'||staleRunning?'Retry migration preparation':'Prepare migration and backups');
   activate.disabled=catalogueStoreStatus.active||state!=='prepared'||!backupVerified;
   activate.textContent=catalogueStoreStatus.active?'Redis catalogue active':'Activate Redis catalogue';
 }
@@ -416,7 +418,10 @@ function renderCollections(collections){
   });
 }
 $('#prepareMigration').addEventListener('click',async()=>{
-  if(!confirm('Prepare the Archive-only catalogue now? This copies Neon movie, series and episode records to Redis backups. Neon remains untouched, but legacy Drive/series write paths will be frozen after preparation. Continue?'))return;
+  const confirmation=catalogueNeedsRebuild
+    ?'The previous prepared snapshot is missing backup verification data. Rebuilding will read Neon again, clear Redis staging movie records and recreate all movie/series/episode backups. Any manually added staging movies must be added again afterwards. Neon itself remains untouched. Continue?'
+    :'Prepare the Archive-only catalogue now? This copies Neon movie, series and episode records to Redis backups. Neon remains untouched, but legacy Drive/series write paths will be frozen after preparation. Continue?';
+  if(!confirm(confirmation))return;
   const button=$('#prepareMigration');button.disabled=true;button.textContent='Preparing…';
   try{
     const result=await api('/api/admin/catalogue/migration/prepare',{

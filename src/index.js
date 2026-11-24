@@ -458,9 +458,11 @@ export class MovieMetadata extends WorkerEntrypoint {
 
 async function movieById(ctx, env, movieId) {
   if (!/^[0-9a-f-]{36}$/i.test(movieId)) return { movie: null, cacheStatus: 'BYPASS' };
+  // v4 deliberately bypasses metadata cached by the legacy Neon/Drive route
+  // so the first request after a Worker deploy cannot reuse a pre-cutover URL.
   const metadataEntry = ctx.exports.MovieMetadata({ props: { movieId } });
   const response = await metadataEntry.fetch(
-    new Request('https://moviwatch.internal/__movie_metadata__v3/' + encodeURIComponent(movieId))
+    new Request('https://moviwatch.internal/__movie_metadata__v4/' + encodeURIComponent(movieId))
   );
   if (!response.ok) throw new Error('Movie metadata lookup failed (HTTP ' + response.status + ')');
   const payload = await response.json();
@@ -2103,6 +2105,23 @@ async function cachedVideoRange(req, env, ctx, source, movieId, optionIndex, ran
 
 async function api(req, env, ctx) {
   if (new URL(req.url).pathname === '/api/google-drive/oauth/callback' && req.method === 'GET') {
+    // OAuth callbacks are write-capable: deny them once Archive-only migration
+    // starts. Fail closed if Redis cannot confirm the current catalogue mode.
+    let catalogueMeta;
+    try {
+      catalogueMeta = await getCatalogueMeta(redisFor(env));
+    } catch (error) {
+      console.error('Could not verify catalogue mode for Google OAuth callback:', error?.message || error);
+      return json({ error: 'Google Drive OAuth is temporarily disabled until catalogue mode can be verified.' }, 503, {
+        'set-cookie': 'moviwatch_google_oauth=; HttpOnly; Secure; SameSite=Lax; Path=/api/google-drive/oauth/callback; Max-Age=0'
+      });
+    }
+    const migrationState = catalogueMeta.migration?.status;
+    if (catalogueMeta.active || migrationState === 'running' || migrationState === 'prepared') {
+      return json({ error: 'Google Drive OAuth is disabled while Moviwatch is in Archive-only migration mode.' }, 410, {
+        'set-cookie': 'moviwatch_google_oauth=; HttpOnly; Secure; SameSite=Lax; Path=/api/google-drive/oauth/callback; Max-Age=0'
+      });
+    }
     return await completeGoogleDriveOAuth(req, env);
   }
   const url = new URL(req.url);
@@ -2220,7 +2239,7 @@ async function api(req, env, ctx) {
     const allowedCategories=storeMeta.active?new Set(await listCategories(storeRedis)):CATEGORIES;
     if (category && !allowedCategories.has(category)) return json({ error: 'Unknown category' }, 400);
 
-    const catalogueUrl = new URL('https://moviwatch.internal/__public_catalogue__v3');
+    const catalogueUrl = new URL('https://moviwatch.internal/__public_catalogue__v4');
     if (category) catalogueUrl.searchParams.set('category', category);
     if (query) catalogueUrl.searchParams.set('q', query);
     const catalogueEntry = ctx.exports.PublicCatalogue({ props: { category, query } });
@@ -2676,11 +2695,12 @@ async function api(req, env, ctx) {
     const migrationRunning=storeMeta.migration?.status==='running';
     const storeReady=storeMeta.active===true||storeMeta.migration?.status==='prepared';
     const legacyWritesFrozen=migrationRunning||storeReady;
-    if(legacyWritesFrozen&&path.startsWith('/api/admin/google-drive/')){
-      return json({error:'Google Drive management is paused while the Archive-only catalogue migration is prepared.'},410);
+    if(legacyWritesFrozen&&(path==='/api/admin/google-drive'||path.startsWith('/api/admin/google-drive/'))){
+      return json({error:'Google Drive management is disabled while Moviwatch is in Archive-only migration mode.'},410);
     }
-    if(legacyWritesFrozen&&(path==='/api/admin/series'||path.startsWith('/api/admin/series/')||path.startsWith('/api/admin/episodes/'))){
-      return json({error:'Series management is paused during the Archive-only catalogue migration; legacy records are preserved in migration backups.'},410);
+    if(legacyWritesFrozen&&(path==='/api/admin/series'||path.startsWith('/api/admin/series/')||
+       path==='/api/admin/episodes'||path.startsWith('/api/admin/episodes/'))){
+      return json({error:'Series management is disabled during Archive-only migration; original records are preserved in Redis backups.'},410);
     }
     if(migrationRunning&&['POST','PUT','PATCH','DELETE'].includes(method)&&
        (path==='/api/admin/movies'||path.startsWith('/api/admin/movies/'))){
@@ -2692,17 +2712,23 @@ async function api(req, env, ctx) {
     }
     if(path==='/api/admin/catalogue/migration/status'&&method==='GET'){
       let sourceMovieCount=null,sourceSeriesCount=null,sourceEpisodeCount=null;
-      try{
-        const sql=sqlFor(env);
-        const rows=await sql`SELECT (SELECT COUNT(*)::int FROM public.movies) AS movies,
-          to_regclass('public.series')::text AS series_table,to_regclass('public.episodes')::text AS episodes_table`;
-        sourceMovieCount=Number(rows[0]?.movies||0);
-        if(rows[0]?.series_table) {
-          const counts=await sql`SELECT (SELECT COUNT(*)::int FROM public.series) AS series,
-            (SELECT COUNT(*)::int FROM public.episodes) AS episodes`;
-          sourceSeriesCount=Number(counts[0]?.series||0);sourceEpisodeCount=Number(counts[0]?.episodes||0);
-        }
-      }catch(error){console.warn('Migration source diagnostics unavailable:',error?.message||error);}
+      if(storeMeta.active){
+        sourceMovieCount=Number(storeMeta.migration?.source_movie_count||0);
+        sourceSeriesCount=Number(storeMeta.migration?.backed_up_series||0);
+        sourceEpisodeCount=Number(storeMeta.migration?.backed_up_episodes||0);
+      }else{
+        try{
+          const sql=sqlFor(env);
+          const rows=await sql`SELECT (SELECT COUNT(*)::int FROM public.movies) AS movies,
+            to_regclass('public.series')::text AS series_table,to_regclass('public.episodes')::text AS episodes_table`;
+          sourceMovieCount=Number(rows[0]?.movies||0);
+          if(rows[0]?.series_table) {
+            const counts=await sql`SELECT (SELECT COUNT(*)::int FROM public.series) AS series,
+              (SELECT COUNT(*)::int FROM public.episodes) AS episodes`;
+            sourceSeriesCount=Number(counts[0]?.series||0);sourceEpisodeCount=Number(counts[0]?.episodes||0);
+          }
+        }catch(error){console.warn('Migration source diagnostics unavailable:',error?.message||error);}
+      }
       let verification=null;
       if(storeMeta.migration?.status==='prepared'&&!storeMeta.active){
         verification=await verifyCatalogueMigration(storeRedis,{
@@ -2715,6 +2741,7 @@ async function api(req, env, ctx) {
         sourceMovieCount,sourceSeriesCount,sourceEpisodeCount,verification});
     }
     if(path==='/api/admin/catalogue/migration/prepare'&&method==='POST'){
+      if(storeMeta.active)return json({error:'The Redis catalogue is already active; migration preparation is closed.'},409);
       const body=await readBody(req);
       if(body.confirm!=='PREPARE_ARCHIVE_ONLY_MIGRATION')return json({error:'Migration preparation confirmation is required.'},400);
       const sql=sqlFor(env);
@@ -2824,6 +2851,11 @@ async function api(req, env, ctx) {
         const client = /required|invalid|permission|not found|expired|configured|upload|must |between |valid|already attached|folder|Drive file/i.test(message);
         return json({ error: client ? message : 'Google Drive request failed.' }, client ? 400 : 502);
       }
+    }
+    if(storeMeta.active){
+      // The Redis-backed routes above are the complete admin surface in
+      // Archive-only mode. Never fall through to Neon-backed legacy CRUD.
+      return json({error:'This legacy Neon-backed admin endpoint is disabled in Archive-only mode.'},410);
     }
     const sql = sqlFor(env);
     if (path === '/api/admin/catalogue-diagnostics' && method === 'GET') {
