@@ -37,7 +37,7 @@ function keyForCollection(id) {
 
 function safeScore(value) {
   const time = typeof value === "number" ? value : Date.parse(value || "");
-  return Number.isFinite(time) && time >= 0 ? time : Date.now();
+  return Number.isFinite(time) && time >= 0 ? time : 0;
 }
 
 function normalizeMovie(movie) {
