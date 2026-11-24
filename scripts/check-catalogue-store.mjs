@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   activateCatalogueStore, backupLegacyRecord, countCatalogueMovies, deleteCategory,
-  deleteCollection, deleteMovie, getCatalogueMeta, getCollection, getMovie,
+  deleteCollection, deleteMovie, getCatalogueMeta, getCollection, getMovie, getMovies,
   listCategories, listCollections, listMovies, saveCategory, saveCollection,
   saveMovie, setMigrationState
 } from '../src/catalogue-store.js';
@@ -53,6 +53,7 @@ const movieB = { ...movieA, id: 'a0000000-0000-4000-8000-000000000002', title: '
 await saveMovie(redis, movieA);
 await saveMovie(redis, movieB);
 assert.equal((await getMovie(redis, movieA.id)).title, 'First Movie');
+assert.deepEqual((await getMovies(redis, [movieA.id, movieB.id])).map(movie => movie.title), ['First Movie', 'Second Movie']);
 assert.equal(await countCatalogueMovies(redis), 2);
 assert.equal((await listMovies(redis, { publishedOnly: true })).length, 2);
 assert.equal((await listMovies(redis, { category: 'Romantic' }))[0].id, movieB.id);
