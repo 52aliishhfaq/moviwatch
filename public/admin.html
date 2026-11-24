@@ -469,14 +469,14 @@ async function refresh(){
     renderMovies();
     if(catalogueReady){
       const activated=catalogueStoreStatus.active===true;
-      $('#movieForm').querySelectorAll('input,select,textarea,button').forEach(control=>control.disabled=!activated);
+      $('#movieForm').querySelectorAll('input,select,textarea,button').forEach(control=>control.disabled=false);
       $('#googleDrivePanel').classList.add('hidden');
       $('#seriesManager').classList.add('hidden');
       $('#publishDriveSelection').classList.add('hidden');
       $('#sourceHelp').textContent=activated
         ?'Archive.org sources only. Search and validate files above before publishing. Up to 8 sources per movie.'
-        :'Movie editing is locked after snapshot preparation. Review the migration counts, activate the Redis catalogue, then add or edit Archive.org movies.';
-      if(!activated)$('#formNotice').textContent='Snapshot prepared. Movie writes are locked until you activate the Redis catalogue; this keeps the verified migration counts consistent.';
+        :'Archive.org sources only. You can add and edit movies in the prepared Redis catalogue now. Deleting movies remains locked until activation so migrated legacy records stay verifiable.';
+      if(!activated)$('#formNotice').textContent='Snapshot prepared. You can add or edit Archive.org movies and curate collections; delete is locked until activation to preserve the migrated baseline.';
       await refreshCuration();
       setPendingPublishFile(null);
     }else if(catalogueFrozen){
@@ -531,8 +531,7 @@ function renderMovies(){
     remove.textContent='Delete';
     remove.addEventListener('click',()=>deleteMovie(movie.id));
     if(catalogueReady&&!catalogueStoreStatus?.active){
-      edit.disabled=true;remove.disabled=true;
-      edit.title='Activate the Redis catalogue before editing movies';
+      remove.disabled=true;
       remove.title='Activate the Redis catalogue before deleting movies';
     }
     actions.append(edit,remove);
