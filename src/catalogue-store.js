@@ -90,8 +90,11 @@ function normalizeMovie(movie) {
       ...(verifiedAt && verifiedSize ? { verified_at: verifiedAt, verified_size: verifiedSize } : {})
     };
   });
+  if (movie.is_published === true && sources.length === 0) {
+    throw new Error("A published catalogue movie must have at least one Archive.org source.");
+  }
   if (movie.is_published === true &&
-      (sources.length === 0 || sources.some((source) => !source.verified_at || !source.verified_size))) {
+      sources.some((source) => !source.verified_at || !source.verified_size)) {
     throw new Error("A published catalogue movie requires a successful server-side Archive.org byte-range verification for every source.");
   }
   return {
