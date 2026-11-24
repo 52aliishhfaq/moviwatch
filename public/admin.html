@@ -60,6 +60,23 @@ button.danger{background:#9c3847;border-color:#9c3847;width:auto;padding:7px 10p
       <p id="stats" class="muted">Loading…</p>
     </div>
 
+    <div class="panel" id="archiveSearchPanel">
+      <h2>Search Internet Archive</h2>
+      <p class="muted">Search public movie items, inspect metadata and available video files, then validate a file before adding it to a movie.</p>
+      <div class="drive-controls">
+        <div><label for="archiveQuery">Title / creator / keywords</label><input id="archiveQuery" maxlength="160" placeholder="e.g. classic science fiction"></div>
+        <button id="archiveSearchButton" type="button" class="secondary" style="width:auto">Search Archive.org</button>
+      </div>
+      <div class="drive-controls">
+        <div><label for="archiveYear">Year (optional)</label><input id="archiveYear" inputmode="numeric" maxlength="4" placeholder="e.g. 1950"></div>
+        <div><label for="archiveSort">Sort results</label><select id="archiveSort"><option value="downloads desc">Most downloaded</option><option value="date desc">Recently added</option><option value="titleSorter asc">Title A–Z</option></select></div>
+      </div>
+      <p id="archiveNotice" class="notice" role="status" aria-live="polite"></p>
+      <div id="archiveResults" aria-live="polite"></div>
+      <div id="archiveItemDetails"></div>
+      <button id="archiveLoadMore" type="button" class="secondary hidden">Load more results</button>
+    </div>
+
     <div class="panel" id="googleDrivePanel">
       <div class="drive-top">
         <div>
@@ -804,6 +821,91 @@ $('#movieForm').addEventListener('submit',async event=>{
   }catch(error){$('#formNotice').textContent=error.message;}
   finally{saveButton.disabled=false;if(!editing)saveButton.textContent='Publish movie';}
 });
+
+let archivePage=1,archiveTotal=0,archiveResults=[],archiveBusy=false;
+const archiveEl=id=>document.getElementById(id);
+function archiveNotice(message,isError=false){
+  const node=archiveEl('archiveNotice');node.textContent=message;node.style.color=isError?'#ff9aa8':'';
+}
+function archiveButton(label,handler,secondary=true){
+  const button=document.createElement('button');button.type='button';button.textContent=label;
+  if(secondary)button.className='secondary';
+  button.addEventListener('click',handler);return button;
+}
+function renderArchiveResults(append=false){
+  const list=archiveEl('archiveResults');if(!append)list.replaceChildren();
+  for(const item of archiveResults.slice(append?Math.max(0,archiveResults.length-24):0)){
+    const row=document.createElement('div');row.className='movie';
+    const image=document.createElement('img');image.loading='lazy';image.alt='';
+    image.src='https://archive.org/services/img/'+encodeURIComponent(item.identifier);
+    const info=document.createElement('div');info.className='info';
+    const title=document.createElement('strong');title.textContent=item.title;
+    const small=document.createElement('small');small.textContent=[item.year,item.creator,item.identifier].filter(Boolean).join(' · ');
+    info.append(title,small);
+    const actions=document.createElement('div');actions.className='actions';
+    actions.append(archiveButton('Inspect files',()=>inspectArchiveItem(item.identifier)));
+    row.append(image,info,actions);list.append(row);
+  }
+  archiveEl('archiveLoadMore').classList.toggle('hidden',archiveResults.length>=archiveTotal||archiveResults.length===0);
+}
+async function searchArchive(append=false){
+  if(archiveBusy)return;archiveBusy=true;
+  const button=archiveEl('archiveSearchButton');button.disabled=true;
+  try{
+    if(!append){archivePage=1;archiveResults=[];archiveEl('archiveItemDetails').replaceChildren();}
+    archiveNotice('Searching Internet Archive…');
+    const params=new URLSearchParams({q:archiveEl('archiveQuery').value.trim(),year:archiveEl('archiveYear').value.trim(),page:String(archivePage),sort:archiveEl('archiveSort').value});
+    const result=await api('/api/admin/archive/search?'+params.toString());
+    archiveTotal=result.total||0;archiveResults=append?archiveResults.concat(result.items||[]):(result.items||[]);
+    renderArchiveResults(append);
+    archiveNotice(archiveResults.length+' of '+archiveTotal+' matching item(s).');
+  }catch(error){archiveNotice(error.message,true);}
+  finally{archiveBusy=false;button.disabled=false;}
+}
+async function inspectArchiveItem(identifier){
+  const target=archiveEl('archiveItemDetails');target.replaceChildren();
+  const status=document.createElement('p');status.className='muted';status.textContent='Loading item metadata and video files…';target.append(status);
+  try{
+    const result=await api('/api/admin/archive/items/'+encodeURIComponent(identifier));
+    const item=result.item;target.replaceChildren();
+    const heading=document.createElement('h3');heading.textContent=item.title;
+    const meta=document.createElement('p');meta.className='muted';
+    meta.textContent=[item.year,item.creator,item.mediatype,item.availability,'Identifier: '+item.identifier].filter(Boolean).join(' · ');
+    const rights=document.createElement('p');rights.textContent='Rights / licence: '+(item.rights||item.licenseurl||'Not specified by item metadata. Verify distribution rights before publishing.');
+    target.append(heading,meta,rights);
+    if(item.availability!=='available'){
+      const warning=document.createElement('p');warning.textContent='Item availability: '+item.availability+'. It may not be playable right now.';target.append(warning);
+    }
+    if(!item.files.length){const empty=document.createElement('p');empty.textContent='No public video files were detected for this item.';target.append(empty);return;}
+    const sub=document.createElement('h4');sub.textContent='Public video files';target.append(sub);
+    for(const file of item.files){
+      const row=document.createElement('div');row.className='drive-row';
+      const details=document.createElement('div');details.className='drive-name';
+      const name=document.createElement('strong');name.textContent=file.name;
+      const small=document.createElement('small');small.textContent=[file.format,file.size===null?'Unknown size':(file.size/1048576).toFixed(1)+' MiB',file.original?'Original':'Derivative'].join(' · ');
+      details.append(name,small);
+      const actions=document.createElement('div');actions.className='drive-actions';
+      actions.append(archiveButton('Validate & select',async()=>{
+        try{
+          archiveNotice('Checking HTTP byte-range access for '+file.name+'…');
+          const checked=await api('/api/admin/archive/items/'+encodeURIComponent(identifier)+'/probe',{method:'POST',body:JSON.stringify({filename:file.name})});
+          const source='Archive.org | https://archive.org/download/'+encodeURIComponent(identifier)+'/'+file.name.split('/').map(encodeURIComponent).join('/');
+          const existing=archiveEl('sources').value.trim();
+          archiveEl('sources').value=(existing?existing+'\n':'')+source;
+          if(!archiveEl('title').value.trim())archiveEl('title').value=item.title;
+          if(!archiveEl('poster').value.trim())archiveEl('poster').value='https://archive.org/services/img/'+encodeURIComponent(identifier);
+          archiveNotice('File passed the range probe ('+(checked.probe.size/1048576).toFixed(1)+' MiB). Source added to the movie form; review title, poster and rights before publishing.');
+          archiveEl('movieForm').scrollIntoView({behavior:'smooth',block:'start'});
+        }catch(error){archiveNotice(error.message,true);}
+      }));
+      row.append(details,actions);target.append(row);
+    }
+  }catch(error){target.replaceChildren();const message=document.createElement('p');message.textContent=error.message;target.append(message);archiveNotice(error.message,true);}
+}
+archiveEl('archiveSearchButton').addEventListener('click',()=>searchArchive(false));
+archiveEl('archiveQuery').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();searchArchive(false);}});
+archiveEl('archiveLoadMore').addEventListener('click',()=>{archivePage+=1;searchArchive(true);});
+
 handleDriveCallback();
 checkSession();
 </script>
