@@ -2710,17 +2710,23 @@ async function api(req, env, ctx) {
     }
     if(path==='/api/admin/catalogue/migration/status'&&method==='GET'){
       let sourceMovieCount=null,sourceSeriesCount=null,sourceEpisodeCount=null;
-      try{
-        const sql=sqlFor(env);
-        const rows=await sql`SELECT (SELECT COUNT(*)::int FROM public.movies) AS movies,
-          to_regclass('public.series')::text AS series_table,to_regclass('public.episodes')::text AS episodes_table`;
-        sourceMovieCount=Number(rows[0]?.movies||0);
-        if(rows[0]?.series_table) {
-          const counts=await sql`SELECT (SELECT COUNT(*)::int FROM public.series) AS series,
-            (SELECT COUNT(*)::int FROM public.episodes) AS episodes`;
-          sourceSeriesCount=Number(counts[0]?.series||0);sourceEpisodeCount=Number(counts[0]?.episodes||0);
-        }
-      }catch(error){console.warn('Migration source diagnostics unavailable:',error?.message||error);}
+      if(storeMeta.active){
+        sourceMovieCount=Number(storeMeta.migration?.source_movie_count||0);
+        sourceSeriesCount=Number(storeMeta.migration?.backed_up_series||0);
+        sourceEpisodeCount=Number(storeMeta.migration?.backed_up_episodes||0);
+      }else{
+        try{
+          const sql=sqlFor(env);
+          const rows=await sql`SELECT (SELECT COUNT(*)::int FROM public.movies) AS movies,
+            to_regclass('public.series')::text AS series_table,to_regclass('public.episodes')::text AS episodes_table`;
+          sourceMovieCount=Number(rows[0]?.movies||0);
+          if(rows[0]?.series_table) {
+            const counts=await sql`SELECT (SELECT COUNT(*)::int FROM public.series) AS series,
+              (SELECT COUNT(*)::int FROM public.episodes) AS episodes`;
+            sourceSeriesCount=Number(counts[0]?.series||0);sourceEpisodeCount=Number(counts[0]?.episodes||0);
+          }
+        }catch(error){console.warn('Migration source diagnostics unavailable:',error?.message||error);}
+      }
       let verification=null;
       if(storeMeta.migration?.status==='prepared'&&!storeMeta.active){
         verification=await verifyCatalogueMigration(storeRedis,{
@@ -2733,6 +2739,7 @@ async function api(req, env, ctx) {
         sourceMovieCount,sourceSeriesCount,sourceEpisodeCount,verification});
     }
     if(path==='/api/admin/catalogue/migration/prepare'&&method==='POST'){
+      if(storeMeta.active)return json({error:'The Redis catalogue is already active; migration preparation is closed.'},409);
       const body=await readBody(req);
       if(body.confirm!=='PREPARE_ARCHIVE_ONLY_MIGRATION')return json({error:'Migration preparation confirmation is required.'},400);
       const sql=sqlFor(env);
