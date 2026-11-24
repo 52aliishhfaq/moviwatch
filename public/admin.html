@@ -311,7 +311,7 @@ async function refreshMigrationStatus(){
   const state=migration.status||'not_started';
   const status=$('#migrationStatus');
   const prepare=$('#prepareMigration'),activate=$('#activateMigration');
-  const backupVerified=result.verification?.ok===true;
+  const backupVerified=result.verification?result.verification.ok===true:migration.verification?.ok===true;
   if(catalogueStoreStatus.active){
     status.textContent='Active: public catalogue reads are now served from Upstash Redis. Neon is preserved as the legacy backup source.';
   }else if(state==='prepared'){
