@@ -152,6 +152,28 @@ export async function getMovie(redis, id) {
   return redis.get(keyForMovie(id));
 }
 
+async function readMoviesByKeys(redis, keys) {
+  const results = [];
+  const batchSize = 100;
+  const concurrency = 5;
+  for (let offset = 0; offset < keys.length; offset += batchSize * concurrency) {
+    const requests = [];
+    for (let start = offset; start < Math.min(keys.length, offset + batchSize * concurrency); start += batchSize) {
+      requests.push(redis.mget(...keys.slice(start, start + batchSize)));
+    }
+    const batches = await Promise.all(requests);
+    for (const batch of batches) results.push(...(Array.isArray(batch) ? batch : []));
+  }
+  return results;
+}
+
+export async function getMovies(redis, ids) {
+  assertRedis(redis);
+  if (!Array.isArray(ids)) throw new TypeError("Movie IDs must be an array.");
+  const keys = ids.map((id) => keyForMovie(id));
+  return readMoviesByKeys(redis, keys);
+}
+
 export async function listMovies(redis, {
   category = "",
   query = "",
@@ -162,7 +184,7 @@ export async function listMovies(redis, {
   const boundedLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), MAX_MOVIES) : 500;
   const ids = await redis.zrange(MOVIES_INDEX, 0, MAX_MOVIES - 1, { rev: true });
   if (!Array.isArray(ids) || !ids.length) return [];
-  const records = await redis.mget(...ids.map((id) => keyForMovie(String(id))));
+  const records = await readMoviesByKeys(redis, ids.map((id) => keyForMovie(String(id))));
   const normalizedQuery = typeof query === "string" ? query.trim().toLocaleLowerCase() : "";
   return (Array.isArray(records) ? records : [])
     .filter((movie) => movie && typeof movie === "object" && !Array.isArray(movie))
