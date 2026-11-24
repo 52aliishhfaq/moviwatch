@@ -253,6 +253,7 @@ Archive.org 720p | https://archive.org/download/IDENTIFIER/video.mp4"></textarea
 <script>
 const $=selector=>document.querySelector(selector);
 let movies=[],editing=null,driveAccounts=[],driveAccountId='primary',pendingEpisodeFile=null,seriesData=[];
+let catalogueStoreStatus=null,catalogueReady=false,catalogueCategories=[];
 
 async function api(path,options={}){
   const response=await fetch(path,{
@@ -301,8 +302,187 @@ function resetForm(){
 }
 $('#cancel').addEventListener('click',resetForm);
 
+async function refreshMigrationStatus(){
+  const result=await api('/api/admin/catalogue/migration/status');
+  catalogueStoreStatus=result.store||{};
+  const migration=catalogueStoreStatus.migration||{};
+  catalogueReady=catalogueStoreStatus.active===true||migration.status==='prepared';
+  const state=migration.status||'not_started';
+  const status=$('#migrationStatus');
+  const prepare=$('#prepareMigration'),activate=$('#activateMigration');
+  if(catalogueStoreStatus.active){
+    status.textContent='Active: public catalogue reads are now served from Upstash Redis. Neon is preserved as the legacy backup source.';
+  }else if(state==='prepared'){
+    status.textContent='Prepared and verified: legacy write paths are frozen. Public visitors still see the old catalogue until you activate Redis.';
+  }else if(state==='running'){
+    status.textContent='Migration preparation is currently marked as running. Refresh status before starting another operation.';
+  }else if(state==='failed'){
+    status.textContent='Migration preparation failed: '+(migration.error||'Unknown error')+'. You can safely retry after reviewing the cause.';
+  }else{
+    status.textContent='Not prepared yet. The current Neon catalogue is still authoritative.';
+  }
+  const countParts=[];
+  if(Number.isFinite(result.sourceMovieCount))countParts.push('Neon movies: '+result.sourceMovieCount);
+  if(Number.isFinite(result.redisMovieCount))countParts.push('Redis movies: '+result.redisMovieCount);
+  if(Number.isFinite(migration.backed_up_series))countParts.push('Series backups: '+migration.backed_up_series);
+  if(Number.isFinite(migration.backed_up_episodes))countParts.push('Episode backups: '+migration.backed_up_episodes);
+  if(Number.isFinite(migration.archive_playable_movies))countParts.push('Archive.org playable: '+migration.archive_playable_movies);
+  if(Number.isFinite(migration.hidden_movies))countParts.push('Hidden legacy items: '+migration.hidden_movies);
+  $('#migrationCounts').textContent=countParts.join(' · ');
+  prepare.disabled=catalogueStoreStatus.active||state==='running'||state==='prepared';
+  prepare.textContent=state==='failed'?'Retry migration preparation':'Prepare migration and backups';
+  activate.disabled=catalogueStoreStatus.active||state!=='prepared';
+  activate.textContent=catalogueStoreStatus.active?'Redis catalogue active':'Activate Redis catalogue';
+}
+function populateCategorySelects(categories){
+  catalogueCategories=Array.isArray(categories)?categories:[];
+  for(const id of ['#category','#seriesCategory']){
+    const select=$(id);if(!select)continue;
+    const previous=select.value;select.replaceChildren();
+    catalogueCategories.forEach(name=>select.add(new Option(name,name)));
+    if(catalogueCategories.includes(previous))select.value=previous;
+  }
+}
+async function refreshCuration(){
+  const [categoryData,collectionData]=await Promise.all([
+    api('/api/admin/categories'),api('/api/admin/collections')
+  ]);
+  populateCategorySelects(categoryData.categories||[]);
+  renderCategories(categoryData.categories||[]);
+  renderCollections(collectionData.collections||[]);
+}
+function renderCategories(categories){
+  const panel=$('#categoryPanel'),list=$('#categoryList');
+  panel.hidden=!catalogueReady;list.replaceChildren();
+  (categories||[]).forEach(name=>{
+    const row=document.createElement('div');row.className='drive-row';
+    const label=document.createElement('div');label.className='drive-name';label.textContent=name;
+    const remove=document.createElement('button');remove.type='button';remove.className='danger';remove.textContent='Delete';
+    remove.disabled=['Action','Romantic'].includes(name);
+    remove.title=remove.disabled?'Default categories cannot be deleted':'Delete category';
+    remove.addEventListener('click',async()=>{
+      if(!confirm('Delete category "'+name+'"?'))return;
+      try{await api('/api/admin/categories/'+encodeURIComponent(name),{method:'DELETE'});await refreshCuration();$('#categoryNotice').textContent='Category deleted.';}
+      catch(error){$('#categoryNotice').textContent=error.message;}
+    });
+    row.append(label,remove);list.append(row);
+  });
+}
+function renderCollections(collections){
+  const panel=$('#collectionPanel'),list=$('#collectionList'),select=$('#collectionMovieIds');
+  panel.hidden=!catalogueReady;
+  const selected=[...select.selectedOptions].map(option=>option.value);
+  select.replaceChildren();
+  movies.forEach(movie=>{
+    const option=new Option(movie.title+(movie.is_published?'':' (Hidden)'),movie.id);
+    option.selected=selected.includes(movie.id);select.add(option);
+  });
+  list.replaceChildren();
+  if(!collections.length){list.textContent='No collections created yet.';return;}
+  collections.forEach(collection=>{
+    const row=document.createElement('div');row.className='drive-row';
+    const info=document.createElement('div');info.className='drive-name';
+    const title=document.createElement('strong');title.textContent=collection.name;
+    const meta=document.createElement('small');meta.textContent=(collection.movie_ids||[]).length+' movie(s) · '+(collection.is_published?'Visible':'Hidden');
+    info.append(title,meta);
+    const actions=document.createElement('div');actions.className='drive-actions';
+    const toggle=document.createElement('button');toggle.type='button';toggle.className='secondary';
+    toggle.textContent=collection.is_published?'Hide':'Publish';
+    toggle.addEventListener('click',async()=>{
+      try{
+        await api('/api/admin/collections/'+encodeURIComponent(collection.id),{
+          method:'PUT',body:JSON.stringify({name:collection.name,description:collection.description,
+            movieIds:collection.movie_ids,isPublished:!collection.is_published})
+        });
+        await refreshCuration();
+      }catch(error){$('#collectionNotice').textContent=error.message;}
+    });
+    const remove=document.createElement('button');remove.type='button';remove.className='danger';remove.textContent='Delete';
+    remove.addEventListener('click',async()=>{
+      if(!confirm('Delete collection "'+collection.name+'"?'))return;
+      try{await api('/api/admin/collections/'+encodeURIComponent(collection.id),{method:'DELETE'});await refreshCuration();}
+      catch(error){$('#collectionNotice').textContent=error.message;}
+    });
+    actions.append(toggle,remove);row.append(info,actions);list.append(row);
+  });
+}
+$('#prepareMigration').addEventListener('click',async()=>{
+  if(!confirm('Prepare the Archive-only catalogue now? This copies Neon movie, series and episode records to Redis backups. Neon remains untouched, but legacy Drive/series write paths will be frozen after preparation. Continue?'))return;
+  const button=$('#prepareMigration');button.disabled=true;button.textContent='Preparing…';
+  try{
+    const result=await api('/api/admin/catalogue/migration/prepare',{
+      method:'POST',body:JSON.stringify({confirm:'PREPARE_ARCHIVE_ONLY_MIGRATION'})
+    });
+    $('#migrationStatus').textContent='Preparation complete. '+(result.migration?.archive_playable_movies||0)+' Archive.org movie(s) are playable candidates; legacy non-Archive entries remain hidden.';
+    await refresh();
+  }catch(error){$('#migrationStatus').textContent=error.message;await refreshMigrationStatus().catch(()=>{});}
+  finally{button.disabled=false;}
+});
+$('#activateMigration').addEventListener('click',async()=>{
+  if(!confirm('Activate the Redis catalogue for public visitors? This switches the public read path to the migrated Archive-only catalogue. Neon remains preserved, but Google Drive and series are no longer available in the app.'))return;
+  const phrase=prompt('Type ACTIVATE to confirm public catalogue cutover:');
+  if(phrase!=='ACTIVATE')return;
+  const button=$('#activateMigration');button.disabled=true;button.textContent='Activating…';
+  try{
+    await api('/api/admin/catalogue/migration/activate',{
+      method:'POST',body:JSON.stringify({confirm:'ACTIVATE_REDIS_CATALOGUE'})
+    });
+    await refresh();
+  }catch(error){$('#migrationStatus').textContent=error.message;await refreshMigrationStatus().catch(()=>{});}
+  finally{button.disabled=false;}
+});
+$('#refreshMigration').addEventListener('click',()=>refresh().catch(error=>$('#migrationStatus').textContent=error.message));
+$('#categoryForm').addEventListener('submit',async event=>{
+  event.preventDefault();const input=$('#newCategory'),name=input.value.trim();
+  try{await api('/api/admin/categories',{method:'POST',body:JSON.stringify({name})});input.value='';await refreshCuration();$('#categoryNotice').textContent='Category added.';}
+  catch(error){$('#categoryNotice').textContent=error.message;}
+});
+$('#collectionForm').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const movieIds=[...$('#collectionMovieIds').selectedOptions].map(option=>option.value);
+  if(!movieIds.length){$('#collectionNotice').textContent='Select at least one movie for this collection.';return;}
+  const button=$('#saveCollection');button.disabled=true;
+  try{
+    await api('/api/admin/collections',{method:'POST',body:JSON.stringify({
+      name:$('#collectionName').value,description:$('#collectionDescription').value,
+      movieIds,isPublished:$('#collectionPublished').checked
+    })});
+    $('#collectionForm').reset();$('#collectionPublished').checked=true;
+    await refreshCuration();$('#collectionNotice').textContent='Collection created.';
+  }catch(error){$('#collectionNotice').textContent=error.message;}
+  finally{button.disabled=false;}
+});
+
 async function refresh(){
   try{
+    await refreshMigrationStatus();
+    const [movieData,statsData]=await Promise.all([api('/api/admin/movies'),api('/api/admin/stats')]);
+    movies=movieData.movies||[];
+    const stats=statsData.stats||{};
+    const categorySummary=stats.categories&&typeof stats.categories==='object'
+      ?Object.entries(stats.categories).filter(([,count])=>Number(count)>0).map(([name,count])=>count+' '+name)
+      :[(stats.action||0)+' Action',(stats.romantic||0)+' Romantic'];
+    $('#stats').textContent=(stats.total||0)+' total · '+(stats.published||0)+' published · '+categorySummary.join(' · ')+
+      (Number.isFinite(stats.featured)?' · '+stats.featured+' featured':'');
+    renderMovies();
+    if(catalogueReady){
+      $('#googleDrivePanel').classList.add('hidden');
+      $('#seriesManager').classList.add('hidden');
+      $('#publishDriveSelection').classList.add('hidden');
+      $('#sourceHelp').textContent='Archive.org sources only. Search and validate files above before publishing. Up to 8 sources per movie.';
+      await refreshCuration();
+      setPendingPublishFile(null);
+    }else{
+      $('#googleDrivePanel').classList.remove('hidden');
+      $('#seriesManager').classList.remove('hidden');
+      $('#publishDriveSelection').classList.remove('hidden');
+      await Promise.all([refreshDriveStatus(),loadSeries()]);
+      $('#categoryPanel').hidden=true;$('#collectionPanel').hidden=true;
+      populateCategorySelects(['Action','Romantic']);
+    }
+  }catch(error){$('#formNotice').textContent=error.message;$('#migrationStatus').textContent=error.message;}
+}
+
     const [movieData,statsData]=await Promise.all([api('/api/admin/movies'),api('/api/admin/stats')]);
     movies=movieData.movies||[];
     const stats=statsData.stats||{};
@@ -329,7 +509,7 @@ function renderMovies(){
     const sources=Array.isArray(movie.video_sources)?movie.video_sources:[];
     const drive=sources.filter(source=>source.provider==='google-drive'||source.provider==='google-drive-private').length;
     const archive=sources.filter(source=>source.provider==='archive.org').length;
-    small.textContent=movie.category+' · '+(movie.is_published?'Published':'Hidden')+' · '+sources.length+' source(s) ('+drive+' Drive, '+archive+' Archive.org)';
+    small.textContent=movie.category+' · '+(movie.is_published?'Published':'Hidden')+(movie.is_featured?' · Featured':'')+' · '+sources.length+' source(s) ('+drive+' Drive, '+archive+' Archive.org)';
     info.append(title,small);
     const actions=document.createElement('div');
     actions.className='actions';
