@@ -1,6 +1,6 @@
 # Moviwatch
 
-Moviwatch is a responsive movie catalogue with Archive.org-backed playback. The frontend is served by Vercel; Cloudflare Workers provide the same-origin API, protected playback sessions, Range-aware media proxy, mirror failover and edge chunk cache.
+Moviwatch is a responsive movie catalogue with Archive.org-backed playback. The existing player and streaming stack remains capable of Drive and Archive.org byte-range streaming during the staged cutover; the target curated catalogue publishes Archive.org sources only. The frontend is served by Vercel; Cloudflare Workers provide the same-origin API, protected playback sessions, Range-aware media proxy, mirror failover and edge chunk cache.
 
 The project is in a staged migration from its legacy Neon/Google Drive/series catalogue to an Archive.org-only curated catalogue. Upstash Redis is the selected lightweight catalogue store because the project already uses its REST connection for admin-login rate limiting and Cloudflare Workers can access it over HTTP.
 
