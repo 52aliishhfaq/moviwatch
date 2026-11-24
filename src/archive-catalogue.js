@@ -170,12 +170,26 @@ export async function probeArchiveFile(identifier, filename, fetchImpl = fetch) 
   }
   const encodedPath = filename.split("/").map(encodeURIComponent).join("/");
   const url = "https://archive.org/download/" + encodeURIComponent(identifier) + "/" + encodedPath;
-  const response = await fetchImpl(url, {
-    method: "GET",
-    headers: { range: "bytes=0-0", "accept-encoding": "identity" },
-    redirect: "follow",
-    signal: AbortSignal.timeout(15000)
-  });
+  let requestUrl = new URL(url);
+  let response;
+  for (let redirect = 0; redirect <= 5; redirect += 1) {
+    if (requestUrl.protocol !== "https:" ||
+        !(requestUrl.hostname === "archive.org" || requestUrl.hostname.endsWith(".archive.org")) ||
+        requestUrl.username || requestUrl.password || requestUrl.port) {
+      throw archiveError("Archive.org redirected the file probe to an untrusted host.", 502);
+    }
+    response = await fetchImpl(requestUrl, {
+      method: "GET",
+      headers: { range: "bytes=0-0", "accept-encoding": "identity" },
+      redirect: "manual",
+      signal: AbortSignal.timeout(15000)
+    });
+    if (![301, 302, 303, 307, 308].includes(response.status)) break;
+    const location = response.headers.get("location");
+    try { await response.body?.cancel(); } catch {}
+    if (!location || redirect === 5) throw archiveError("Archive.org file probe exceeded the redirect limit.", 502);
+    requestUrl = new URL(location, requestUrl);
+  }
   const contentRange = response.headers.get("content-range") || "";
   const match = /^bytes 0-0\/(\d+)$/.exec(contentRange);
   const valid = response.status === 206 && Boolean(match) && Number(match[1]) > 0;
