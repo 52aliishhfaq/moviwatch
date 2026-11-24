@@ -2586,12 +2586,12 @@ async function api(req, env, ctx) {
         const result = await searchArchiveItems({ query, year, page, sort, rows: 24 });
         return json(result, 200, { 'cache-control': 'private, max-age=30' });
       }
-      const itemMatch = /^\\/api\\/admin\\/archive\\/items\\/([A-Za-z0-9._-]{1,200})$/.exec(path);
+      const itemMatch = /^\/api\/admin\/archive\/items\/([A-Za-z0-9._-]{1,200})$/.exec(path);
       if (itemMatch && method === 'GET') {
         const item = await getArchiveItem(itemMatch[1]);
         return json({ item }, 200, { 'cache-control': 'private, max-age=60' });
       }
-      const probeMatch = /^\\/api\\/admin\\/archive\\/items\\/([A-Za-z0-9._-]{1,200})\\/probe$/.exec(path);
+      const probeMatch = /^\/api\/admin\/archive\/items\/([A-Za-z0-9._-]{1,200})\/probe$/.exec(path);
       if (probeMatch && method === 'POST') {
         sameOrigin(req, env);
         const body = await readBody(req);
