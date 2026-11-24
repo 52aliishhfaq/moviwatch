@@ -162,6 +162,14 @@ const activated = await activateCatalogueStore(migrationRedis, { movieCount: 2 }
 assert.equal(activated.active, true);
 assert.equal(await countCatalogueMovies(migrationRedis), 3);
 
+const incompleteRedis = new FakeRedis();
+await prepareNeonToRedisMigration(fakeSql, incompleteRedis);
+await incompleteRedis.del('moviwatch:catalogue:v1:legacy-backup:series:'+legacySeries[0].id);
+await assert.rejects(
+  () => activateCatalogueStore(incompleteRedis, { movieCount: 2 }),
+  /series backups are missing/
+);
+
 
 const workerSource = readFileSync('src/index.js', 'utf8');
 const adminSource = readFileSync('public/admin.html', 'utf8');
