@@ -311,10 +311,13 @@ async function refreshMigrationStatus(){
   const state=migration.status||'not_started';
   const status=$('#migrationStatus');
   const prepare=$('#prepareMigration'),activate=$('#activateMigration');
+  const backupVerified=result.verification?result.verification.ok===true:migration.verification?.ok===true;
   if(catalogueStoreStatus.active){
     status.textContent='Active: public catalogue reads are now served from Upstash Redis. Neon is preserved as the legacy backup source.';
   }else if(state==='prepared'){
-    status.textContent='Prepared and verified: legacy write paths are frozen. Public visitors still see the old catalogue until you activate Redis.';
+    status.textContent=backupVerified
+      ?'Prepared and verified: all migrated movies and original movie/series/episode backups are present. Public visitors still see the old catalogue until you activate Redis.'
+      :'Prepared, but backup verification failed. Activation is disabled until every expected migrated record and backup is present.';
   }else if(state==='running'){
     status.textContent='Migration preparation is currently marked as running. Refresh status before starting another operation.';
   }else if(state==='failed'){
@@ -329,11 +332,15 @@ async function refreshMigrationStatus(){
   if(Number.isFinite(migration.backed_up_episodes))countParts.push('Episode backups: '+migration.backed_up_episodes);
   if(Number.isFinite(migration.archive_playable_movies))countParts.push('Archive.org playable: '+migration.archive_playable_movies);
   if(Number.isFinite(migration.hidden_movies))countParts.push('Hidden legacy items: '+migration.hidden_movies);
+  if(state==='prepared')countParts.push('Backup verification: '+(backupVerified?'PASSED':'FAILED'));
   $('#migrationCounts').textContent=countParts.join(' · ');
+  if(state==='prepared'&&!backupVerified&&Array.isArray(result.verification?.errors)){
+    status.textContent+=' Details: '+result.verification.errors.join('; ');
+  }
   const staleRunning=state==='running'&&Number.isFinite(Date.parse(migration.started_at))&&Date.now()-Date.parse(migration.started_at)>15*60*1000;
   prepare.disabled=catalogueStoreStatus.active||state==='prepared'||(state==='running'&&!staleRunning);
   prepare.textContent=state==='failed'||staleRunning?'Retry migration preparation':'Prepare migration and backups';
-  activate.disabled=catalogueStoreStatus.active||state!=='prepared';
+  activate.disabled=catalogueStoreStatus.active||state!=='prepared'||!backupVerified;
   activate.textContent=catalogueStoreStatus.active?'Redis catalogue active':'Activate Redis catalogue';
 }
 function populateCategorySelects(categories){

@@ -9,7 +9,7 @@ import {
   activateCatalogueStore, backupLegacyRecord, countCatalogueMovies,
   deleteCategory, deleteCollection, deleteMovie, getCatalogueMeta,
   getCollection, getMovie, getMovies, listCategories, listCollections, listMovies,
-  saveCategory, saveCollection, saveMovie
+  saveCategory, saveCollection, saveMovie, verifyCatalogueMigration
 } from './catalogue-store.js';
 import { prepareNeonToRedisMigration } from './catalogue-migration.js';
 import {
@@ -2703,8 +2703,16 @@ async function api(req, env, ctx) {
           sourceSeriesCount=Number(counts[0]?.series||0);sourceEpisodeCount=Number(counts[0]?.episodes||0);
         }
       }catch(error){console.warn('Migration source diagnostics unavailable:',error?.message||error);}
+      let verification=null;
+      if(storeMeta.migration?.status==='prepared'&&!storeMeta.active){
+        verification=await verifyCatalogueMigration(storeRedis,{
+          movieCount:storeMeta.migration.source_movie_count,
+          seriesCount:storeMeta.migration.backed_up_series,
+          episodeCount:storeMeta.migration.backed_up_episodes
+        });
+      }
       return json({store:storeMeta,redisMovieCount:await countCatalogueMovies(storeRedis),
-        sourceMovieCount,sourceSeriesCount,sourceEpisodeCount});
+        sourceMovieCount,sourceSeriesCount,sourceEpisodeCount,verification});
     }
     if(path==='/api/admin/catalogue/migration/prepare'&&method==='POST'){
       const body=await readBody(req);

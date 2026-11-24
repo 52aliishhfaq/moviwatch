@@ -6,12 +6,17 @@
  * Neon remains the migration source until the store is explicitly activated.
  */
 
+import { sourceProvider, videoSourceUrl } from "./video-sources.js";
+
 const PREFIX = "moviwatch:catalogue:v1:";
 const META_KEY = PREFIX + "meta";
 const MOVIES_INDEX = PREFIX + "movies";
 const CATEGORIES_KEY = PREFIX + "categories";
 const COLLECTIONS_INDEX = PREFIX + "collections";
 const LEGACY_MOVIES_SET = PREFIX + "legacy-movie-ids";
+const BACKED_UP_MOVIES_SET = PREFIX + "backed-up-movie-ids";
+const BACKED_UP_SERIES_SET = PREFIX + "backed-up-series-ids";
+const BACKED_UP_EPISODES_SET = PREFIX + "backed-up-episode-ids";
 const BACKUP_PREFIX = PREFIX + "legacy-backup:";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DEFAULT_CATEGORIES = ["Action", "Romantic"];
@@ -53,8 +58,33 @@ function normalizeMovie(movie) {
   if (typeof movie.category !== "string" || !movie.category.trim() || movie.category.length > 80) {
     throw new Error("Movie category is required.");
   }
-  const sources = Array.isArray(movie.video_sources) ? movie.video_sources : [];
-  if (sources.length > 8) throw new Error("A movie can have at most 8 video sources.");
+  const rawSources = Array.isArray(movie.video_sources) ? movie.video_sources : [];
+  if (rawSources.length > 8) throw new Error("A movie can have at most 8 video sources.");
+  const seenSources = new Set();
+  const sources = rawSources.map((source, index) => {
+    if (!source || typeof source !== "object" || Array.isArray(source) ||
+        typeof source.url !== "string" || typeof source.provider !== "string") {
+      throw new Error("Every catalogue source must be a validated Archive.org file.");
+    }
+    let url;
+    try {
+      url = videoSourceUrl(source.url);
+      if (sourceProvider(url) !== "archive.org" || source.provider !== "archive.org") {
+        throw new Error("Only Archive.org sources can be stored in the curated catalogue.");
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Only Archive.org")) throw error;
+      throw new Error("Invalid Archive.org video source at position " + (index + 1) + ".");
+    }
+    if (seenSources.has(url)) throw new Error("Duplicate Archive.org video source.");
+    seenSources.add(url);
+    const label = typeof source.label === "string" && source.label.trim()
+      ? source.label.trim().slice(0, 60) : "Archive.org " + (index + 1);
+    return { label, url, provider: "archive.org" };
+  });
+  if (movie.is_published === true && sources.length === 0) {
+    throw new Error("A published catalogue movie must have at least one Archive.org source.");
+  }
   return {
     id: movie.id.toLowerCase(),
     title: movie.title.trim(),
@@ -120,19 +150,9 @@ export async function activateCatalogueStore(redis, expectedCounts = {}) {
   const previous = await getCatalogueMeta(redis);
   const migration = previous.migration || {};
   if (migration.status !== "prepared") throw new Error("Catalogue migration must be prepared before activation.");
-  const movieCount = Number(await redis.zcard(MOVIES_INDEX));
-  const expected = Number(expectedCounts.movieCount);
-  const legacyIds = await redis.smembers(LEGACY_MOVIES_SET);
-  const uniqueLegacyIds = Array.isArray(legacyIds) ? [...new Set(legacyIds)] : [];
-  if (!Number.isSafeInteger(expected) || expected < 0 || movieCount < expected ||
-      uniqueLegacyIds.length !== expected ||
-      Number(migration.migrated_movies) !== expected ||
-      Number(migration.backed_up_movies) !== expected) {
-    throw new Error("Catalogue migration counts do not match; store activation was refused.");
-  }
-  const legacyMovies = await readMoviesByKeys(redis, uniqueLegacyIds.map((id) => keyForMovie(id)));
-  if (legacyMovies.length !== expected || legacyMovies.some((movie) => !movie)) {
-    throw new Error("A migrated legacy movie is missing from Redis; store activation was refused.");
+  const verification = await verifyCatalogueMigration(redis, expectedCounts);
+  if (!verification.ok) {
+    throw new Error("Catalogue migration verification failed: " + verification.errors.join("; "));
   }
   const next = {
     ...previous,
@@ -160,7 +180,7 @@ export async function getMovie(redis, id) {
   return redis.get(keyForMovie(id));
 }
 
-async function readMoviesByKeys(redis, keys) {
+async function readValuesByKeys(redis, keys) {
   const results = [];
   const batchSize = 100;
   const concurrency = 5;
@@ -174,6 +194,7 @@ async function readMoviesByKeys(redis, keys) {
   }
   return results;
 }
+const readMoviesByKeys = readValuesByKeys;
 
 export async function getMovies(redis, ids) {
   assertRedis(redis);
@@ -294,6 +315,7 @@ export async function saveMigratedMovieBatch(redis, records) {
     const movie = normalizeMovie(record.movie);
     if (!record.legacy || typeof record.legacy !== "object") throw new Error("Legacy movie backup is missing.");
     tx.set(BACKUP_PREFIX + "movie:" + movie.id, record.legacy);
+    tx.sadd(BACKED_UP_MOVIES_SET, movie.id);
     tx.set(keyForMovie(movie.id), movie);
     tx.sadd(LEGACY_MOVIES_SET, movie.id);
     tx.zadd(MOVIES_INDEX, { score: safeScore(movie.updated_at), member: movie.id });
@@ -315,6 +337,7 @@ export async function backupLegacyRecords(redis, type, rows) {
       throw new Error("Invalid legacy " + type + " backup record.");
     }
     tx.set(BACKUP_PREFIX + type + ":" + row.id.toLowerCase(), row);
+    tx.sadd(type === "series" ? BACKED_UP_SERIES_SET : BACKED_UP_EPISODES_SET, row.id.toLowerCase());
   }
   await tx.exec();
   return rows.length;
@@ -332,7 +355,12 @@ export async function clearStagedMovies(redis) {
     }
     await tx.exec();
   }
-  await redis.del(LEGACY_MOVIES_SET);
+  await Promise.all([
+    redis.del(LEGACY_MOVIES_SET),
+    redis.del(BACKED_UP_MOVIES_SET),
+    redis.del(BACKED_UP_SERIES_SET),
+    redis.del(BACKED_UP_EPISODES_SET)
+  ]);
   return (ids || []).length;
 }
 
@@ -343,8 +371,72 @@ export async function backupLegacyRecord(redis, type, id, value) {
     throw new Error("Invalid legacy backup record.");
   }
   const key = BACKUP_PREFIX + type + ":" + id.toLowerCase();
-  await redis.set(key, value);
+  const setKey = type === "movie" ? BACKED_UP_MOVIES_SET :
+    (type === "series" ? BACKED_UP_SERIES_SET : BACKED_UP_EPISODES_SET);
+  const tx = redis.multi();
+  tx.set(key, value);
+  tx.sadd(setKey, id.toLowerCase());
+  await tx.exec();
   return key;
+}
+
+
+export async function verifyCatalogueMigration(redis, expectedCounts = {}) {
+  assertRedis(redis);
+  const meta = await getCatalogueMeta(redis);
+  const migration = meta.migration || {};
+  const expected = {
+    movies: Number(expectedCounts.movieCount ?? migration.source_movie_count),
+    series: Number(expectedCounts.seriesCount ?? migration.backed_up_series ?? 0),
+    episodes: Number(expectedCounts.episodeCount ?? migration.backed_up_episodes ?? 0)
+  };
+  const actual = {
+    movies: Number(await redis.zcard(MOVIES_INDEX)) || 0,
+    baselineMovies: (await redis.smembers(LEGACY_MOVIES_SET) || []).length,
+    movieBackups: (await redis.smembers(BACKED_UP_MOVIES_SET) || []).length,
+    seriesBackups: (await redis.smembers(BACKED_UP_SERIES_SET) || []).length,
+    episodeBackups: (await redis.smembers(BACKED_UP_EPISODES_SET) || []).length
+  };
+  const movieIds = [...new Set(await redis.smembers(LEGACY_MOVIES_SET) || [])];
+  const backedUpMovieIds = [...new Set(await redis.smembers(BACKED_UP_MOVIES_SET) || [])];
+  const seriesIds = [...new Set(await redis.smembers(BACKED_UP_SERIES_SET) || [])];
+  const episodeIds = [...new Set(await redis.smembers(BACKED_UP_EPISODES_SET) || [])];
+  const errors = [];
+  if (migration.status !== "prepared") errors.push("migration is not in prepared state");
+  if (!Number.isSafeInteger(expected.movies) || expected.movies < 0 ||
+      actual.movies < expected.movies || actual.baselineMovies !== expected.movies ||
+      actual.movieBackups !== expected.movies ||
+      Number(migration.migrated_movies) !== expected.movies ||
+      Number(migration.backed_up_movies) !== expected.movies) {
+    errors.push("movie migration counts do not match");
+  }
+  const sameSet = (left, right) => left.length === right.length &&
+    [...left].sort().every((value, index) => value === [...right].sort()[index]);
+  if (!sameSet(movieIds, backedUpMovieIds)) errors.push("movie backup manifest does not match migrated movie IDs");
+  if (!Number.isSafeInteger(expected.series) || expected.series < 0 ||
+      actual.seriesBackups !== expected.series ||
+      Number(migration.backed_up_series || 0) !== expected.series) {
+    errors.push("series backup count does not match");
+  }
+  if (!Number.isSafeInteger(expected.episodes) || expected.episodes < 0 ||
+      actual.episodeBackups !== expected.episodes ||
+      Number(migration.backed_up_episodes || 0) !== expected.episodes) {
+    errors.push("episode backup count does not match");
+  }
+  const movieRecords = await readValuesByKeys(redis, movieIds.map((id) => keyForMovie(id)));
+  const movieBackups = await readValuesByKeys(redis, backedUpMovieIds.map((id) => BACKUP_PREFIX + "movie:" + id));
+  const seriesBackups = await readValuesByKeys(redis, seriesIds.map((id) => BACKUP_PREFIX + "series:" + id));
+  const episodeBackups = await readValuesByKeys(redis, episodeIds.map((id) => BACKUP_PREFIX + "episode:" + id));
+  if (movieRecords.length !== expected.movies || movieRecords.some((value) => !value)) errors.push("one or more migrated movie records are missing");
+  if (movieBackups.length !== expected.movies || movieBackups.some((value) => !value)) errors.push("one or more original movie backups are missing");
+  if (seriesBackups.length !== expected.series || seriesBackups.some((value) => !value)) errors.push("one or more original series backups are missing");
+  if (episodeBackups.length !== expected.episodes || episodeBackups.some((value) => !value)) errors.push("one or more original episode backups are missing");
+  return {
+    ok: errors.length === 0,
+    expected,
+    actual,
+    errors
+  };
 }
 
 export async function countCatalogueMovies(redis) {

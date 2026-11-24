@@ -12,7 +12,8 @@ import {
   countCatalogueMovies,
   getCatalogueMeta,
   saveMigratedMovieBatch,
-  setMigrationState
+  setMigrationState,
+  verifyCatalogueMigration
 } from "./catalogue-store.js";
 
 const MAX_MIGRATION_MOVIES = 5000;
@@ -134,7 +135,7 @@ export async function prepareNeonToRedisMigration(sql, redis) {
       throw new Error("Redis movie count does not match the Neon source count.");
     }
 
-    return await setMigrationState(redis, {
+    const prepared = await setMigrationState(redis, {
       status: "prepared",
       source: "neon",
       source_movie_count: movies.length,
@@ -146,6 +147,18 @@ export async function prepareNeonToRedisMigration(sql, redis) {
       hidden_movies: movies.length - archivePlayableMovies,
       prepared_at: new Date().toISOString(),
       error: null
+    });
+    const verification = await verifyCatalogueMigration(redis, {
+      movieCount: movies.length,
+      seriesCount: series.length,
+      episodeCount: episodes.length
+    });
+    if (!verification.ok) {
+      throw new Error("Migration backup verification failed: " + verification.errors.join("; "));
+    }
+    return await setMigrationState(redis, {
+      verification,
+      verified_at: new Date().toISOString()
     });
   } catch (error) {
     await setMigrationState(redis, {

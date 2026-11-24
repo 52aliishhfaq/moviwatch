@@ -4,7 +4,7 @@ import {
   activateCatalogueStore, backupLegacyRecord, countCatalogueMovies, deleteCategory,
   deleteCollection, deleteMovie, getCatalogueMeta, getCollection, getMovie, getMovies,
   listCategories, listCollections, listMovies, saveCategory, saveCollection,
-  saveMigratedMovieBatch, saveMovie, setMigrationState
+  saveMigratedMovieBatch, saveMovie, setMigrationState, verifyCatalogueMigration
 } from '../src/catalogue-store.js';
 import { prepareNeonToRedisMigration } from '../src/catalogue-migration.js';
 
@@ -60,6 +60,13 @@ assert.equal((await listMovies(redis, { category: 'Romantic' }))[0].id, movieB.i
 assert.equal((await listMovies(redis, { query: 'first' }))[0].is_featured, true);
 await assert.rejects(() => saveMovie(redis, { ...movieA, id: 'not-a-uuid' }), /movie ID/);
 await assert.rejects(() => saveMovie(redis, { ...movieA, poster_url: 'http://insecure.example/poster.jpg' }), /HTTPS/);
+await assert.rejects(() => saveMovie(redis, {
+  ...movieA,
+  video_sources: [{ label: 'Legacy Drive', provider: 'google-drive', url: 'https://drive.google.com/file/d/abcdefghij/view' }]
+}), /Only Archive.org/);
+await assert.rejects(() => saveMovie(redis, {
+  ...movieA, is_published: true, video_sources: []
+}), /at least one Archive.org source/);
 
 assert.deepEqual(await listCategories(redis), ['Action', 'Romantic']);
 await saveCategory(redis, 'Documentary');
@@ -122,6 +129,13 @@ assert.equal(migration.migration.backed_up_series, 1);
 assert.equal(migration.migration.backed_up_episodes, 1);
 assert.equal(migration.migration.archive_playable_movies, 1);
 assert.equal(migration.migration.hidden_movies, 1);
+assert.equal(migration.migration.verification.ok, true);
+assert.equal(migration.migration.verification.actual.seriesBackups, 1);
+assert.equal(migration.migration.verification.actual.episodeBackups, 1);
+const verifiedPrepared = await verifyCatalogueMigration(migrationRedis, {
+  movieCount: 2, seriesCount: 1, episodeCount: 1
+});
+assert.equal(verifiedPrepared.ok, true);
 const migratedArchive = await getMovie(migrationRedis, legacyMovies[0].id);
 const migratedDriveOnly = await getMovie(migrationRedis, legacyMovies[1].id);
 assert.equal(migratedArchive.is_published, true);
@@ -142,11 +156,19 @@ const stagedNew = {
 };
 await saveMovie(migrationRedis, stagedNew);
 await deleteMovie(migrationRedis, legacyMovies[0].id);
-await assert.rejects(() => activateCatalogueStore(migrationRedis, { movieCount: 2 }), /legacy movie is missing/);
+await assert.rejects(() => activateCatalogueStore(migrationRedis, { movieCount: 2 }), /verification failed/);
 await saveMovie(migrationRedis, migratedArchive);
 const activated = await activateCatalogueStore(migrationRedis, { movieCount: 2 });
 assert.equal(activated.active, true);
 assert.equal(await countCatalogueMovies(migrationRedis), 3);
+
+const incompleteRedis = new FakeRedis();
+await prepareNeonToRedisMigration(fakeSql, incompleteRedis);
+await incompleteRedis.del('moviwatch:catalogue:v1:legacy-backup:series:'+legacySeries[0].id);
+await assert.rejects(
+  () => activateCatalogueStore(incompleteRedis, { movieCount: 2 }),
+  /series backups are missing/
+);
 
 
 const workerSource = readFileSync('src/index.js', 'utf8');
