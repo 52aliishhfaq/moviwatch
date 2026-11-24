@@ -7,10 +7,11 @@
  */
 import { sourceProvider, videoSourceUrl } from "./video-sources.js";
 import {
-  backupLegacyRecord,
+  backupLegacyRecords,
+  clearStagedMovies,
   countCatalogueMovies,
   getCatalogueMeta,
-  saveMovie,
+  saveMigratedMovieBatch,
   setMigrationState
 } from "./catalogue-store.js";
 
@@ -92,26 +93,36 @@ export async function prepareNeonToRedisMigration(sql, redis) {
 
     const series = await optionalRows(sql, (client) => client`SELECT * FROM public.series ORDER BY created_at ASC,id ASC`);
     const episodes = await optionalRows(sql, (client) => client`SELECT * FROM public.episodes ORDER BY created_at ASC,id ASC`);
+    if (!Array.isArray(series) || !Array.isArray(episodes) ||
+        series.length > MAX_MIGRATION_MOVIES || episodes.length > MAX_MIGRATION_MOVIES) {
+      throw new Error("Legacy series or episode count exceeds the supported migration batch limit.");
+    }
 
-    await inBatches(movies, 10, async (row) => {
+    // A failed prior preparation may have left a partial staging index. Clear
+    // only the new-catalogue movie index, never the separate immutable backups.
+    await clearStagedMovies(redis);
+    const preparedAt = new Date().toISOString();
+    const preparedMovies = movies.map((row) => {
       const id = String(row.id || "");
-      await backupLegacyRecord(redis, "movie", id, row);
       const sources = archiveSourcesOnly(row.videos);
-      await saveMovie(redis, {
-        id,
-        title: String(row.title || id).slice(0, 200),
-        poster_url: safePoster(row.poster_url),
-        category: typeof row.category === "string" && row.category.trim() ? row.category.trim().slice(0, 80) : "Action",
-        video_sources: sources,
-        is_published: row.is_published === true && sources.length > 0,
-        is_featured: false,
-        created_at: row.created_at || new Date().toISOString(),
-        updated_at: row.updated_at || row.created_at || new Date().toISOString()
-      });
+      return {
+        legacy: row,
+        movie: {
+          id,
+          title: String(row.title || id).slice(0, 200),
+          poster_url: safePoster(row.poster_url),
+          category: typeof row.category === "string" && row.category.trim() ? row.category.trim().slice(0, 80) : "Action",
+          video_sources: sources,
+          is_published: row.is_published === true && sources.length > 0,
+          is_featured: false,
+          created_at: row.created_at || preparedAt,
+          updated_at: row.updated_at || row.created_at || preparedAt
+        }
+      };
     });
-
-    await inBatches(series, 10, async (row) => backupLegacyRecord(redis, "series", String(row.id || ""), row));
-    await inBatches(episodes, 10, async (row) => backupLegacyRecord(redis, "episode", String(row.id || ""), row));
+    await inBatches(preparedMovies, 25, (batch) => saveMigratedMovieBatch(redis, batch));
+    await inBatches(series, 50, (batch) => backupLegacyRecords(redis, "series", batch));
+    await inBatches(episodes, 50, (batch) => backupLegacyRecords(redis, "episode", batch));
 
     const archivePlayableMovies = movies.filter((row) => archiveSourcesOnly(row.videos).length > 0).length;
     const migratedCount = await countCatalogueMovies(redis);
