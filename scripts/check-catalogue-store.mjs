@@ -180,6 +180,19 @@ await assert.rejects(
   /series backups are missing/
 );
 
+const corruptedRedis = new FakeRedis();
+await prepareNeonToRedisMigration(fakeSql, corruptedRedis);
+await corruptedRedis.set(
+  'moviwatch:catalogue:v1:legacy-backup:episode:'+legacyEpisodes[0].id,
+  { ...legacyEpisodes[0], id: 'e0000000-0000-4000-8000-000000000099' }
+);
+const corruptedVerification = await verifyCatalogueMigration(corruptedRedis, {
+  movieCount: 2, seriesCount: 1, episodeCount: 1
+});
+assert.equal(corruptedVerification.ok, false);
+assert.ok(corruptedVerification.errors.some((error) => error.includes('episode backups') ||
+  error.includes('episode backup manifest')));
+
 
 const workerSource = readFileSync('src/index.js', 'utf8');
 const adminSource = readFileSync('public/admin.html', 'utf8');
