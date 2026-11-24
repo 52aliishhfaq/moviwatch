@@ -49,13 +49,14 @@ const item = await getArchiveItem('sample_movie', async (url) => {
       { name: 'movie.mp4', format: 'MPEG4', size: '1000', md5: 'a'.repeat(32) },
       { name: 'private.mp4', format: 'MPEG4', size: '2000', private: 'true' },
       { name: 'cover.jpg', format: 'JPEG', size: '100' },
-      { name: 'movie.webm', format: 'WebM', size: '500' }
+      { name: 'movie.webm', format: 'WebM', size: '500' },
+      { name: '1 2001.mpeg4', format: 'Unknown', size: '2048' }
     ]
   }), { status: 200 });
 });
 assert.equal(item.title, 'Sample Movie');
 assert.equal(item.availability, 'available');
-assert.deepEqual(item.files.map((file) => file.name), ['movie.mp4', 'movie.webm']);
+assert.deepEqual(item.files.map((file) => file.name), ['movie.mp4', 'movie.webm', '1 2001.mpeg4']);
 assert.equal(item.files[0].md5, 'a'.repeat(32));
 assert.equal(item.storage.server, 'ia600000.us.archive.org');
 assert.equal(item.files.some((file) => file.name.endsWith('.mkv')), false);
