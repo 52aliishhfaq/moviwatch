@@ -416,7 +416,7 @@ $('#prepareMigration').addEventListener('click',async()=>{
     $('#migrationStatus').textContent='Preparation complete. '+(result.migration?.archive_playable_movies||0)+' Archive.org movie(s) are playable candidates; legacy non-Archive entries remain hidden.';
     await refresh();
   }catch(error){$('#migrationStatus').textContent=error.message;await refreshMigrationStatus().catch(()=>{});}
-  finally{button.disabled=false;}
+  finally{await refreshMigrationStatus().catch(()=>{});}
 });
 $('#activateMigration').addEventListener('click',async()=>{
   if(!confirm('Activate the Redis catalogue for public visitors? This switches the public read path to the migrated Archive-only catalogue. Neon remains preserved, but Google Drive and series are no longer available in the app.'))return;
@@ -429,7 +429,7 @@ $('#activateMigration').addEventListener('click',async()=>{
     });
     await refresh();
   }catch(error){$('#migrationStatus').textContent=error.message;await refreshMigrationStatus().catch(()=>{});}
-  finally{button.disabled=false;}
+  finally{await refreshMigrationStatus().catch(()=>{});}
 });
 $('#refreshMigration').addEventListener('click',()=>refresh().catch(error=>$('#migrationStatus').textContent=error.message));
 $('#categoryForm').addEventListener('submit',async event=>{
