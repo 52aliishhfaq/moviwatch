@@ -77,6 +77,19 @@ button.danger{background:#9c3847;border-color:#9c3847;width:auto;padding:7px 10p
       <button id="archiveLoadMore" type="button" class="secondary hidden">Load more results</button>
     </div>
 
+    <section class="panel" id="catalogueMigrationPanel" aria-labelledby="migrationTitle">
+      <h2 id="migrationTitle">Archive-only catalogue migration</h2>
+      <p class="muted">First create a verified Redis copy of the legacy catalogue. Public traffic remains on the current catalogue until you separately activate the new store.</p>
+      <p id="migrationStatus" class="drive-status" role="status" aria-live="polite">Checking migration status…</p>
+      <p id="migrationCounts" class="muted"></p>
+      <div class="drive-buttons">
+        <button id="prepareMigration" type="button">Prepare migration and backups</button>
+        <button id="activateMigration" type="button" class="secondary" disabled>Activate Redis catalogue</button>
+        <button id="refreshMigration" type="button" class="secondary">Refresh status</button>
+      </div>
+      <p class="source-help">Preparation backs up original movie, series and episode records in Redis and leaves Neon untouched. Movies without Archive.org sources are kept as hidden records. Activation switches public catalogue reads; it does not delete Neon.</p>
+    </section>
+
     <div class="panel" id="googleDrivePanel">
       <div class="drive-top">
         <div>
@@ -149,11 +162,12 @@ button.danger{background:#9c3847;border-color:#9c3847;width:auto;padding:7px 10p
             <button id="clearPublishDrive" type="button" class="secondary" style="width:auto;margin:0">Remove</button>
           </div>
         </div>
-        <label for="sources">Additional video links (optional) — Google Drive / Archive.org video links</label>
+        <label for="sources">Archive.org video file links</label>
         <textarea id="sources" placeholder="Google Drive 1080p | https://drive.google.com/file/d/FILE_ID/view
 Archive.org 720p | https://archive.org/download/IDENTIFIER/video.mp4"></textarea>
-        <p class="source-help">Choose a private Drive video using the <strong>Publish</strong> button above. You can optionally add more sources here. Format: Label | URL. Up to 8 sources per movie; the first source plays by default.</p>
+        <p class="source-help" id="sourceHelp">Use validated Archive.org file links from the search panel. Format: Label | URL. Up to 8 sources per movie; the first source plays by default.</p>
         <label><input id="published" type="checkbox" checked style="width:auto"> Published to visitors</label>
+        <label><input id="featured" type="checkbox" style="width:auto"> Feature on homepage</label>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button id="save" style="flex:1">Save movie</button>
           <button id="cancel" type="button" class="secondary hidden" style="width:auto">Cancel edit</button>
@@ -204,6 +218,32 @@ Archive.org 720p | https://archive.org/download/IDENTIFIER/video.mp4"></textarea
       <div id="seriesList" style="margin-top:18px"></div>
     </div>
 
+    <div class="panel" id="categoryPanel" hidden>
+      <h2>Manage categories</h2>
+      <form id="categoryForm" class="drive-controls">
+        <div><label for="newCategory">New category</label><input id="newCategory" maxlength="80" required placeholder="e.g. Documentary"></div>
+        <button id="addCategory" type="submit" style="width:auto">Add category</button>
+      </form>
+      <div id="categoryList"></div>
+      <p id="categoryNotice" class="notice" role="status"></p>
+    </div>
+
+    <div class="panel" id="collectionPanel" hidden>
+      <h2>Manage collections</h2>
+      <form id="collectionForm">
+        <label for="collectionName">Collection name</label>
+        <input id="collectionName" maxlength="120" required placeholder="e.g. Classic Cinema">
+        <label for="collectionDescription">Description</label>
+        <textarea id="collectionDescription" rows="2" maxlength="2000" placeholder="A short description"></textarea>
+        <label for="collectionMovieIds">Movies in this collection (Ctrl / Cmd to select multiple)</label>
+        <select id="collectionMovieIds" multiple size="7" style="min-height:150px"></select>
+        <label><input id="collectionPublished" type="checkbox" checked style="width:auto"> Visible to visitors</label>
+        <button id="saveCollection" type="submit">Create collection</button>
+      </form>
+      <div id="collectionList"></div>
+      <p id="collectionNotice" class="notice" role="status"></p>
+    </div>
+
     <div class="panel">
       <h2>Movies</h2>
       <div id="movieList" class="muted">Loading…</div>
@@ -252,6 +292,7 @@ function resetForm(){
   editing=null;
   $('#movieForm').reset();
   $('#published').checked=true;
+  $('#featured').checked=false;
   $('#formTitle').textContent='Publish a movie';
   $('#save').textContent='Publish movie';
   setPendingPublishFile(null);
@@ -767,6 +808,7 @@ function editMovie(id){
   $('#category').value=movie.category;
   $('#sources').value=sourceLines(movie);
   $('#published').checked=!!movie.is_published;
+  $('#featured').checked=!!movie.is_featured;
   setPendingPublishFile(null);
   $('#formTitle').textContent='Edit movie';
   $('#save').textContent='Update movie';
@@ -801,7 +843,8 @@ $('#movieForm').addEventListener('submit',async event=>{
       driveId:pendingPublishFile.driveId||'',
       modifiedTime:pendingPublishFile.modifiedTime||''
     }]:[]).concat(parseSources($('#sources').value)),
-    isPublished:$('#published').checked
+    isPublished:$('#published').checked,
+    isFeatured:$('#featured').checked
   };
   if(!body.videoSources.length){
     $('#formNotice').textContent='Select a video with the Publish button above, or add at least one additional video link.';
