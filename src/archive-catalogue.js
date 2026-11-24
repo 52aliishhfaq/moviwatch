@@ -140,11 +140,15 @@ export async function getArchiveItem(identifier, fetchImpl = fetch) {
   const server = safeText(payload.server, 200);
   const d1 = safeText(payload.d1, 200);
   const d2 = safeText(payload.d2, 200);
-  const errorCode = Number(payload.error || payload.metadata?.error || 0) || null;
+  const rawError = payload.error ?? metadata.error ?? null;
+  const errorCode = Number(rawError) || null;
+  const errorText = safeText(String(rawError ?? ""), 120).toLowerCase();
   const availability = errorCode ? ({
     101: "creation_pending", 102: "temporarily_offline",
     103: "unbacked_item", 104: "deleted"
-  }[errorCode] || "unavailable") : (payload.is_dark ? "dark" : "available");
+  }[errorCode] || "unavailable") :
+    (rawError || errorText.includes("not found") ? "unavailable" :
+      (payload.is_dark || metadata.is_dark ? "dark" : "available"));
   return {
     identifier,
     title: safeText(metadata.title, 300) || identifier,
