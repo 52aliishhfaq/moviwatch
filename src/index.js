@@ -6,6 +6,13 @@ import { getVideoRangeWindow } from './video-range-window.js';
 import { createRangeRelayStream } from './video-stream.js';
 import { searchArchiveItems, getArchiveItem, probeArchiveFile } from './archive-catalogue.js';
 import {
+  activateCatalogueStore, backupLegacyRecord, countCatalogueMovies,
+  deleteCategory, deleteCollection, deleteMovie, getCatalogueMeta,
+  getCollection, getMovie, getMovies, listCategories, listCollections, listMovies,
+  saveCategory, saveCollection, saveMovie
+} from './catalogue-store.js';
+import { prepareNeonToRedisMigration } from './catalogue-migration.js';
+import {
   clearGoogleDriveAccessTokenCache,
   decryptGoogleDriveSecret,
   encryptGoogleDriveSecret,
@@ -231,31 +238,33 @@ async function loginLimit(req, env) {
   if (count === 1) await r.expire(key, 600);
   return count <= 10;
 }
-function movieInput(body){
+function movieInput(body, allowedCategories = CATEGORIES, archiveOnly = false){
   if(!body||typeof body!=='object'||Array.isArray(body))throw new Error('Movie details are required');
   const title=typeof body.title==='string'?body.title.trim():'';
   if(!title||title.length>200)throw new Error('Movie name is required (max 200 characters)');
-  if(!CATEGORIES.has(body.category))throw new Error('Category must be Action or Romantic');
+  if(!(allowedCategories instanceof Set) || !allowedCategories.has(body.category))throw new Error('Select a valid movie category');
   let poster;try{poster=new URL(body.posterUrl)}catch{throw new Error('Poster must be an HTTPS URL')}
   if(poster.protocol!=='https:'||poster.href.length>2048||poster.username||poster.password)throw new Error('Poster must be an HTTPS URL');
-  if(!Array.isArray(body.videoSources)||body.videoSources.length<1||body.videoSources.length>8)throw new Error('Add between 1 and 8 Google Drive or Archive.org video links');
+  if(!Array.isArray(body.videoSources)||body.videoSources.length<1||body.videoSources.length>8)throw new Error('Add between 1 and 8 video links');
   const sources=body.videoSources.map((item,index)=>{
-    const label=(typeof item?.label==='string'&&item.label.trim()?item.label.trim():'Google Drive '+(index+1)).slice(0,60);
     const privateId=item?.provider==='google-drive-private'?item.fileId:
       (typeof item?.url==='string'&&item.url.startsWith('drive-private://')?item.url.slice('drive-private://'.length):'');
     if(privateId){
+      if(archiveOnly)throw new Error('Only Archive.org video sources are supported by the new catalogue.');
       if(!isGoogleDriveFileId(privateId))throw new Error('Invalid private Google Drive file reference');
       const accountId = typeof item.accountId === 'string' && /^(primary|[0-9a-f-]{36})$/i.test(item.accountId) ? item.accountId : 'primary';
-      return {label,provider:'google-drive-private',file_id:privateId,account_id:accountId,
+      return {label:(typeof item?.label==='string'&&item.label.trim()?item.label.trim():'Google Drive '+(index+1)).slice(0,60),
+        provider:'google-drive-private',file_id:privateId,account_id:accountId,
         drive_id:isGoogleDriveFileId(item.driveId)?item.driveId:null,
         modified_time:typeof item.modifiedTime==='string'?item.modifiedTime:null};
     }
     const url=videoSourceUrl(item?.url);
     const provider=sourceProvider(url);
+    if(archiveOnly&&provider!=='archive.org')throw new Error('Only Archive.org video sources are supported by the new catalogue.');
     const fallback=provider==='archive.org'?'Archive.org':'Google Drive';
     return {label:(typeof item?.label==='string'&&item.label.trim()?item.label.trim():fallback+' '+(index+1)).slice(0,60),url,provider};
   });
-  return{title,poster:poster.href,category:body.category,sources,published:body.isPublished!==false};
+  return{title,poster:poster.href,category:body.category,sources,published:body.isPublished!==false,featured:body.isFeatured===true};
 }
 function safePosterUrl(value) {
   let poster; try { poster = new URL(value); } catch { throw new Error('Poster must be an HTTPS URL'); }
@@ -319,6 +328,17 @@ const CATALOGUE_CACHE_TTL = 30;
 const MOVIE_METADATA_CACHE_TTL = 30;
 
 async function publicMovies(env,category,query){
+ const storeRedis=redisFor(env);
+ const storeMeta=await getCatalogueMeta(storeRedis);
+ if(storeMeta.active){
+  const stored=await listMovies(storeRedis,{category,query,publishedOnly:true,limit:100});
+  return stored
+   .sort((a,b)=>Number(b.is_featured===true)-Number(a.is_featured===true)||
+     Date.parse(b.updated_at||b.created_at||0)-Date.parse(a.updated_at||a.created_at||0))
+   .map(movie=>({...movie,content_type:'movie',episode_count:null,
+     video_sources:(Array.isArray(movie.video_sources)?movie.video_sources:[])
+      .map((source,index)=>({...source,source_index:index}))}));
+ }
  const sql=sqlFor(env);
  // Series support is additive. A missing table, failed index migration, or a
  // restricted DB role must never hide the pre-existing movie catalogue.
@@ -388,6 +408,18 @@ export class MovieMetadata extends WorkerEntrypoint {
     const contentId = this.ctx.props?.movieId;
     if (typeof contentId !== 'string' || !/^[0-9a-f-]{36}$/i.test(contentId)) {
       return json({ movie: null }, 200, { 'cache-control': 'public, max-age=5' });
+    }
+    const storeRedis=redisFor(this.env);
+    const storeMeta=await getCatalogueMeta(storeRedis);
+    if(storeMeta.active){
+      const stored=await getMovie(storeRedis,contentId);
+      const movie=stored&&stored.is_published===true
+        ? {...stored,content_type:'movie',series_id:null,season_number:null,episode_number:null,series_title:null}
+        : null;
+      return json({movie},200,{
+        'cache-control':'public, max-age='+MOVIE_METADATA_CACHE_TTL+', stale-while-revalidate=90',
+        'cache-tag':'movie-meta-'+contentId
+      });
     }
     const sql = sqlFor(this.env);
     try {
@@ -2123,30 +2155,33 @@ async function api(req, env, ctx) {
   const contentMatch = /^\/api\/content\/([0-9a-f-]{36})$/.exec(path);
   if (contentMatch && method === 'GET') {
     const contentId = contentMatch[1];
-    const sql = sqlFor(env);
-    try {
-      // Public reads are read-only; series DDL belongs to authenticated Admin.
-      const seriesRows = await sql`SELECT id,title,description,poster_url,category,created_at
-        FROM public.series WHERE id=${contentId} AND is_published=TRUE LIMIT 1`;
-      if (seriesRows[0]) {
-        const seasons = await sql`SELECT season_number,
-          jsonb_agg(jsonb_build_object('id',e.id,'episode_number',e.episode_number,'title',e.title,'description',e.description)
-            ORDER BY e.episode_number) AS episodes
-          FROM public.episodes e WHERE e.series_id=${contentId} AND e.is_published=TRUE
-          GROUP BY season_number ORDER BY season_number`;
-        return json({ content: { ...seriesRows[0], content_type: 'series', seasons } });
+    const storeRedis=redisFor(env);
+    const storeMeta=await getCatalogueMeta(storeRedis);
+    let sql=null;
+    if(!storeMeta.active){
+      sql=sqlFor(env);
+      try {
+        const seriesRows = await sql`SELECT id,title,description,poster_url,category,created_at
+          FROM public.series WHERE id=${contentId} AND is_published=TRUE LIMIT 1`;
+        if (seriesRows[0]) {
+          const seasons = await sql`SELECT season_number,
+            jsonb_agg(jsonb_build_object('id',e.id,'episode_number',e.episode_number,'title',e.title,'description',e.description)
+              ORDER BY e.episode_number) AS episodes
+            FROM public.episodes e WHERE e.series_id=${contentId} AND e.is_published=TRUE
+            GROUP BY season_number ORDER BY season_number`;
+          return json({ content: { ...seriesRows[0], content_type: 'series', seasons } });
+        }
+      } catch (error) {
+        console.error('Series detail unavailable; falling back to movie metadata:', error?.message || error);
       }
-    } catch (error) {
-      console.error('Series detail unavailable; falling back to movie metadata:', error?.message || error);
     }
     const metadata = await movieById(ctx, env, contentId);
     const movie = metadata.movie;
     if (!movie) return json({ error: 'Content not found or not published.' }, 404);
     const content = { ...movie, video_sources: publicVideoSources(movie.video_sources) };
-    if (movie.content_type === 'episode' && movie.series_id) {
+    if (!storeMeta.active && movie.content_type === 'episode' && movie.series_id && sql) {
       const siblings = await sql`SELECT id,title,season_number,episode_number FROM public.episodes
-        WHERE series_id=${movie.series_id} AND is_published=TRUE
-        ORDER BY season_number,episode_number`;
+        WHERE series_id=${movie.series_id} AND is_published=TRUE ORDER BY season_number,episode_number`;
       const at = siblings.findIndex((item) => item.id === movie.id);
       content.previous_episode = at > 0 ? siblings[at - 1] : null;
       content.next_episode = at >= 0 && at < siblings.length - 1 ? siblings[at + 1] : null;
@@ -2154,10 +2189,36 @@ async function api(req, env, ctx) {
     return json({ content });
   }
 
+  if(path==='/api/categories'&&method==='GET'){
+    const storeRedis=redisFor(env);
+    const meta=await getCatalogueMeta(storeRedis);
+    const categories=meta.active?await listCategories(storeRedis):[...CATEGORIES];
+    return json({categories});
+  }
+  if(path==='/api/collections'&&method==='GET'){
+    const storeRedis=redisFor(env);
+    const meta=await getCatalogueMeta(storeRedis);
+    const collections=meta.active?await listCollections(storeRedis,{publishedOnly:true,limit:100}):[];
+    const result=[];
+    for(const collection of collections){
+      const movieRows=await getMovies(storeRedis,collection.movie_ids);
+      // Never expose stored source URLs or internal source metadata from public collection responses.
+      const movies=movieRows.filter(movie=>movie&&movie.is_published===true).map(movie=>({
+        id:movie.id,title:movie.title,poster_url:movie.poster_url,category:movie.category,
+        created_at:movie.created_at,content_type:'movie',is_featured:movie.is_featured===true
+      }));
+      result.push({...collection,movies});
+    }
+    return json({collections:result},200,{'cache-control':'public, max-age=30, stale-while-revalidate=120'});
+  }
+
   if (path === '/api/movies' && method === 'GET') {
     const category = url.searchParams.get('category') || '';
     const query = (url.searchParams.get('q') || '').trim().slice(0, 80);
-    if (category && !CATEGORIES.has(category)) return json({ error: 'Unknown category' }, 400);
+    const storeRedis=redisFor(env);
+    const storeMeta=await getCatalogueMeta(storeRedis);
+    const allowedCategories=storeMeta.active?new Set(await listCategories(storeRedis)):CATEGORIES;
+    if (category && !allowedCategories.has(category)) return json({ error: 'Unknown category' }, 400);
 
     const catalogueUrl = new URL('https://moviwatch.internal/__public_catalogue__v3');
     if (category) catalogueUrl.searchParams.set('category', category);
@@ -2610,6 +2671,143 @@ async function api(req, env, ctx) {
   if (path.startsWith('/api/admin/')) {
     if (!await isAdmin(req, env)) return json({ error: 'Admin login required' }, 401);
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) sameOrigin(req, env);
+    const storeRedis=redisFor(env);
+    const storeMeta=await getCatalogueMeta(storeRedis);
+    const migrationRunning=storeMeta.migration?.status==='running';
+    const storeReady=storeMeta.active===true||storeMeta.migration?.status==='prepared';
+    const legacyWritesFrozen=migrationRunning||storeReady;
+    if(legacyWritesFrozen&&path.startsWith('/api/admin/google-drive/')){
+      return json({error:'Google Drive management is paused while the Archive-only catalogue migration is prepared.'},410);
+    }
+    if(legacyWritesFrozen&&(path==='/api/admin/series'||path.startsWith('/api/admin/series/')||path.startsWith('/api/admin/episodes/'))){
+      return json({error:'Series management is paused during the Archive-only catalogue migration; legacy records are preserved in migration backups.'},410);
+    }
+    if(migrationRunning&&['POST','PUT','PATCH','DELETE'].includes(method)&&
+       (path==='/api/admin/movies'||path.startsWith('/api/admin/movies/'))){
+      return json({error:'Movie writes are paused while the migration snapshot is being prepared.'},409);
+    }
+    if(!storeMeta.active&&storeMeta.migration?.status==='prepared'&&method==='DELETE'&&
+       (path==='/api/admin/movies'||path.startsWith('/api/admin/movies/'))){
+      return json({error:'Movie deletion is locked until the Redis catalogue is activated so the prepared legacy backup can be verified.'},409);
+    }
+    if(path==='/api/admin/catalogue/migration/status'&&method==='GET'){
+      let sourceMovieCount=null,sourceSeriesCount=null,sourceEpisodeCount=null;
+      try{
+        const sql=sqlFor(env);
+        const rows=await sql`SELECT (SELECT COUNT(*)::int FROM public.movies) AS movies,
+          to_regclass('public.series')::text AS series_table,to_regclass('public.episodes')::text AS episodes_table`;
+        sourceMovieCount=Number(rows[0]?.movies||0);
+        if(rows[0]?.series_table) {
+          const counts=await sql`SELECT (SELECT COUNT(*)::int FROM public.series) AS series,
+            (SELECT COUNT(*)::int FROM public.episodes) AS episodes`;
+          sourceSeriesCount=Number(counts[0]?.series||0);sourceEpisodeCount=Number(counts[0]?.episodes||0);
+        }
+      }catch(error){console.warn('Migration source diagnostics unavailable:',error?.message||error);}
+      return json({store:storeMeta,redisMovieCount:await countCatalogueMovies(storeRedis),
+        sourceMovieCount,sourceSeriesCount,sourceEpisodeCount});
+    }
+    if(path==='/api/admin/catalogue/migration/prepare'&&method==='POST'){
+      const body=await readBody(req);
+      if(body.confirm!=='PREPARE_ARCHIVE_ONLY_MIGRATION')return json({error:'Migration preparation confirmation is required.'},400);
+      const sql=sqlFor(env);
+      const result=await prepareNeonToRedisMigration(sql,storeRedis);
+      return json({migration:result.migration,redisMovieCount:await countCatalogueMovies(storeRedis)});
+    }
+    if(path==='/api/admin/catalogue/migration/activate'&&method==='POST'){
+      const body=await readBody(req);
+      if(body.confirm!=='ACTIVATE_REDIS_CATALOGUE')return json({error:'Catalogue activation confirmation is required.'},400);
+      const meta=await getCatalogueMeta(storeRedis);
+      const count=Number(meta.migration?.source_movie_count);
+      const activated=await activateCatalogueStore(storeRedis,{movieCount:count});
+      await invalidateContentCaches(ctx);
+      return json({store:activated});
+    }
+    if(path.startsWith('/api/admin/categories')&&!storeReady)return json({error:'Prepare the Archive-only migration before managing catalogue categories.'},409);
+    if(path==='/api/admin/categories'&&method==='GET')return json({categories:await listCategories(storeRedis)});
+    if(path==='/api/admin/categories'&&method==='POST'){
+      const body=await readBody(req);const category=await saveCategory(storeRedis,body.name);
+      await invalidateContentCaches(ctx);return json({category},201);
+    }
+    const categoryMatch=/^\/api\/admin\/categories\/(.+)$/.exec(path);
+    if(categoryMatch&&method==='DELETE'){
+      const name=decodeURIComponent(categoryMatch[1]);await deleteCategory(storeRedis,name);
+      await invalidateContentCaches(ctx);return json({ok:true});
+    }
+    if(path.startsWith('/api/admin/collections')&&!storeReady)return json({error:'Prepare the Archive-only migration before managing collections.'},409);
+    if(path==='/api/admin/collections'&&method==='GET'){
+      return json({collections:await listCollections(storeRedis,{limit:500})});
+    }
+    if(path==='/api/admin/collections'&&method==='POST'){
+      const body=await readBody(req);const id=crypto.randomUUID();
+      const requestedIds=Array.isArray(body.movieIds)?body.movieIds:[];
+      if(requestedIds.length<1||requestedIds.length>500) return json({error:'A collection must contain between 1 and 500 movies.'},400);
+      if(requestedIds.some(movieId=>typeof movieId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(movieId))) {
+        return json({error:'A collection contains an invalid movie ID.'},400);
+      }
+      const ids=[...new Set(requestedIds.map(movieId=>movieId.toLowerCase()))];
+      const movies=await getMovies(storeRedis,ids);
+      if(movies.some(movie=>!movie))return json({error:'A collection references a movie that does not exist in Redis catalogue.'},400);
+      const collection=await saveCollection(storeRedis,{id,name:body.name,description:body.description,
+        movie_ids:ids,is_published:body.isPublished===true});
+      await invalidateContentCaches(ctx);return json({collection},201);
+    }
+    const collectionMatch=/^\/api\/admin\/collections\/([0-9a-f-]{36})$/.exec(path);
+    if(collectionMatch){
+      const id=collectionMatch[1];
+      if(method==='PUT'){
+        const old=await getCollection(storeRedis,id);if(!old)return json({error:'Collection not found.'},404);
+        const body=await readBody(req);const requestedIds=Array.isArray(body.movieIds)?body.movieIds:old.movie_ids;
+        if(requestedIds.length<1||requestedIds.length>500)return json({error:'A collection must contain between 1 and 500 movies.'},400);
+        if(requestedIds.some(movieId=>typeof movieId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(movieId))) {
+          return json({error:'A collection contains an invalid movie ID.'},400);
+        }
+        const ids=[...new Set(requestedIds.map(movieId=>movieId.toLowerCase()))];
+        const movies=await Promise.all(ids.map(movieId=>getMovie(storeRedis,movieId)));
+        if(movies.some(movie=>!movie))return json({error:'A collection references a movie that does not exist in Redis catalogue.'},400);
+        const collection=await saveCollection(storeRedis,{...old,name:body.name??old.name,
+          description:body.description??old.description,movie_ids:ids,
+          is_published:body.isPublished===undefined?old.is_published:body.isPublished===true,
+          updated_at:new Date().toISOString()});
+        await invalidateContentCaches(ctx);return json({collection});
+      }
+      if(method==='DELETE'){
+        const deleted=await deleteCollection(storeRedis,id);if(!deleted)return json({error:'Collection not found.'},404);
+        await invalidateContentCaches(ctx);return json({ok:true});
+      }
+    }
+    if(storeReady&&(path==='/api/admin/movies'||path==='/api/admin/stats')){
+      const all=await listMovies(storeRedis,{limit:5000});
+      if(path==='/api/admin/stats'&&method==='GET'){
+        const categories=await listCategories(storeRedis);
+        const byCategory=Object.fromEntries(categories.map(name=>[name,all.filter(movie=>movie.category===name).length]));
+        return json({stats:{total:all.length,published:all.filter(x=>x.is_published).length,
+          action:byCategory.Action||0,romantic:byCategory.Romantic||0,categories:byCategory,
+          featured:all.filter(x=>x.is_featured).length,series:0,publishedSeries:0}});
+      }
+      if(path==='/api/admin/movies'&&method==='GET')return json({movies:await listMovies(storeRedis,{limit:500})});
+      if(path==='/api/admin/movies'&&method==='POST'){
+        const value=movieInput(await readBody(req),new Set(await listCategories(storeRedis)),true);
+        const movie=await saveMovie(storeRedis,{id:crypto.randomUUID(),title:value.title,poster_url:value.poster,
+          category:value.category,video_sources:value.sources,is_published:value.published,is_featured:value.featured});
+        await invalidateContentCaches(ctx,movie.id);return json({movie},201);
+      }
+    }
+    if(storeReady&&path.startsWith('/api/admin/movies/')){
+      const id=path.split('/')[4];
+      if(!/^[0-9a-f-]{36}$/i.test(id||''))return json({error:'Invalid movie ID.'},400);
+      const existing=await getMovie(storeRedis,id);
+      if(!existing)return json({error:'Movie not found.'},404);
+      if(method==='PUT'){
+        const value=movieInput(await readBody(req),new Set(await listCategories(storeRedis)),true);
+        const movie=await saveMovie(storeRedis,{...existing,title:value.title,poster_url:value.poster,
+          category:value.category,video_sources:value.sources,is_published:value.published,is_featured:value.featured,
+          updated_at:new Date().toISOString()});
+        await invalidateContentCaches(ctx,id);return json({movie});
+      }
+      if(method==='DELETE'){
+        await deleteMovie(storeRedis,id);await invalidateContentCaches(ctx,id);return json({ok:true});
+      }
+    }
     if (path.startsWith('/api/admin/google-drive/')) {
       try { return await handleGoogleDriveAdmin(req, env, ctx, path, method); }
       catch (error) {

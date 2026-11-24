@@ -43,6 +43,16 @@ button{color:inherit}
 .category-pill:hover{border-color:#a1adff70;background:#ffffff10;color:#fff}
 .category-pill[aria-pressed="true"]{border-color:#9ba6ff;background:linear-gradient(135deg,#aab3ff,#7787f4);color:#11162a;box-shadow:0 5px 20px #7887ff30}
 .category-count{margin-left:7px;font-size:11px;opacity:.72}
+.collections-section{margin-top:42px}
+.collections-list{display:grid;gap:28px}
+.collection-block{min-width:0}
+.collection-heading{display:flex;align-items:baseline;gap:12px;margin:0 0 12px}
+.collection-heading h3{margin:0;font-size:20px;letter-spacing:-.35px}
+.collection-heading p{margin:0;color:#8996b1;font-size:12px}
+.collection-movies{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:15px}
+.featured-tag{position:absolute;left:9px;top:9px;z-index:2;padding:5px 9px;border:1px solid #f4d68a65;border-radius:999px;background:#171827e8;color:#ffe09b;font-size:10px;font-weight:850;letter-spacing:.7px;text-transform:uppercase}
+@media(max-width:600px){.collections-section{margin-top:30px}.collection-movies{grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.collection-heading h3{font-size:17px}}
+
 main{width:min(calc(100% - 44px),var(--content));margin:0 auto;padding:24px 0 80px}
 .featured{position:relative;isolation:isolate;display:flex;align-items:flex-end;min-height:390px;overflow:hidden;border:1px solid #ffffff1a;border-radius:24px;background:#151e31;box-shadow:0 22px 80px #0004}
 .featured[hidden]{display:none}
@@ -259,6 +269,16 @@ main{padding-top:30px}
       </div>
     </div>
   </section>
+  <section id="collectionsSection" class="collections-section" aria-labelledby="collectionsTitle" hidden>
+    <div class="section-heading">
+      <div>
+        <p class="section-kicker">CURATED FOR YOU</p>
+        <h2 id="collectionsTitle" class="section-title">Collections</h2>
+        <p class="section-subtitle">Explore hand-picked groups of movies.</p>
+      </div>
+    </div>
+    <div id="collectionsList" class="collections-list"></div>
+  </section>
   <footer class="footer">Made for movie nights · Moviwatch</footer>
 </main>
 <script>
@@ -327,6 +347,7 @@ function renderCatalogue(){
     poster.onload=()=>posterWrap.classList.add('is-loaded');
     poster.onerror=()=>{poster.remove();posterWrap.classList.add('is-unavailable')};
     posterWrap.append(poster);
+    if(movie.is_featured===true)posterWrap.append(node('span','featured-tag','Featured'));
     if(movie.poster_url){poster.src=movie.poster_url}else{poster.hidden=true;posterWrap.classList.add('is-unavailable')}
     const play=node('span','play-indicator','▶');play.setAttribute('aria-hidden','true');
     posterWrap.append(play);
@@ -334,6 +355,42 @@ function renderCatalogue(){
     details.append(node('span','movie-title',movie.title||'Untitled movie'),node('span','movie-category',isSeries?('Web Series · '+(Number(movie.episode_count)||0)+' episodes'):(movie.category||'Movie')));
     card.append(posterWrap,details);grid.append(card);
   });
+}
+async function loadCollections(){
+  const section=$('#collectionsSection'),target=$('#collectionsList');
+  try{
+    const response=await fetch('/api/collections',{cache:'no-store',headers:{Accept:'application/json'}});
+    if(!response.ok)throw new Error('Collections are temporarily unavailable.');
+    const data=await response.json();
+    const collections=Array.isArray(data.collections)?data.collections:[];
+    target.replaceChildren();
+    if(!collections.length){section.hidden=true;return;}
+    collections.forEach(collection=>{
+      const block=node('section','collection-block');
+      const heading=node('div','collection-heading');
+      heading.append(node('h3','',collection.name||'Collection'));
+      if(collection.description)heading.append(node('p','',collection.description));
+      const cards=node('div','collection-movies');
+      (Array.isArray(collection.movies)?collection.movies:[]).forEach((movie,index)=>{
+        const card=node('a','movie-card');card.href=watchPath(movie.id);
+        card.setAttribute('aria-label','Watch '+(movie.title||'movie'));
+        const posterWrap=node('div','poster-wrap');
+        const poster=node('img','poster');poster.alt=(movie.title||'Movie')+' poster';
+        poster.loading='lazy';poster.decoding='async';poster.referrerPolicy='no-referrer';
+        poster.onload=()=>posterWrap.classList.add('is-loaded');
+        poster.onerror=()=>{poster.remove();posterWrap.classList.add('is-unavailable')};
+        if(movie.poster_url)poster.src=movie.poster_url;else poster.hidden=true;
+        posterWrap.append(poster);
+        const details=node('div','movie-details');
+        details.append(node('span','movie-title',movie.title||'Untitled movie'),node('span','movie-category',movie.category||'Movie'));
+        card.append(posterWrap,details);cards.append(card);
+      });
+      if(cards.childElementCount){block.append(heading,cards);target.append(block);}
+    });
+    section.hidden=!target.childElementCount;
+  }catch{
+    section.hidden=true;
+  }
 }
 function syncSearch(){ $('#searchWrap').classList.toggle('has-value',!!searchInput.value) }
 const CATALOGUE_CACHE_KEY='moviwatch-public-catalogue-v3';
@@ -346,7 +403,7 @@ function readCatalogueCache(){
       id:movie.id,title:movie.title,category:typeof movie.category==='string'?movie.category:'Movie',
       poster_url:typeof movie.poster_url==='string'&&movie.poster_url.startsWith('https://')?movie.poster_url:'',
       created_at:typeof movie.created_at==='string'?movie.created_at:'',
-      content_type:movie.content_type==='series'?'series':'movie',episode_count:Number(movie.episode_count)||0
+      content_type:movie.content_type==='series'?'series':'movie',episode_count:Number(movie.episode_count)||0,is_featured:movie.is_featured===true,is_featured:movie.is_featured===true
     }));
   }catch{return null}
 }
@@ -369,6 +426,7 @@ async function loadMovies(){
     allMovies=Array.isArray(data.movies)?data.movies:[];
     saveCatalogueCache(allMovies);
     buildCategories();renderCatalogue();
+    await loadCollections();
   }catch(error){
     if(hasVisibleCatalogue){
       $('#catalogueSubtitle').textContent='Showing your saved collection. We could not refresh it just now.';

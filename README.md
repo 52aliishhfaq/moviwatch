@@ -1,6 +1,28 @@
 # Moviwatch
 
-A movie catalogue with Google Drive and Archive.org byte-range streaming. The frontend is served by Vercel; Cloudflare Workers provide the same-origin API, Range-aware media proxy, and edge chunk cache. Neon PostgreSQL stores movie metadata and video source arrays. Upstash Redis is used only for admin-login rate limiting.
+Moviwatch is a responsive movie catalogue with Archive.org-backed playback. The existing player and streaming stack remains capable of Drive and Archive.org byte-range streaming during the staged cutover; the target curated catalogue publishes Archive.org sources only. The frontend is served by Vercel; Cloudflare Workers provide the same-origin API, protected playback sessions, Range-aware media proxy, mirror failover and edge chunk cache.
+
+The project is in a staged migration from its legacy Neon/Google Drive/series catalogue to an Archive.org-only curated catalogue. Upstash Redis is the selected lightweight catalogue store because the project already uses its REST connection for admin-login rate limiting and Cloudflare Workers can access it over HTTP.
+
+## Current architecture
+
+- Archive.org Advanced Search is available in the admin dashboard. Administrators can inspect metadata, rights and available video files, then validate a candidate with an HTTP byte-range probe before adding it to the movie form.
+- Featured movies, categories and curated collections are stored in the new Redis catalogue after migration preparation.
+- Public collection cards contain safe display metadata only. Video source URLs remain in the Worker-side playback metadata path.
+- Existing secure admin authentication, native HTML5 playback, protected downloads, HTTP Range support, mirror failover and Cloudflare edge chunk caching are retained.
+- The existing Neon movie catalogue, Google Drive integration and web-series manager remain as legacy compatibility paths until the Archive-only migration is prepared and activated.
+
+## Archive-only catalogue migration
+
+After the migration UI is deployed, open `/admin` and use **Archive-only catalogue migration**:
+
+1. **Prepare migration and backups** reads the Neon movie, series and episode records and copies originals into separate Redis backup keys. It creates the new movie catalogue using Archive.org sources only; legacy movies without an Archive.org source remain hidden in the new catalogue.
+2. Review the source and Redis movie counts, the number of Archive.org candidates, and the number of hidden legacy entries. During preparation, legacy movie, Drive and series writes are paused to prevent the snapshot from drifting.
+3. **Activate Redis catalogue** switches public catalogue and playback metadata reads to the prepared Redis store. Activation requires a separate explicit confirmation. It does not delete Neon or erase its tables.
+
+The migration currently supports up to 5,000 movies, series and episodes per type. Larger catalogues are rejected rather than silently migrated incompletely. Keep Neon and its credentials until you have independently exported and verified the data and confirmed that playback, public pages, admin curation and deployment are healthy. Do not treat the Redis backup keys as a replacement for an independent cold backup.
+
+Once Redis is prepared, the admin dashboard exposes category and collection management and hides the legacy Drive/series panels. New movie sources in the prepared catalogue must be Archive.org files. Featured status is controlled from the movie form. Public collections are served at `/api/collections`; available categories are served at `/api/categories`.
 
 ## Features
 
@@ -37,7 +59,7 @@ The first source is selected by default. When multiple options exist, the watch 
 Only publish videos for which you have the rights and permissions required to distribute them.
 
 
-## Secure Google Drive Manager
+## Legacy Google Drive Manager (pre-migration only)
 
 The admin dashboard includes an optional Google Drive Manager. It uses the connected administrator's Google OAuth account through the Cloudflare Worker; Google OAuth credentials and the refresh token never enter the browser.
 
