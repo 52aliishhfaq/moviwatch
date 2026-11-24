@@ -232,7 +232,10 @@ export function createRangeRelayStream({
             throw new Error('Video source sent more bytes than its Content-Range declared');
           }
           currentBytes += bytes.byteLength;
-          failures = 0;
+          // Keep the retry budget across partial body reads. Reset it only
+          // after the complete upstream range has been consumed; otherwise
+          // a source that repeatedly sends one chunk and disconnects can
+          // evade maxRetries indefinitely (until maxRequests is exhausted).
           c.enqueue(bytes);
           return;
         }
