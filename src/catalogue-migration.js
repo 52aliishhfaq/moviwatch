@@ -55,9 +55,13 @@ function safePoster(value) {
 }
 
 async function inBatches(items, batchSize, operation) {
+  if (!Array.isArray(items) || !Number.isInteger(batchSize) || batchSize < 1 ||
+      typeof operation !== "function") {
+    throw new TypeError("Invalid migration batch configuration.");
+  }
   for (let offset = 0; offset < items.length; offset += batchSize) {
     const batch = items.slice(offset, offset + batchSize);
-    await Promise.all(batch.map(operation));
+    await operation(batch);
   }
 }
 
