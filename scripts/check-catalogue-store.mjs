@@ -66,6 +66,19 @@ assert.equal(await deleteMovie(redis, 'a0000000-0000-4000-8000-000000000003'), t
 await assert.rejects(() => saveMovie(redis, {
   ...movieA, video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/unprobed/movie.mp4' }]
 }), /server-side Archive.org byte-range verification/);
+const legacyUnverified = {
+  ...movieA,
+  id: 'a0000000-0000-4000-8000-000000000004',
+  video_sources: [{ label: 'Old Archive URL', provider: 'archive.org', url: 'https://archive.org/download/old-unprobed/movie.mp4' }],
+  is_published: true,
+  is_featured: true
+};
+await redis.set('moviwatch:catalogue:v1:movie:'+legacyUnverified.id, legacyUnverified);
+await redis.zadd('moviwatch:catalogue:v1:movies', { score: Date.parse(legacyUnverified.updated_at), member: legacyUnverified.id });
+assert.equal(isMoviePublishable(await getMovie(redis, legacyUnverified.id)), false);
+assert.equal((await listMovies(redis, { publishedOnly: true })).length, 2);
+await redis.del('moviwatch:catalogue:v1:movie:'+legacyUnverified.id);
+await redis.zrem('moviwatch:catalogue:v1:movies', legacyUnverified.id);
 assert.equal((await listMovies(redis, { category: 'Romantic' }))[0].id, movieB.id);
 assert.equal((await listMovies(redis, { query: 'first' }))[0].is_featured, true);
 await assert.rejects(() => saveMovie(redis, { ...movieA, id: 'not-a-uuid' }), /movie ID/);
