@@ -2718,7 +2718,7 @@ async function api(req, env, ctx) {
       const body=await readBody(req);const category=await saveCategory(storeRedis,body.name);
       await invalidateContentCaches(ctx);return json({category},201);
     }
-    const categoryMatch=/^\\/api\\/admin\\/categories\\/(.+)$/.exec(path);
+    const categoryMatch=/^\/api\/admin\/categories\/(.+)$/.exec(path);
     if(categoryMatch&&method==='DELETE'){
       const name=decodeURIComponent(categoryMatch[1]);await deleteCategory(storeRedis,name);
       await invalidateContentCaches(ctx);return json({ok:true});
@@ -2737,7 +2737,7 @@ async function api(req, env, ctx) {
         movie_ids:ids,is_published:body.isPublished===true});
       await invalidateContentCaches(ctx);return json({collection},201);
     }
-    const collectionMatch=/^\\/api\\/admin\\/collections\\/([0-9a-f-]{36})$/.exec(path);
+    const collectionMatch=/^\/api\/admin\/collections\/([0-9a-f-]{36})$/.exec(path);
     if(collectionMatch){
       const id=collectionMatch[1];
       if(method==='PUT'){
