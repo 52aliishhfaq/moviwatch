@@ -157,7 +157,7 @@ assert.ok(workerSource.includes("Never expose stored source URLs"));
 assert.ok(workerSource.includes("storeMeta.active===true||storeMeta.migration?.status==='prepared'"));
 assert.ok(workerSource.includes("migrationRunning&&['POST','PUT','PATCH','DELETE'].includes(method)"));
 assert.ok(workerSource.includes("Movie deletion is locked until the Redis catalogue is activated"));
-assert.ok(adminSource.includes("deleting movies locked until the Redis catalogue is activated"));
+assert.ok(adminSource.includes("Deleting movies remains locked until activation"));
 assert.ok(workerSource.includes("video_sources:(Array.isArray(movie.video_sources)?movie.video_sources:[])"));
 assert.ok(migrationSource.includes('await clearStagedMovies(redis)'));
 assert.ok(!/DELETE\\s+FROM\\s+public\\.(movies|series|episodes)/i.test(migrationSource));
