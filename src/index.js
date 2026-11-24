@@ -2686,6 +2686,11 @@ async function api(req, env, ctx) {
        (path==='/api/admin/movies'||path.startsWith('/api/admin/movies/'))){
       return json({error:'Movie writes are paused while the migration snapshot is being prepared.'},409);
     }
+    if(!storeMeta.active&&storeMeta.migration?.status==='prepared'&&
+       ['POST','PUT','PATCH','DELETE'].includes(method)&&
+       (path==='/api/admin/movies'||path.startsWith('/api/admin/movies/'))){
+      return json({error:'Movie changes are locked after snapshot preparation. Activate the Redis catalogue first, then continue editing.'},409);
+    }
     if(path==='/api/admin/catalogue/migration/status'&&method==='GET'){
       let sourceMovieCount=null,sourceSeriesCount=null,sourceEpisodeCount=null;
       try{
