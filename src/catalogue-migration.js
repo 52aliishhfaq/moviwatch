@@ -79,7 +79,17 @@ export async function prepareNeonToRedisMigration(sql, redis) {
   if (typeof sql !== "function") throw new TypeError("Neon SQL client is required for migration preparation.");
   const previous = await getCatalogueMeta(redis);
   if (previous.active) throw new Error("Redis catalogue is already active; migration preparation is locked.");
-  if (previous.migration?.status === "prepared") return previous;
+  if (previous.migration?.status === "prepared") {
+    const existingVerification = await verifyCatalogueMigration(redis, {
+      movieCount: previous.migration.source_movie_count,
+      seriesCount: previous.migration.backed_up_series,
+      episodeCount: previous.migration.backed_up_episodes
+    });
+    if (existingVerification.ok) return previous;
+    // Older deployments could mark a snapshot prepared before writing backup
+    // manifests. Rebuild from the read-only Neon source instead of leaving the
+    // administrator permanently unable to activate a valid catalogue.
+  }
 
   await setMigrationState(redis, {
     status: "running",
