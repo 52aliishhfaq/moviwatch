@@ -16,7 +16,7 @@ The project is in a staged migration from its legacy Neon/Google Drive/series ca
 
 After the migration UI is deployed, open `/admin` and use **Archive-only catalogue migration**:
 
-1. **Prepare migration and backups** reads the Neon movie, series and episode records and copies originals into separate Redis backup keys. It creates the new movie catalogue using Archive.org sources only; legacy movies without an Archive.org source remain hidden in the new catalogue.
+1. **Prepare migration and backups** reads the Neon movie, series and episode records and copies originals into separate Redis backup keys. It creates the new movie catalogue using Archive.org sources only; legacy movies without an Archive.org source remain hidden in the new catalogue. The migration counts Archive.org source candidates only; it does not test each file's HTTP byte-range availability or browser codec compatibility, so each source still needs the admin file probe before publication.
 2. Review the source and Redis movie counts, the number of Archive.org candidates, and the number of hidden legacy entries. During preparation, legacy movie, Drive and series writes are paused to prevent the snapshot from drifting.
 3. **Activate Redis catalogue** switches public catalogue and playback metadata reads to the prepared Redis store. Activation requires a separate explicit confirmation. It does not delete Neon or erase its tables.
 
