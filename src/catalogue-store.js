@@ -252,6 +252,56 @@ export async function deleteCollection(redis, id) {
   return true;
 }
 
+export async function saveMigratedMovieBatch(redis, records) {
+  assertRedis(redis);
+  if (!Array.isArray(records) || records.length < 1 || records.length > 50) {
+    throw new Error("Migration batches must contain 1–50 movies.");
+  }
+  const tx = redis.multi();
+  for (const record of records) {
+    const movie = normalizeMovie(record.movie);
+    if (!record.legacy || typeof record.legacy !== "object") throw new Error("Legacy movie backup is missing.");
+    tx.set(BACKUP_PREFIX + "movie:" + movie.id, record.legacy);
+    tx.set(keyForMovie(movie.id), movie);
+    tx.zadd(MOVIES_INDEX, { score: safeScore(movie.updated_at), member: movie.id });
+    tx.sadd(CATEGORIES_KEY, movie.category);
+  }
+  await tx.exec();
+  return records.length;
+}
+
+export async function backupLegacyRecords(redis, type, rows) {
+  assertRedis(redis);
+  if (!["series", "episode"].includes(type) || !Array.isArray(rows) || rows.length > 50) {
+    throw new Error("Legacy backup batches must contain at most 50 series or episodes.");
+  }
+  if (!rows.length) return 0;
+  const tx = redis.multi();
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || !UUID_RE.test(String(row.id || ""))) {
+      throw new Error("Invalid legacy " + type + " backup record.");
+    }
+    tx.set(BACKUP_PREFIX + type + ":" + row.id.toLowerCase(), row);
+  }
+  await tx.exec();
+  return rows.length;
+}
+
+export async function clearStagedMovies(redis) {
+  assertRedis(redis);
+  const ids = await redis.zrange(MOVIES_INDEX, 0, MAX_MOVIES - 1);
+  for (let offset = 0; offset < (ids || []).length; offset += 50) {
+    const batch = ids.slice(offset, offset + 50);
+    const tx = redis.multi();
+    for (const id of batch) {
+      tx.del(keyForMovie(String(id)));
+      tx.zrem(MOVIES_INDEX, String(id));
+    }
+    await tx.exec();
+  }
+  return (ids || []).length;
+}
+
 export async function backupLegacyRecord(redis, type, id, value) {
   assertRedis(redis);
   if (!["movie", "series", "episode"].includes(type) ||
