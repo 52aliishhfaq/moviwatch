@@ -70,6 +70,12 @@ await assert.rejects(
     async () => ({ status: 206, size: 0 })),
   /valid HTTP 206/
 );
+const upstreamFailure = Object.assign(new Error('Archive.org temporarily unavailable.'), { status: 502 });
+await assert.rejects(
+  () => verifyArchiveSources([{ label: 'Retry later', provider: 'archive.org', url: 'https://archive.org/download/item/movie.mp4' }],
+    async () => { throw upstreamFailure; }),
+  (error) => error.status === 502 && /temporarily unavailable/.test(error.message)
+);
 await assert.rejects(
   () => verifyArchiveSources([], async () => ({ status: 206, size: 1 })),
   /between 1 and 8/
