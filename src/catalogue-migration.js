@@ -154,6 +154,7 @@ export async function prepareNeonToRedisMigration(sql, redis) {
       backed_up_series: series.length,
       backed_up_episodes: episodes.length,
       archive_source_candidates: archiveSourceCandidates,
+      needs_probe_movies: archiveSourceCandidates,
       hidden_movies: movies.length - archiveSourceCandidates,
       prepared_at: new Date().toISOString(),
       error: null
