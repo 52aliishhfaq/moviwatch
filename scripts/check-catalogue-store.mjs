@@ -62,6 +62,7 @@ await saveMovie(redis, { ...movieA, id: 'a0000000-0000-4000-8000-000000000003',
   is_published: false });
 assert.equal((await listMovies(redis, { publishedOnly: true })).length, 2);
 assert.equal(isMoviePublishable(await getMovie(redis, 'a0000000-0000-4000-8000-000000000003')), false);
+assert.equal(await deleteMovie(redis, 'a0000000-0000-4000-8000-000000000003'), true);
 await assert.rejects(() => saveMovie(redis, {
   ...movieA, video_sources: [{ label: 'Archive.org', provider: 'archive.org', url: 'https://archive.org/download/unprobed/movie.mp4' }]
 }), /server-side Archive.org byte-range verification/);
