@@ -13,7 +13,7 @@ const SEARCH_FIELDS = [
 ];
 // Keep candidates to formats commonly supported by browser-native playback.
 // A container extension still does not guarantee codec compatibility.
-const VIDEO_EXTENSIONS = new Set(["mp4", "m4v", "webm", "ogv", "ogg"]);
+const VIDEO_EXTENSIONS = new Set(["mp4", "m4v", "mpeg4", "webm", "ogv", "ogg"]);
 const VIDEO_FORMATS = /^(mpeg4|h\.264|h\.264 ia|webm|ogg video)$/i;
 
 function archiveError(message, status = 400) {
