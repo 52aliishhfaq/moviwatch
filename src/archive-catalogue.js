@@ -51,6 +51,9 @@ export function isArchiveIdentifier(value) {
 }
 
 export function buildArchiveSearchUrl({ query = "", year = "", page = 1, rows = 24, sort = "downloads desc" } = {}) {
+  if (typeof query !== "string" || query.length > MAX_QUERY_LENGTH) {
+    throw archiveError("Search query must be 160 characters or fewer.");
+  }
   const term = safeText(query, MAX_QUERY_LENGTH);
   if (query && !term) throw archiveError("Enter a valid Archive.org search term.");
   if (!Number.isInteger(page) || page < 1 || page > 10000) throw archiveError("Invalid search page.");
@@ -62,7 +65,9 @@ export function buildArchiveSearchUrl({ query = "", year = "", page = 1, rows = 
   const clauses = ["mediatype:movies"];
   if (term) {
     const words = term.split(/\s+/).filter(Boolean).slice(0, 10).map(escapeLucene);
-    const expression = words.map((word) => `title:(${word}) OR description:(${word}) OR creator:(${word})`).join(" AND ");
+    const expression = words.map((word) =>
+      `(title:(${word}) OR description:(${word}) OR creator:(${word}))`
+    ).join(" AND ");
     clauses.push(`(${expression})`);
   }
   if (year) clauses.push(`year:${year}`);
@@ -86,7 +91,7 @@ export async function searchArchiveItems(options = {}, fetchImpl = fetch) {
   const payload = await archiveJson(response, "search");
   const docs = Array.isArray(payload?.response?.docs) ? payload.response.docs : [];
   return {
-    page: Number(payload?.response?.start || 0) / Number(payload?.response?.rows || 24) + 1,
+    page: Math.floor(Number(payload?.response?.start || 0) / Number(payload?.response?.rows || 24)) + 1,
     rows: Number(payload?.response?.rows || 24),
     total: Number(payload?.response?.numFound || 0),
     items: docs.filter((item) => isArchiveIdentifier(item.identifier)).map((item) => ({
@@ -143,7 +148,8 @@ export async function getArchiveItem(identifier, fetchImpl = fetch) {
   const rawError = payload.error ?? metadata.error ?? null;
   const errorCode = Number(rawError) || null;
   const errorText = safeText(String(rawError ?? ""), 120).toLowerCase();
-  const availability = errorCode ? ({
+  const hasArchiveError = rawError !== null && rawError !== undefined && rawError !== 0 && rawError !== "0" && rawError !== "";
+  const availability = hasArchiveError ? ({
     101: "creation_pending", 102: "temporarily_offline",
     103: "unbacked_item", 104: "deleted"
   }[errorCode] || "unavailable") :
@@ -152,13 +158,13 @@ export async function getArchiveItem(identifier, fetchImpl = fetch) {
   return {
     identifier,
     title: safeText(metadata.title, 300) || identifier,
-    description: safeText(metadata.description, 5000),
+    description: safeText(Array.isArray(metadata.description) ? metadata.description.join(" ") : String(metadata.description || ""), 5000),
     year: safeText(String(metadata.year || ""), 12),
     creator: safeText(Array.isArray(metadata.creator) ? metadata.creator.join(", ") : String(metadata.creator || ""), 500),
     mediatype: safeText(metadata.mediatype, 40),
     collection: Array.isArray(metadata.collection) ? metadata.collection.slice(0, 50).map((v) => safeText(v, 120)) : [],
     licenseurl: safeText(metadata.licenseurl, 500),
-    rights: safeText(metadata.rights, 1000),
+    rights: safeText(Array.isArray(metadata.rights) ? metadata.rights.join(" ") : String(metadata.rights || ""), 1000),
     availability,
     errorCode,
     files,
