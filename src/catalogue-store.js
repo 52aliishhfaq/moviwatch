@@ -18,6 +18,7 @@ const BACKED_UP_MOVIES_SET = PREFIX + "backed-up-movie-ids";
 const BACKED_UP_SERIES_SET = PREFIX + "backed-up-series-ids";
 const BACKED_UP_EPISODES_SET = PREFIX + "backed-up-episode-ids";
 const BACKUP_PREFIX = PREFIX + "legacy-backup:";
+const BACKUP_DIGEST_PREFIX = PREFIX + "legacy-backup-sha256:";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DEFAULT_CATEGORIES = ["Action", "Romantic"];
 const MAX_MOVIES = 5000;
@@ -39,6 +40,24 @@ function keyForMovie(id) {
 function keyForCollection(id) {
   if (typeof id !== "string" || !UUID_RE.test(id)) throw new Error("Invalid collection ID.");
   return PREFIX + "collection:" + id.toLowerCase();
+}
+
+function canonicalJson(value) {
+  const normalized = JSON.parse(JSON.stringify(value));
+  const sort = (item) => {
+    if (Array.isArray(item)) return item.map(sort);
+    if (item && typeof item === "object") {
+      return Object.fromEntries(Object.keys(item).sort().map((key) => [key, sort(item[key])]));
+    }
+    return item;
+  };
+  return JSON.stringify(sort(normalized));
+}
+
+async function sha256Record(value) {
+  const bytes = new TextEncoder().encode(canonicalJson(value));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function safeScore(value) {
@@ -339,6 +358,7 @@ export async function saveMigratedMovieBatch(redis, records) {
     const movie = normalizeMovie(record.movie);
     if (!record.legacy || typeof record.legacy !== "object") throw new Error("Legacy movie backup is missing.");
     tx.set(BACKUP_PREFIX + "movie:" + movie.id, record.legacy);
+    tx.set(BACKUP_DIGEST_PREFIX + "movie:" + movie.id, await sha256Record(record.legacy));
     tx.sadd(BACKED_UP_MOVIES_SET, movie.id);
     tx.set(keyForMovie(movie.id), movie);
     tx.sadd(LEGACY_MOVIES_SET, movie.id);
@@ -361,6 +381,7 @@ export async function backupLegacyRecords(redis, type, rows) {
       throw new Error("Invalid legacy " + type + " backup record.");
     }
     tx.set(BACKUP_PREFIX + type + ":" + row.id.toLowerCase(), row);
+    tx.set(BACKUP_DIGEST_PREFIX + type + ":" + row.id.toLowerCase(), await sha256Record(row));
     tx.sadd(type === "series" ? BACKED_UP_SERIES_SET : BACKED_UP_EPISODES_SET, row.id.toLowerCase());
   }
   await tx.exec();
@@ -399,6 +420,7 @@ export async function backupLegacyRecord(redis, type, id, value) {
     (type === "series" ? BACKED_UP_SERIES_SET : BACKED_UP_EPISODES_SET);
   const tx = redis.multi();
   tx.set(key, value);
+  tx.set(BACKUP_DIGEST_PREFIX + type + ":" + id.toLowerCase(), await sha256Record(value));
   tx.sadd(setKey, id.toLowerCase());
   await tx.exec();
   return key;
@@ -451,6 +473,9 @@ export async function verifyCatalogueMigration(redis, expectedCounts = {}) {
   const movieBackups = await readValuesByKeys(redis, backedUpMovieIds.map((id) => BACKUP_PREFIX + "movie:" + id));
   const seriesBackups = await readValuesByKeys(redis, seriesIds.map((id) => BACKUP_PREFIX + "series:" + id));
   const episodeBackups = await readValuesByKeys(redis, episodeIds.map((id) => BACKUP_PREFIX + "episode:" + id));
+  const movieBackupDigests = await readValuesByKeys(redis, backedUpMovieIds.map((id) => BACKUP_DIGEST_PREFIX + "movie:" + id));
+  const seriesBackupDigests = await readValuesByKeys(redis, seriesIds.map((id) => BACKUP_DIGEST_PREFIX + "series:" + id));
+  const episodeBackupDigests = await readValuesByKeys(redis, episodeIds.map((id) => BACKUP_DIGEST_PREFIX + "episode:" + id));
   const recordsMatchManifest = (records, ids) =>
     records.length === ids.length && records.every((record, index) =>
       record && typeof record === "object" && String(record.id || "").toLowerCase() === ids[index]);
@@ -464,6 +489,16 @@ export async function verifyCatalogueMigration(redis, expectedCounts = {}) {
   if (!recordsMatchManifest(movieBackups, backedUpMovieIds)) errors.push("original movie backups are missing or their IDs do not match the backup manifest");
   if (!recordsMatchManifest(seriesBackups, seriesIds)) errors.push("original series backups are missing or their IDs do not match the backup manifest");
   if (!recordsMatchManifest(episodeBackups, episodeIds)) errors.push("original episode backups are missing or their IDs do not match the backup manifest");
+  const verifyDigests = async (records, digests) => {
+    if (records.length !== digests.length || digests.some((digest) => typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest))) return false;
+    for (let index = 0; index < records.length; index++) {
+      if (await sha256Record(records[index]) !== digests[index]) return false;
+    }
+    return true;
+  };
+  if (!(await verifyDigests(movieBackups, movieBackupDigests))) errors.push("original movie backups failed SHA-256 integrity verification");
+  if (!(await verifyDigests(seriesBackups, seriesBackupDigests))) errors.push("original series backups failed SHA-256 integrity verification");
+  if (!(await verifyDigests(episodeBackups, episodeBackupDigests))) errors.push("original episode backups failed SHA-256 integrity verification");
   return {
     ok: errors.length === 0,
     expected,
