@@ -195,6 +195,37 @@ export async function activateCatalogueStore(redis, expectedCounts = {}) {
   return next;
 }
 
+export async function rollbackCatalogueActivation(redis) {
+  assertRedis(redis);
+  const previous = await getCatalogueMeta(redis);
+  const migration = previous.migration || {};
+  if (previous.active !== true) {
+    throw new Error("Redis catalogue is not active; rollback is not required.");
+  }
+  if (migration.status !== "prepared" || migration.source !== "neon") {
+    throw new Error("Only an activated Neon-to-Redis migration can be rolled back.");
+  }
+  const verification = await verifyCatalogueMigration(redis, {
+    movieCount: migration.source_movie_count,
+    seriesCount: migration.backed_up_series,
+    episodeCount: migration.backed_up_episodes
+  });
+  if (!verification.ok) {
+    throw new Error("Rollback blocked because the legacy backup integrity check failed: " + verification.errors.join("; "));
+  }
+  const next = {
+    ...previous,
+    active: false,
+    migration: {
+      ...migration,
+      rollback_at: new Date().toISOString(),
+      rollback_verification: verification
+    }
+  };
+  await redis.set(META_KEY, next);
+  return next;
+}
+
 export async function saveMovie(redis, rawMovie) {
   assertRedis(redis);
   const movie = normalizeMovie(rawMovie);
