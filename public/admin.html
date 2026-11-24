@@ -456,41 +456,6 @@ $('#collectionForm').addEventListener('submit',async event=>{
 async function refresh(){
   try{
     await refreshMigrationStatus();
-    const [movieData,statsData]=await Promise.all([api('/api/admin/movies'),api('/api/admin/stats')]);
-    movies=movieData.movies||[];
-    const stats=statsData.stats||{};
-    const categorySummary=stats.categories&&typeof stats.categories==='object'
-      ?Object.entries(stats.categories).filter(([,count])=>Number(count)>0).map(([name,count])=>count+' '+name)
-      :[(stats.action||0)+' Action',(stats.romantic||0)+' Romantic'];
-    $('#stats').textContent=(stats.total||0)+' total · '+(stats.published||0)+' published · '+categorySummary.join(' · ')+
-      (Number.isFinite(stats.featured)?' · '+stats.featured+' featured':'');
-    renderMovies();
-    if(catalogueReady){
-      $('#googleDrivePanel').classList.add('hidden');
-      $('#seriesManager').classList.add('hidden');
-      $('#publishDriveSelection').classList.add('hidden');
-      $('#sourceHelp').textContent='Archive.org sources only. Search and validate files above before publishing. Up to 8 sources per movie.';
-      await refreshCuration();
-      setPendingPublishFile(null);
-    }else{
-      $('#googleDrivePanel').classList.remove('hidden');
-      $('#seriesManager').classList.remove('hidden');
-      $('#publishDriveSelection').classList.remove('hidden');
-      await Promise.all([refreshDriveStatus(),loadSeries()]);
-      $('#categoryPanel').hidden=true;$('#collectionPanel').hidden=true;
-      populateCategorySelects(['Action','Romantic']);
-    }
-  }catch(error){$('#formNotice').textContent=error.message;$('#migrationStatus').textContent=error.message;}
-}
-
-    const [movieData,statsData]=await Promise.all([api('/api/admin/movies'),api('/api/admin/stats')]);
-    movies=movieData.movies||[];
-    const stats=statsData.stats||{};
-    $('#stats').textContent=(stats.total||0)+' total · '+(stats.published||0)+' published · '+(stats.action||0)+' Action · '+(stats.romantic||0)+' Romantic';
-    renderMovies();
-    await Promise.all([refreshDriveStatus(),loadSeries()]);
-  }catch(error){$('#formNotice').textContent=error.message;}
-}
 function renderMovies(){
   const list=$('#movieList');
   list.replaceChildren();
