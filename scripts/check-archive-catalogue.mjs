@@ -12,7 +12,7 @@ assert.equal(searchUrl.pathname, '/advancedsearch.php');
 assert.match(searchUrl.searchParams.get('q'), /mediatype:movies/);
 assert.match(searchUrl.searchParams.get('q'), /year:1977/);
 const grouped = buildArchiveSearchUrl({ query: 'star wars' }).searchParams.get('q');
-assert.match(grouped, /\\(title:\\(star\\).*creator:\\(star\\)\\) AND \\(title:\\(wars\\)/);
+assert.ok(grouped.includes('(title:(star) OR description:(star) OR creator:(star)) AND (title:(wars)'));
 assert.throws(() => buildArchiveSearchUrl({ query: 'x'.repeat(161) }), /160 characters/);
 assert.equal(searchUrl.searchParams.get('rows'), '24');
 assert.equal(searchUrl.searchParams.get('page'), '2');
