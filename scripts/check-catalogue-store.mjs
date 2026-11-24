@@ -252,9 +252,9 @@ assert.ok(workerSource.includes("Google Drive OAuth is disabled while Moviwatch 
 assert.ok(workerSource.includes("This legacy Neon-backed admin endpoint is disabled in Archive-only mode."));
 assert.ok(workerSource.includes("if(storeMeta.active){"));
 assert.ok(workerSource.includes("sourceMovieCount=Number(storeMeta.migration?.source_movie_count||0);"));
-assert.ok(workerSource.includes("__movie_metadata__v4/"));
-assert.ok(workerSource.includes("__public_catalogue__v4"));
-assert.ok(workerSource.includes("v4 deliberately bypasses metadata cached by the legacy Neon/Drive route"));
+assert.ok(workerSource.includes("__movie_metadata__v5/"));
+assert.ok(workerSource.includes("__public_catalogue__v5"));
+assert.ok(workerSource.includes("v5 deliberately bypasses prior unverified-publication metadata cached under the previous namespace"));
 assert.ok(migrationSource.includes("if (previous.migration?.status === \"prepared\")"));
 assert.ok(migrationSource.includes("if (existingVerification.ok) return previous;"));
 assert.ok(adminSource.includes("catalogueNeedsRebuild"));
@@ -274,7 +274,7 @@ assert.ok(workerSource.includes("async function verifyArchiveVideoSources(source
 assert.ok(workerSource.includes("verifyArchiveSources(sources, probeArchiveFile)"));
 assert.ok(workerSource.includes("const value=await prepareRedisMovieInput(req,env)"));
 assert.ok(workerSource.includes("isMoviePublishable(movie)"));
-assert.ok(adminSource.includes("Re-checks every source again when you save a movie as Published"));
+assert.ok(adminSource.includes("re-checks every source again when you save a movie as Published"));
 assert.ok(workerSource.includes("const movie=isMoviePublishable(stored)"));
 assert.ok(workerSource.includes("published:all.filter(isMoviePublishable).length"));
 assert.ok(workerSource.includes("featured:all.filter(x=>isMoviePublishable(x)&&x.is_featured).length"));
