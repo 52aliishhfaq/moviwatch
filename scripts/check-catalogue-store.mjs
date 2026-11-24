@@ -252,6 +252,20 @@ assert.equal(corruptedVerification.ok, false);
 assert.ok(corruptedVerification.errors.some((error) => error.includes('episode backups') ||
   error.includes('episode backup manifest')));
 
+const alteredBackupRedis = new FakeRedis();
+await prepareNeonToRedisMigration(fakeSql, alteredBackupRedis);
+const alteredEpisode = { ...legacyEpisodes[0], title: 'Silently altered after backup' };
+await alteredBackupRedis.set(
+  'moviwatch:catalogue:v1:legacy-backup:episode:' + legacyEpisodes[0].id,
+  alteredEpisode
+);
+const alteredBackupVerification = await verifyCatalogueMigration(alteredBackupRedis, {
+  movieCount: 2, seriesCount: 1, episodeCount: 1
+});
+assert.equal(alteredBackupVerification.ok, false);
+assert.ok(alteredBackupVerification.errors.some((error) =>
+  error.includes('episode backups failed SHA-256 integrity verification')));
+
 
 const workerSource = readFileSync('src/index.js', 'utf8');
 const adminSource = readFileSync('public/admin.html', 'utf8');
