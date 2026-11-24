@@ -2,7 +2,7 @@ import { neon } from '@neondatabase/serverless';
 import { Redis } from '@upstash/redis';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { videoSourceUrl, sourceProvider } from './video-sources.js';
-import { parseArchiveSourceUrl } from './archive-source.js';
+import { parseArchiveSourceUrl, verifyArchiveSources } from './archive-source.js';
 import { getVideoRangeWindow } from './video-range-window.js';
 import { createRangeRelayStream } from './video-stream.js';
 import { searchArchiveItems, getArchiveItem, probeArchiveFile } from './archive-catalogue.js';
@@ -1741,35 +1741,7 @@ function archiveSourceParts(sourceUrl) {
 }
 
 async function verifyArchiveVideoSources(sources) {
-  if (!Array.isArray(sources) || sources.length < 1 || sources.length > 8) {
-    throw new Error('Add between 1 and 8 Archive.org sources before publishing.');
-  }
-  const verified = [];
-  for (let offset = 0; offset < sources.length; offset += 3) {
-    const batch = sources.slice(offset, offset + 3);
-    const results = await Promise.all(batch.map(async (source, index) => {
-      if (!source || source.provider !== 'archive.org' || typeof source.url !== 'string') {
-        throw new Error('Only Archive.org file URLs can be published.');
-      }
-      const parsed = parseArchiveSourceUrl(source.url);
-      if (!parsed) throw new Error('Invalid canonical Archive.org download URL for source: '+(source.label||'Video'));
-      try {
-        const probe = await probeArchiveFile(parsed.identifier, parsed.file);
-        return {
-          label: source.label,
-          url: probe.url,
-          provider: 'archive.org',
-          verified_at: new Date().toISOString(),
-          verified_size: probe.size
-        };
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : 'Unknown Archive.org probe error.';
-        throw new Error('Archive.org verification failed for "'+(source.label||('source '+(offset+index+1)))+'": '+detail);
-      }
-    }));
-    verified.push(...results);
-  }
-  return verified;
+  return verifyArchiveSources(sources, probeArchiveFile);
 }
 
 async function prepareRedisMovieInput(req, env) {
