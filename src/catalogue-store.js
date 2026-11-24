@@ -11,6 +11,7 @@ const META_KEY = PREFIX + "meta";
 const MOVIES_INDEX = PREFIX + "movies";
 const CATEGORIES_KEY = PREFIX + "categories";
 const COLLECTIONS_INDEX = PREFIX + "collections";
+const LEGACY_MOVIES_SET = PREFIX + "legacy-movie-ids";
 const BACKUP_PREFIX = PREFIX + "legacy-backup:";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DEFAULT_CATEGORIES = ["Action", "Romantic"];
@@ -121,10 +122,17 @@ export async function activateCatalogueStore(redis, expectedCounts = {}) {
   if (migration.status !== "prepared") throw new Error("Catalogue migration must be prepared before activation.");
   const movieCount = Number(await redis.zcard(MOVIES_INDEX));
   const expected = Number(expectedCounts.movieCount);
-  if (!Number.isSafeInteger(expected) || expected < 0 || movieCount !== expected ||
+  const legacyIds = await redis.smembers(LEGACY_MOVIES_SET);
+  const uniqueLegacyIds = Array.isArray(legacyIds) ? [...new Set(legacyIds)] : [];
+  if (!Number.isSafeInteger(expected) || expected < 0 || movieCount < expected ||
+      uniqueLegacyIds.length !== expected ||
       Number(migration.migrated_movies) !== expected ||
       Number(migration.backed_up_movies) !== expected) {
     throw new Error("Catalogue migration counts do not match; store activation was refused.");
+  }
+  const legacyMovies = await readMoviesByKeys(redis, uniqueLegacyIds.map((id) => keyForMovie(id)));
+  if (legacyMovies.length !== expected || legacyMovies.some((movie) => !movie)) {
+    throw new Error("A migrated legacy movie is missing from Redis; store activation was refused.");
   }
   const next = {
     ...previous,
@@ -287,6 +295,7 @@ export async function saveMigratedMovieBatch(redis, records) {
     if (!record.legacy || typeof record.legacy !== "object") throw new Error("Legacy movie backup is missing.");
     tx.set(BACKUP_PREFIX + "movie:" + movie.id, record.legacy);
     tx.set(keyForMovie(movie.id), movie);
+    tx.sadd(LEGACY_MOVIES_SET, movie.id);
     tx.zadd(MOVIES_INDEX, { score: safeScore(movie.updated_at), member: movie.id });
     tx.sadd(CATEGORIES_KEY, movie.category);
   }
@@ -323,6 +332,7 @@ export async function clearStagedMovies(redis) {
     }
     await tx.exec();
   }
+  await redis.del(LEGACY_MOVIES_SET);
   return (ids || []).length;
 }
 
