@@ -59,6 +59,7 @@ assert.deepEqual(item.files.map((file) => file.name), ['movie.mp4', 'movie.webm'
 assert.equal(item.files[0].md5, 'a'.repeat(32));
 assert.equal(item.storage.server, 'ia600000.us.archive.org');
 assert.equal(item.files.some((file) => file.name.endsWith('.mkv')), false);
+assert.equal(item.files.some((file) => file.name.endsWith('.avi')), false);
 
 await assert.rejects(() => getArchiveItem('../invalid', async () => {
   throw new Error('fetch must not be called');
@@ -92,6 +93,8 @@ const missing = await getArchiveItem('missing_item', async () => new Response(JS
   metadata: { title: 'Missing item' }, error: 'Item not found', files: []
 }), { status: 200 }));
 assert.equal(missing.availability, 'unavailable');
+const emptyItem = await getArchiveItem('empty_item', async () => new Response(JSON.stringify({}), { status: 200 }));
+assert.equal(emptyItem.availability, 'unavailable');
 
 await assert.rejects(() => probeArchiveFile('sample_movie', 'movie.mp4', async () =>
   new Response(null, { status: 302, headers: { location: 'https://evil.invalid/movie.mp4' } })
