@@ -529,8 +529,11 @@ function renderMovies(){
     const small=document.createElement('small');
     const sources=Array.isArray(movie.video_sources)?movie.video_sources:[];
     const drive=sources.filter(source=>source.provider==='google-drive'||source.provider==='google-drive-private').length;
-    const archive=sources.filter(source=>source.provider==='archive.org').length;
-    small.textContent=movie.category+' · '+(movie.is_published?'Published':'Hidden')+(movie.is_featured?' · Featured':'')+' · '+sources.length+' source(s) ('+drive+' Drive, '+archive+' Archive.org)';
+    const archiveSources=sources.filter(source=>source.provider==='archive.org');
+    const archive=archiveSources.length;
+    const unverified=archiveSources.filter(source=>!source.verified_at||!Number.isSafeInteger(source.verified_size)||source.verified_size<=0).length;
+    const verificationLabel=unverified?' · '+unverified+' Archive.org source(s) need range verification':' · Archive.org sources verified';
+    small.textContent=movie.category+' · '+(movie.is_published?'Published':'Hidden')+(movie.is_featured?' · Featured':'')+' · '+sources.length+' source(s) ('+drive+' Drive, '+archive+' Archive.org)'+(archive?verificationLabel:'');
     info.append(title,small);
     const actions=document.createElement('div');
     actions.className='actions';
@@ -1120,7 +1123,9 @@ async function inspectArchiveItem(identifier){
     const meta=document.createElement('p');meta.className='muted';
     meta.textContent=[item.year,item.creator,item.mediatype,item.availability,'Identifier: '+item.identifier].filter(Boolean).join(' · ');
     const rights=document.createElement('p');rights.textContent='Rights / licence: '+(item.rights||item.licenseurl||'Not specified by item metadata. Verify distribution rights before publishing.');
-    target.append(heading,meta,rights);
+    const validationNotice=document.createElement('p');validationNotice.className='muted';
+    validationNotice.textContent='Files selected here are range-probed once. The Worker re-checks every source again when you save a movie as Published; migration URLs remain hidden until this check succeeds.';
+    target.append(heading,meta,rights,validationNotice);
     if(item.availability!=='available'){
       const warning=document.createElement('p');warning.textContent='Item availability: '+item.availability+'. It may not be playable right now.';target.append(warning);
     }
