@@ -78,6 +78,7 @@ assert.ok((await backupLegacyRecord(redis, 'movie', movieA.id, { original: true 
 await saveMovie(redis, movieA);
 await setMigrationState(redis, { status: 'prepared', migrated_movies: 1, backed_up_movies: 1 });
 await assert.rejects(() => activateCatalogueStore(redis, { movieCount: 2 }), /counts do not match/);
+await deleteMovie(redis, movieB.id);
 const active = await activateCatalogueStore(redis, { movieCount: 1 });
 assert.equal(active.active, true);
 assert.equal((await getCatalogueMeta(redis)).migration.status, 'prepared');
