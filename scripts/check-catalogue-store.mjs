@@ -193,6 +193,9 @@ assert.ok(workerSource.includes("Google Drive OAuth is disabled while Moviwatch 
 assert.ok(workerSource.includes("This legacy Neon-backed admin endpoint is disabled in Archive-only mode."));
 assert.ok(workerSource.includes("if(storeMeta.active){"));
 assert.ok(workerSource.includes("sourceMovieCount=Number(storeMeta.migration?.source_movie_count||0);"));
+assert.ok(workerSource.includes("__movie_metadata__v4/"));
+assert.ok(workerSource.includes("__public_catalogue__v4"));
+assert.ok(workerSource.includes("v4 deliberately bypasses metadata cached by the legacy Neon/Drive route"));
 assert.ok(migrationSource.includes("if (previous.migration?.status === \"prepared\")"));
 assert.ok(migrationSource.includes("if (existingVerification.ok) return previous;"));
 assert.ok(adminSource.includes("catalogueNeedsRebuild"));
