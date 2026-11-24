@@ -11,10 +11,10 @@ const SEARCH_FIELDS = [
   "identifier", "title", "year", "creator", "description",
   "mediatype", "collection", "licenseurl", "publicdate"
 ];
-const VIDEO_EXTENSIONS = new Set([
-  "mp4", "m4v", "webm", "ogv", "ogg", "mov", "mkv", "avi", "mpeg", "mpg"
-]);
-const VIDEO_FORMATS = /^(mpeg4|h\.264|h\.264 ia|mpeg2|webm|quicktime|ogg video|matroska|avi|mpeg1|mpeg2 video)$/i;
+// Keep candidates to formats commonly supported by browser-native playback.
+// A container extension still does not guarantee codec compatibility.
+const VIDEO_EXTENSIONS = new Set(["mp4", "m4v", "webm", "ogv", "ogg"]);
+const VIDEO_FORMATS = /^(mpeg4|h\.264|h\.264 ia|webm|ogg video)$/i;
 
 function archiveError(message, status = 400) {
   const error = new Error(message);
@@ -28,7 +28,7 @@ function safeText(value, max = 2000) {
 }
 
 function escapeLucene(value) {
-  return value.replace(/([+\-!(){}\[\]^"~*?:\\/])/g, "\\$1");
+  return value.replace(/([+\-!(){}\[\]^"~*?:\\/&|])/g, "\\$1");
 }
 
 function archiveJson(response, label) {
@@ -119,12 +119,13 @@ export async function getArchiveItem(identifier, fetchImpl = fetch) {
   const payload = await archiveJson(response, "item metadata");
   const metadata = payload?.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
   const rawFiles = Array.isArray(payload?.files) ? payload.files : [];
-  const files = rawFiles.flatMap((file) => {
+  const files = rawFiles.slice(0, 5000).flatMap((file) => {
     if (!file || typeof file.name !== "string") return [];
     const name = safeText(file.name, 1000);
     const ext = fileExtension(name);
     const format = safeText(file.format, 100);
-    const size = /^\d+$/.test(String(file.size || "")) ? Number(file.size) : null;
+    const parsedSize = /^\d+$/.test(String(file.size || "")) ? Number(file.size) : null;
+    const size = Number.isSafeInteger(parsedSize) && parsedSize >= 0 ? parsedSize : null;
     const isVideo = VIDEO_EXTENSIONS.has(ext) || VIDEO_FORMATS.test(format);
     if (!isVideo || !name || name.startsWith("__")) return [];
     return [{
@@ -141,7 +142,7 @@ export async function getArchiveItem(identifier, fetchImpl = fetch) {
     const rank = (f) => (f.ext === "mp4" ? 0 : f.ext === "webm" ? 1 : 2);
     return rank({ ext: fileExtension(a.name) }) - rank({ ext: fileExtension(b.name) }) ||
       (b.size || 0) - (a.size || 0);
-  });
+  }).slice(0, 100);
   const server = safeText(payload.server, 200);
   const d1 = safeText(payload.d1, 200);
   const d2 = safeText(payload.d2, 200);
@@ -149,7 +150,7 @@ export async function getArchiveItem(identifier, fetchImpl = fetch) {
   const errorCode = Number(rawError) || null;
   const errorText = safeText(String(rawError ?? ""), 120).toLowerCase();
   const hasArchiveError = rawError !== null && rawError !== undefined && rawError !== 0 && rawError !== "0" && rawError !== "";
-  const availability = hasArchiveError ? ({
+  const availability = !Object.keys(metadata).length && !hasArchiveError ? "unavailable" : hasArchiveError ? ({
     101: "creation_pending", 102: "temporarily_offline",
     103: "unbacked_item", 104: "deleted"
   }[errorCode] || "unavailable") :
